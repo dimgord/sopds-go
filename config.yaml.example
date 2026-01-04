@@ -1,0 +1,68 @@
+# SOPDS Configuration File
+# Simple OPDS Catalog Server
+
+database:
+  host: localhost
+  port: 5432
+  name: sopds
+  user: sopds
+  password: sopds
+  sslmode: disable
+
+library:
+  # Path to your book collection
+  root: /
+  # File formats to index
+  formats:
+    - .fb2
+    - .epub
+    - .mobi
+    - .pdf
+    - .djvu
+  # Scan inside ZIP archives
+  scan_zip: true
+  # Rescan ZIP files on each scan (slower but catches changes)
+  rescan_zip: false
+
+server:
+  bind: 0.0.0.0
+  port: 8789
+  opds_prefix: /opds
+  web_prefix: /web
+  auth:
+    enabled: true
+    users:
+      - username: *****
+        password: ************
+
+scanner:
+  # Number of parallel workers for scanning
+  workers: 4
+  # Cron schedule for automatic scanning (empty to disable)
+  schedule: "" # "0 3 * * *"
+  # Run scan when server starts
+  on_start: false
+  # Duplicate detection: none, normal (title+authors), strong (title+format+size), clear
+  duplicates: normal
+  pid_file: /tmp/sopds.pid
+
+site:
+  id: "urn:sopds:catalog"
+  title: "SOPDS Library"
+  subtitle: "Simple OPDS Catalog"
+  author: "Admin"
+  url: "http://localhost:8789"
+  email: "admin@example.com"
+  main_title: "Library Catalog"
+
+logging:
+  level: info
+  file: /var/log/sopds/sopds.log
+
+converters:
+  # Path to FB2 to EPUB converter (optional)
+  fb2toepub: "ebook-convert"              # Not used (pure Go)
+  # Path to FB2 to MOBI converter (optional)
+  fb2tomobi: "ebook-convert" # Calibre path
+  # Temporary directory for conversions
+  temp_dir: /tmp
