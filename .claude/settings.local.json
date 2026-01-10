@@ -31,7 +31,30 @@
       "Bash(do echo '=== $f ===' pg_restore -l $f)",
       "Bash(pg_restore:*)",
       "Bash(grep:*)",
-      "Bash(comm:*)"
+      "Bash(comm:*)",
+      "Bash(go vet:*)",
+      "Bash(ss:*)",
+      "Bash(pkill:*)",
+      "Bash(sudo lsof:*)",
+      "Bash(netstat:*)",
+      "Bash(kill:*)",
+      "Bash(sudo systemctl stop:*)",
+      "Bash(sudo systemctl start:*)",
+      "Bash(systemctl is-active:*)",
+      "Bash(timeout 10 ./sopds:*)",
+      "Bash(while ps aux)",
+      "Bash(do sleep 30)",
+      "Bash(done)",
+      "Bash(sudo journalctl:*)",
+      "Bash(sudo -u postgres psql:*)",
+      "Bash(PGPASSWORD=sopds pg_dump:*)",
+      "Bash(sudo -u postgres dropdb:*)",
+      "Bash(sudo -u postgres createdb:*)",
+      "Bash(./sopds:*)",
+      "Bash(sudo systemctl restart:*)",
+      "Bash(sudo systemctl status:*)",
+      "Bash(timeout 30 ./sopds scan:*)",
+      "Bash(timeout 20 ./sopds scan:*)"
     ]
   }
 }

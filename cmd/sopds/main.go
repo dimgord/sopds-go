@@ -15,7 +15,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/sopds/sopds-go/internal/config"
-	"github.com/sopds/sopds-go/internal/database"
+	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
 	"github.com/sopds/sopds-go/internal/scanner"
 	"github.com/sopds/sopds-go/internal/server"
 	"github.com/spf13/cobra"
@@ -24,6 +24,7 @@ import (
 var (
 	cfgFile string
 	cfg     *config.Config
+	logFile *os.File
 )
 
 func main() {
@@ -36,6 +37,10 @@ func main() {
 			cfg, err = config.Load(cfgFile)
 			if err != nil {
 				return fmt.Errorf("failed to load config: %w", err)
+			}
+			// Set up file logging if configured
+			if err := setupLogging(); err != nil {
+				log.Printf("Warning: failed to set up file logging: %v", err)
 			}
 			return nil
 		},
@@ -117,12 +122,15 @@ func main() {
 func runStart(cmd *cobra.Command, args []string) error {
 	log.Println("Starting SOPDS server...")
 
-	// Connect to database
-	db, err := database.New(cfg.Database.DSN())
+	// Connect to database using GORM
+	gormDB, err := persistence.NewDB(&cfg.Database)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
-	defer db.Close()
+
+	// Create service wrapping repositories
+	svc := persistence.NewService(gormDB)
+	defer svc.Close()
 
 	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
@@ -142,12 +150,12 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Start scanner if scheduled
 	if cfg.Scanner.OnStart || cfg.Scanner.Schedule != "" {
-		sc := scanner.New(cfg, db)
+		sc := scanner.New(cfg, svc)
 		go sc.Run(ctx)
 	}
 
 	// Start HTTP server
-	srv := server.New(cfg, db)
+	srv := server.New(cfg, svc)
 	go func() {
 		if err := srv.Start(); err != nil {
 			log.Printf("Server error: %v", err)
@@ -235,13 +243,15 @@ func runStatus(cmd *cobra.Command, args []string) error {
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
-	db, err := database.New(cfg.Database.DSN())
+	gormDB, err := persistence.NewDB(&cfg.Database)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
-	defer db.Close()
 
-	sc := scanner.New(cfg, db)
+	svc := persistence.NewService(gormDB)
+	defer svc.Close()
+
+	sc := scanner.New(cfg, svc)
 	ctx := context.Background()
 
 	// Set up progress callback
@@ -344,13 +354,13 @@ func formatDuration(d time.Duration) string {
 func runMigrate(cmd *cobra.Command, args []string) error {
 	log.Println("Running database migrations...")
 
-	db, err := database.New(cfg.Database.DSN())
+	gormDB, err := persistence.NewDB(&cfg.Database)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
-	defer db.Close()
+	defer gormDB.Close()
 
-	if err := db.Migrate(); err != nil {
+	if err := gormDB.Migrate(); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}
 
@@ -383,6 +393,103 @@ func writePIDFile(path string) error {
 	return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0644)
 }
 
+func setupLogging() error {
+	if cfg.Logging.File == "" {
+		return nil
+	}
+
+	maxSize := cfg.Logging.MaxSize
+	if maxSize <= 0 {
+		maxSize = 10 // default 10MB
+	}
+	maxBackups := cfg.Logging.MaxBackups
+	if maxBackups <= 0 {
+		maxBackups = 3
+	}
+
+	writer := &rollingLogWriter{
+		filename:   cfg.Logging.File,
+		maxSize:    int64(maxSize) * 1024 * 1024, // convert MB to bytes
+		maxBackups: maxBackups,
+	}
+
+	if err := writer.open(); err != nil {
+		return fmt.Errorf("cannot open log file %s: %w", cfg.Logging.File, err)
+	}
+
+	log.SetOutput(writer)
+	log.Printf("Logging to file: %s (max %dMB, %d backups)", cfg.Logging.File, maxSize, maxBackups)
+	return nil
+}
+
+// rollingLogWriter implements io.Writer with log rotation
+type rollingLogWriter struct {
+	filename   string
+	maxSize    int64
+	maxBackups int
+	file       *os.File
+	size       int64
+}
+
+func (w *rollingLogWriter) open() error {
+	f, err := os.OpenFile(w.filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	w.file = f
+
+	// Get current file size
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	w.size = info.Size()
+	return nil
+}
+
+func (w *rollingLogWriter) Write(p []byte) (n int, err error) {
+	if w.size+int64(len(p)) > w.maxSize {
+		if err := w.rotate(); err != nil {
+			// If rotation fails, continue writing to current file
+			log.SetOutput(os.Stderr)
+			log.Printf("Warning: log rotation failed: %v", err)
+			log.SetOutput(w)
+		}
+	}
+
+	n, err = w.file.Write(p)
+	w.size += int64(n)
+	return n, err
+}
+
+func (w *rollingLogWriter) rotate() error {
+	// Close current file
+	if err := w.file.Close(); err != nil {
+		return err
+	}
+
+	// Remove oldest backup if at max
+	oldestBackup := fmt.Sprintf("%s.%d", w.filename, w.maxBackups)
+	os.Remove(oldestBackup)
+
+	// Shift existing backups
+	for i := w.maxBackups - 1; i >= 1; i-- {
+		oldName := fmt.Sprintf("%s.%d", w.filename, i)
+		newName := fmt.Sprintf("%s.%d", w.filename, i+1)
+		os.Rename(oldName, newName)
+	}
+
+	// Rename current log to .1
+	if err := os.Rename(w.filename, w.filename+".1"); err != nil {
+		// If rename fails, try to reopen original
+		return w.open()
+	}
+
+	// Create new log file
+	w.size = 0
+	return w.open()
+}
+
 func runImportMySQL(cmd *cobra.Command, args []string) error {
 	mysqlHost, _ := cmd.Flags().GetString("mysql-host")
 	mysqlPort, _ := cmd.Flags().GetInt("mysql-port")
@@ -397,8 +504,8 @@ func runImportMySQL(cmd *cobra.Command, args []string) error {
 	log.Println("Importing from MySQL database...")
 	log.Printf("MySQL: %s@%s:%d/%s", mysqlUser, mysqlHost, mysqlPort, mysqlDB)
 
-	// Connect to PostgreSQL
-	pgDB, err := database.New(cfg.Database.DSN())
+	// Connect to PostgreSQL using GORM
+	pgDB, err := persistence.NewDB(&cfg.Database)
 	if err != nil {
 		return fmt.Errorf("failed to connect to PostgreSQL: %w", err)
 	}
@@ -407,10 +514,9 @@ func runImportMySQL(cmd *cobra.Command, args []string) error {
 	// Clear tables if requested
 	if clearTables {
 		log.Println("Clearing PostgreSQL tables...")
-		ctx := context.Background()
 		tables := []string{"bookshelf", "bseries", "bgenres", "bauthors", "books", "catalogs", "series", "genres", "authors"}
 		for _, t := range tables {
-			if _, err := pgDB.Pool().Exec(ctx, "DELETE FROM "+t); err != nil {
+			if err := pgDB.Exec("DELETE FROM " + t).Error; err != nil {
 				log.Printf("Warning: failed to clear %s: %v", t, err)
 			}
 		}
@@ -425,7 +531,7 @@ func runImportMySQL(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func migrateFromMySQL(mysqlDSN string, pgDB *database.DB) error {
+func migrateFromMySQL(mysqlDSN string, pgDB *persistence.DB) error {
 	// Import MySQL driver
 	mysql, err := openMySQL(mysqlDSN)
 	if err != nil {
@@ -446,14 +552,14 @@ func migrateFromMySQL(mysqlDSN string, pgDB *database.DB) error {
 		"ALTER TABLE bseries DROP CONSTRAINT IF EXISTS bseries_ser_id_fkey",
 		"ALTER TABLE bookshelf DROP CONSTRAINT IF EXISTS bookshelf_book_id_fkey",
 	}
-	for _, sql := range fkConstraints {
-		pgDB.Pool().Exec(ctx, sql)
+	for _, stmt := range fkConstraints {
+		pgDB.Exec(stmt)
 	}
 
 	// Migrate tables in order (respecting foreign keys)
 	tables := []struct {
 		name    string
-		migrate func(context.Context, *sqlDB, *database.DB) (int64, error)
+		migrate func(context.Context, *sqlDB, *persistence.DB) (int64, error)
 	}{
 		{"authors", migrateAuthors},
 		{"genres", migrateGenres},
@@ -487,15 +593,15 @@ func migrateFromMySQL(mysqlDSN string, pgDB *database.DB) error {
 		"ALTER TABLE bseries ADD CONSTRAINT bseries_ser_id_fkey FOREIGN KEY (ser_id) REFERENCES series(ser_id) ON DELETE CASCADE",
 		"ALTER TABLE bookshelf ADD CONSTRAINT bookshelf_book_id_fkey FOREIGN KEY (book_id) REFERENCES books(book_id) ON DELETE CASCADE",
 	}
-	for _, sql := range fkRecreate {
-		if _, err := pgDB.Pool().Exec(ctx, sql); err != nil {
+	for _, stmt := range fkRecreate {
+		if err := pgDB.Exec(stmt).Error; err != nil {
 			log.Printf("Warning: %v", err)
 		}
 	}
 
 	// Reset sequences to max IDs
 	log.Println("Resetting sequences...")
-	if err := resetSequences(ctx, pgDB); err != nil {
+	if err := resetSequences(pgDB); err != nil {
 		log.Printf("Warning: failed to reset sequences: %v", err)
 	}
 
@@ -522,14 +628,14 @@ func (s *sqlDB) Close() error {
 	return s.db.Close()
 }
 
-func migrateAuthors(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, error) {
+func migrateAuthors(ctx context.Context, mysql *sqlDB, pg *persistence.DB) (int64, error) {
 	rows, err := mysql.db.QueryContext(ctx, "SELECT author_id, COALESCE(first_name,''), COALESCE(last_name,'') FROM authors")
 	if err != nil {
 		return 0, err
 	}
 
 	type record struct {
-		id                   int64
+		id                  int64
 		firstName, lastName string
 	}
 	var records []record
@@ -547,9 +653,9 @@ func migrateAuthors(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, 
 
 	var count int64
 	for _, r := range records {
-		_, err := pg.Pool().Exec(ctx,
-			"INSERT INTO authors (author_id, first_name, last_name) VALUES ($1, $2, $3) ON CONFLICT (author_id) DO NOTHING",
-			r.id, r.firstName, r.lastName)
+		err := pg.Exec(
+			"INSERT INTO authors (author_id, first_name, last_name) VALUES (?, ?, ?) ON CONFLICT (author_id) DO NOTHING",
+			r.id, r.firstName, r.lastName).Error
 		if err != nil {
 			continue
 		}
@@ -558,8 +664,8 @@ func migrateAuthors(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, 
 	return count, nil
 }
 
-func migrateGenres(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, error) {
-	pg.Pool().Exec(ctx, "ALTER TABLE genres DROP CONSTRAINT IF EXISTS genres_genre_key")
+func migrateGenres(ctx context.Context, mysql *sqlDB, pg *persistence.DB) (int64, error) {
+	pg.Exec("ALTER TABLE genres DROP CONSTRAINT IF EXISTS genres_genre_key")
 
 	rows, err := mysql.db.QueryContext(ctx, "SELECT genre_id, COALESCE(genre,''), COALESCE(section,''), COALESCE(subsection,'') FROM genres")
 	if err != nil {
@@ -567,7 +673,7 @@ func migrateGenres(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, e
 	}
 
 	type record struct {
-		id                          int64
+		id                         int64
 		genre, section, subsection string
 	}
 	var records []record
@@ -585,22 +691,22 @@ func migrateGenres(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, e
 
 	var count int64
 	for _, r := range records {
-		_, err := pg.Pool().Exec(ctx,
-			`INSERT INTO genres (genre_id, genre, section, subsection) VALUES ($1, $2, $3, $4)
+		err := pg.Exec(
+			`INSERT INTO genres (genre_id, genre, section, subsection) VALUES (?, ?, ?, ?)
 			 ON CONFLICT (genre_id) DO UPDATE SET genre = EXCLUDED.genre, section = EXCLUDED.section, subsection = EXCLUDED.subsection`,
-			r.id, r.genre, r.section, r.subsection)
+			r.id, r.genre, r.section, r.subsection).Error
 		if err != nil {
 			continue
 		}
 		count++
 	}
 
-	pg.Pool().Exec(ctx, "ALTER TABLE genres ADD CONSTRAINT genres_genre_key UNIQUE (genre)")
+	pg.Exec("ALTER TABLE genres ADD CONSTRAINT genres_genre_key UNIQUE (genre)")
 	return count, nil
 }
 
-func migrateSeries(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, error) {
-	pg.Pool().Exec(ctx, "ALTER TABLE series DROP CONSTRAINT IF EXISTS series_ser_key")
+func migrateSeries(ctx context.Context, mysql *sqlDB, pg *persistence.DB) (int64, error) {
+	pg.Exec("ALTER TABLE series DROP CONSTRAINT IF EXISTS series_ser_key")
 
 	rows, err := mysql.db.QueryContext(ctx, "SELECT ser_id, COALESCE(ser,'') FROM series")
 	if err != nil {
@@ -626,21 +732,21 @@ func migrateSeries(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, e
 
 	var count int64
 	for _, r := range records {
-		_, err := pg.Pool().Exec(ctx,
-			"INSERT INTO series (ser_id, ser) VALUES ($1, $2) ON CONFLICT (ser_id) DO UPDATE SET ser = EXCLUDED.ser",
-			r.id, r.ser)
+		err := pg.Exec(
+			"INSERT INTO series (ser_id, ser) VALUES (?, ?) ON CONFLICT (ser_id) DO UPDATE SET ser = EXCLUDED.ser",
+			r.id, r.ser).Error
 		if err != nil {
 			continue
 		}
 		count++
 	}
 
-	pg.Pool().Exec(ctx, "ALTER TABLE series ADD CONSTRAINT series_ser_key UNIQUE (ser)")
+	pg.Exec("ALTER TABLE series ADD CONSTRAINT series_ser_key UNIQUE (ser)")
 	return count, nil
 }
 
-func migrateCatalogs(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, error) {
-	pg.Pool().Exec(ctx, "ALTER TABLE catalogs DROP CONSTRAINT IF EXISTS catalogs_parent_id_fkey")
+func migrateCatalogs(ctx context.Context, mysql *sqlDB, pg *persistence.DB) (int64, error) {
+	pg.Exec("ALTER TABLE catalogs DROP CONSTRAINT IF EXISTS catalogs_parent_id_fkey")
 
 	rows, err := mysql.db.QueryContext(ctx, "SELECT cat_id, parent_id, COALESCE(cat_name,''), COALESCE(path,''), cat_type FROM catalogs ORDER BY cat_id")
 	if err != nil {
@@ -673,20 +779,20 @@ func migrateCatalogs(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64,
 		if r.parentID.Valid {
 			parent = r.parentID.Int64
 		}
-		_, err := pg.Pool().Exec(ctx,
-			"INSERT INTO catalogs (cat_id, parent_id, cat_name, path, cat_type) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (cat_id) DO UPDATE SET parent_id = EXCLUDED.parent_id, cat_name = EXCLUDED.cat_name, path = EXCLUDED.path",
-			r.id, parent, r.catName, r.path, r.catType)
+		err := pg.Exec(
+			"INSERT INTO catalogs (cat_id, parent_id, cat_name, path, cat_type) VALUES (?, ?, ?, ?, ?) ON CONFLICT (cat_id) DO UPDATE SET parent_id = EXCLUDED.parent_id, cat_name = EXCLUDED.cat_name, path = EXCLUDED.path",
+			r.id, parent, r.catName, r.path, r.catType).Error
 		if err != nil {
 			continue
 		}
 		count++
 	}
 
-	pg.Pool().Exec(ctx, "ALTER TABLE catalogs ADD CONSTRAINT catalogs_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES catalogs(cat_id) ON DELETE CASCADE")
+	pg.Exec("ALTER TABLE catalogs ADD CONSTRAINT catalogs_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES catalogs(cat_id) ON DELETE CASCADE")
 	return count, nil
 }
 
-func migrateBooks(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, error) {
+func migrateBooks(ctx context.Context, mysql *sqlDB, pg *persistence.DB) (int64, error) {
 	rows, err := mysql.db.QueryContext(ctx, `
 		SELECT book_id, COALESCE(filename,''), COALESCE(path,''), filesize,
 		       COALESCE(format,''), cat_id, cat_type, registerdate,
@@ -726,15 +832,15 @@ func migrateBooks(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, er
 
 	var count int64
 	for _, r := range records {
-		_, err := pg.Pool().Exec(ctx, `
+		err := pg.Exec(`
 			INSERT INTO books (book_id, filename, path, filesize, format, cat_id, cat_type,
 			                   registerdate, docdate, favorite, lang, title, annotation,
 			                   cover, cover_type, doublicat, avail)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (book_id) DO NOTHING`,
 			r.id, r.filename, r.path, r.filesize, r.format, r.catID, r.catType,
 			r.registerdate, r.docdate, r.favorite, r.lang, r.title, r.annotation,
-			r.cover, r.coverType, r.doublicat, r.avail)
+			r.cover, r.coverType, r.doublicat, r.avail).Error
 		if err != nil {
 			continue
 		}
@@ -746,7 +852,7 @@ func migrateBooks(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, er
 	return count, nil
 }
 
-func migrateBauthors(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, error) {
+func migrateBauthors(ctx context.Context, mysql *sqlDB, pg *persistence.DB) (int64, error) {
 	// Read all rows first to avoid MySQL timeout
 	rows, err := mysql.db.QueryContext(ctx, "SELECT book_id, author_id FROM bauthors")
 	if err != nil {
@@ -769,9 +875,9 @@ func migrateBauthors(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64,
 
 	var count int64
 	for _, r := range records {
-		_, err := pg.Pool().Exec(ctx,
-			"INSERT INTO bauthors (book_id, author_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-			r.bookID, r.authorID)
+		err := pg.Exec(
+			"INSERT INTO bauthors (book_id, author_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+			r.bookID, r.authorID).Error
 		if err != nil {
 			continue // Skip errors
 		}
@@ -783,7 +889,7 @@ func migrateBauthors(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64,
 	return count, nil
 }
 
-func migrateBgenres(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, error) {
+func migrateBgenres(ctx context.Context, mysql *sqlDB, pg *persistence.DB) (int64, error) {
 	rows, err := mysql.db.QueryContext(ctx, "SELECT book_id, genre_id FROM bgenres")
 	if err != nil {
 		return 0, err
@@ -805,9 +911,9 @@ func migrateBgenres(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, 
 
 	var count int64
 	for _, r := range records {
-		_, err := pg.Pool().Exec(ctx,
-			"INSERT INTO bgenres (book_id, genre_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-			r.bookID, r.genreID)
+		err := pg.Exec(
+			"INSERT INTO bgenres (book_id, genre_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+			r.bookID, r.genreID).Error
 		if err != nil {
 			continue
 		}
@@ -819,7 +925,7 @@ func migrateBgenres(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, 
 	return count, nil
 }
 
-func migrateBseries(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, error) {
+func migrateBseries(ctx context.Context, mysql *sqlDB, pg *persistence.DB) (int64, error) {
 	rows, err := mysql.db.QueryContext(ctx, "SELECT book_id, ser_id, ser_no FROM bseries")
 	if err != nil {
 		return 0, err
@@ -844,9 +950,9 @@ func migrateBseries(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, 
 
 	var count int64
 	for _, r := range records {
-		_, err := pg.Pool().Exec(ctx,
-			"INSERT INTO bseries (book_id, ser_id, ser_no) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-			r.bookID, r.serID, r.serNo)
+		err := pg.Exec(
+			"INSERT INTO bseries (book_id, ser_id, ser_no) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+			r.bookID, r.serID, r.serNo).Error
 		if err != nil {
 			continue
 		}
@@ -858,7 +964,7 @@ func migrateBseries(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, 
 	return count, nil
 }
 
-func migrateBookshelf(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64, error) {
+func migrateBookshelf(ctx context.Context, mysql *sqlDB, pg *persistence.DB) (int64, error) {
 	rows, err := mysql.db.QueryContext(ctx, "SELECT user, book_id, readtime FROM bookshelf")
 	if err != nil {
 		return 0, err
@@ -873,9 +979,9 @@ func migrateBookshelf(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64
 		if err := rows.Scan(&userName, &bookID, &readtime); err != nil {
 			return count, err
 		}
-		_, err := pg.Pool().Exec(ctx,
-			"INSERT INTO bookshelf (user_name, book_id, readtime) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-			userName, bookID, readtime)
+		err := pg.Exec(
+			"INSERT INTO bookshelf (user_name, book_id, readtime) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+			userName, bookID, readtime).Error
 		if err != nil {
 			return count, err
 		}
@@ -884,7 +990,7 @@ func migrateBookshelf(ctx context.Context, mysql *sqlDB, pg *database.DB) (int64
 	return count, nil
 }
 
-func resetSequences(ctx context.Context, pg *database.DB) error {
+func resetSequences(pg *persistence.DB) error {
 	sequences := []struct {
 		seq   string
 		table string
@@ -898,9 +1004,9 @@ func resetSequences(ctx context.Context, pg *database.DB) error {
 	}
 
 	for _, s := range sequences {
-		_, err := pg.Pool().Exec(ctx, fmt.Sprintf(
+		err := pg.Exec(fmt.Sprintf(
 			"SELECT setval('%s', COALESCE((SELECT MAX(%s) FROM %s), 1))",
-			s.seq, s.col, s.table))
+			s.seq, s.col, s.table)).Error
 		if err != nil {
 			return err
 		}

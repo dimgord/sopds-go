@@ -91,8 +91,10 @@ type SiteConfig struct {
 
 // LoggingConfig holds logging settings
 type LoggingConfig struct {
-	Level string `yaml:"level"`
-	File  string `yaml:"file"`
+	Level      string `yaml:"level"`
+	File       string `yaml:"file"`
+	MaxSize    int    `yaml:"max_size"`    // Max size in MB before rotation (default 10)
+	MaxBackups int    `yaml:"max_backups"` // Number of old log files to keep (default 3)
 }
 
 // ConvertersConfig holds external converter paths
@@ -115,7 +117,7 @@ func DefaultConfig() *Config {
 		},
 		Library: LibraryConfig{
 			Root:      "/var/lib/sopds/books",
-			Formats:   []string{".fb2", ".epub", ".mobi", ".pdf", ".djvu"},
+			Formats:   []string{".fb2", ".epub", ".mobi", ".pdf", ".djvu", ".mp3", ".m4b", ".m4a", ".flac", ".ogg", ".opus"},
 			ScanZip:   true,
 			RescanZip: false,
 		},
@@ -145,8 +147,10 @@ func DefaultConfig() *Config {
 			MainTitle: "Library Catalog",
 		},
 		Logging: LoggingConfig{
-			Level: "info",
-			File:  "/var/log/sopds/sopds.log",
+			Level:      "info",
+			File:       "/var/log/sopds/sopds.log",
+			MaxSize:    10,
+			MaxBackups: 3,
 		},
 		Converters: ConvertersConfig{
 			TempDir: "/tmp",

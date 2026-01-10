@@ -11,21 +11,21 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/sopds/sopds-go/internal/config"
 	"github.com/sopds/sopds-go/internal/converter"
-	"github.com/sopds/sopds-go/internal/database"
+	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
 	"github.com/sopds/sopds-go/internal/opds"
 )
 
 // Server represents the HTTP server
 type Server struct {
 	config     *config.Config
-	db         *database.DB
+	svc        *persistence.Service
 	converter  *converter.Converter
 	httpServer *http.Server
 	router     chi.Router
 }
 
 // New creates a new HTTP server
-func New(cfg *config.Config, db *database.DB) *Server {
+func New(cfg *config.Config, svc *persistence.Service) *Server {
 	// Determine ebook-convert path for MOBI conversion
 	ebookConvertPath := cfg.Converters.FB2ToMOBI
 	if ebookConvertPath == "" {
@@ -34,7 +34,7 @@ func New(cfg *config.Config, db *database.DB) *Server {
 
 	s := &Server{
 		config:    cfg,
-		db:        db,
+		svc:       svc,
 		converter: converter.New(ebookConvertPath),
 	}
 
@@ -105,6 +105,9 @@ func (s *Server) setupRouter() chi.Router {
 		r.Get("/languages", s.handleWebLanguages)
 		r.Get("/languages/{lang}", s.handleWebLanguage)
 		r.Get("/new", s.handleWebNew)
+		r.Get("/audio", s.handleWebAudio)
+		r.Get("/audio/{id}", s.handleWebAudioDetail)
+		r.Get("/audio/{id}/track", s.handleAudioTrackDownload)
 		r.Get("/catalogs", s.handleWebCatalogs)
 		r.Get("/catalogs/{id}", s.handleWebCatalog)
 		r.Get("/bookshelf", s.handleWebBookshelf)
@@ -113,6 +116,7 @@ func (s *Server) setupRouter() chi.Router {
 		r.Get("/bookshelf/remove/{id}", s.handleBookshelfRemove)
 		r.Post("/bookshelf/remove/{id}", s.handleBookshelfRemove)
 		r.Get("/duplicates/{id}", s.handleWebDuplicates)
+		r.Get("/help", s.handleWebHelp)
 	})
 
 	// Health check

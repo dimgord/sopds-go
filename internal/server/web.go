@@ -1,26 +1,32 @@
 package server
 
 import (
+	"archive/zip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
+	"log"
 	"net/http"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/bodgit/sevenzip"
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 	"github.com/sopds/sopds-go/internal/database"
+	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
 )
 
 // Cached ebook-convert availability check
 var (
-	ebookConvertAvailable     bool
-	ebookConvertChecked       bool
-	ebookConvertCheckMu       sync.Once
+	ebookConvertAvailable bool
+	ebookConvertChecked   bool
+	ebookConvertCheckMu   sync.Once
 )
 
 // checkEbookConvert checks if ebook-convert is available
@@ -37,13 +43,196 @@ func checkEbookConvert(configPath string) bool {
 	return ebookConvertAvailable
 }
 
+// --- Internationalization (i18n) ---
+// To add a new language:
+// 1. Add language code and name to supportedLanguages
+// 2. Add translations for all keys in the translations map
+
+// Language represents a UI language
+type Language struct {
+	Code string // e.g., "en", "uk", "de"
+	Name string // e.g., "English", "Українська", "Deutsch"
+}
+
+// supportedLanguages - add new languages here
+var supportedLanguages = []Language{
+	{Code: "en", Name: "English"},
+	{Code: "uk", Name: "Українська"},
+	// Add more: {Code: "de", Name: "Deutsch"},
+}
+
+// defaultLang is the fallback language
+const defaultLang = "en"
+
+// isValidLang checks if language code is supported
+func isValidLang(code string) bool {
+	for _, l := range supportedLanguages {
+		if l.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+// getLang extracts language preference from request (cookie or query param)
+func getLang(r *http.Request) string {
+	// Check query parameter first
+	if lang := r.URL.Query().Get("lang"); isValidLang(lang) {
+		return lang
+	}
+	// Check cookie
+	if cookie, err := r.Cookie("lang"); err == nil && isValidLang(cookie.Value) {
+		return cookie.Value
+	}
+	return defaultLang
+}
+
+// T returns translated string for the given key and language
+func T(lang, key string) string {
+	if trans, ok := translations[key]; ok {
+		if str, ok := trans[lang]; ok {
+			return str
+		}
+		// Fallback to default language
+		if str, ok := trans[defaultLang]; ok {
+			return str
+		}
+	}
+	return key // Return key if not found
+}
+
+// translations holds all UI strings
+// Format: "key": {"lang_code": "translated string", ...}
+var translations = map[string]map[string]string{
+	// Navigation
+	"nav.home":       {"en": "Home", "uk": "Головна"},
+	"nav.catalogs":   {"en": "Catalogs", "uk": "Каталоги"},
+	"nav.authors":    {"en": "Authors", "uk": "Автори"},
+	"nav.genres":     {"en": "Genres", "uk": "Жанри"},
+	"nav.series":     {"en": "Series", "uk": "Серії"},
+	"nav.languages":  {"en": "Languages", "uk": "Мови"},
+	"nav.new":        {"en": "New", "uk": "Новинки"},
+	"nav.audio":      {"en": "Audio", "uk": "Аудіо"},
+	"nav.bookshelf":  {"en": "Bookshelf", "uk": "Полиця"},
+	"nav.help":       {"en": "Help", "uk": "Довідка"},
+
+	// Main page
+	"main.stats":    {"en": "Library Statistics", "uk": "Статистика бібліотеки"},
+	"main.books":    {"en": "Books", "uk": "Книги"},
+	"main.authors":  {"en": "Authors", "uk": "Автори"},
+	"main.genres":   {"en": "Genres", "uk": "Жанри"},
+	"main.series":   {"en": "Series", "uk": "Серії"},
+	"main.new7d":    {"en": "New (7d)", "uk": "Нові (7д)"},
+	"main.browse":   {"en": "Browse Library", "uk": "Перегляд бібліотеки"},
+	"main.newbooks":   {"en": "New Books", "uk": "Нові книги"},
+	"main.audiobooks": {"en": "Audiobooks", "uk": "Аудіокниги"},
+	"main.search":     {"en": "Search", "uk": "Пошук"},
+
+	// Search
+	"search.title":  {"en": "Search by title", "uk": "Пошук за назвою"},
+	"search.author": {"en": "Author name...", "uk": "Ім'я автора..."},
+	"search.indesc": {"en": "+desc", "uk": "+опис"},
+	"search.books":  {"en": "Search Books", "uk": "Пошук книг"},
+	"search.hint":   {"en": "Use the search box above to find books by title or author name.", "uk": "Використовуйте поле пошуку вище, щоб знайти книги за назвою або автором."},
+	"search.in":     {"en": "in", "uk": "у"},
+
+	// Books
+	"books.show":       {"en": "Show:", "uk": "Показати:"},
+	"books.all":        {"en": "All", "uk": "Всі"},
+	"books.filters":    {"en": "Filters:", "uk": "Фільтри:"},
+	"books.alllang":    {"en": "All Languages", "uk": "Всі мови"},
+	"books.download":   {"en": "Download", "uk": "Завантажити"},
+	"books.addshelf":   {"en": "Add to Shelf", "uk": "На полицю"},
+	"books.duplicates": {"en": "Duplicates", "uk": "Дублікати"},
+	"books.prev":       {"en": "Previous", "uk": "Попередня"},
+	"books.next":       {"en": "Next", "uk": "Наступна"},
+	"books.nobooks":    {"en": "No books found.", "uk": "Книг не знайдено."},
+
+	// Authors
+	"authors.title": {"en": "Authors", "uk": "Автори"},
+	"authors.none":  {"en": "No authors found.", "uk": "Авторів не знайдено."},
+
+	// Genres
+	"genres.title": {"en": "Genres", "uk": "Жанри"},
+	"genres.none":  {"en": "No genres found.", "uk": "Жанрів не знайдено."},
+
+	// Series
+	"series.title": {"en": "Series", "uk": "Серії"},
+	"series.none":  {"en": "No series found.", "uk": "Серій не знайдено."},
+
+	// Languages page
+	"languages.title": {"en": "Languages", "uk": "Мови"},
+	"languages.none":  {"en": "No languages found.", "uk": "Мов не знайдено."},
+
+	// Catalogs
+	"catalogs.title": {"en": "Catalogs", "uk": "Каталоги"},
+	"catalogs.none":  {"en": "No items found.", "uk": "Елементів не знайдено."},
+
+	// Bookshelf
+	"bookshelf.title":  {"en": "My Bookshelf", "uk": "Моя полиця"},
+	"bookshelf.empty":  {"en": "Your bookshelf is empty.", "uk": "Ваша полиця порожня."},
+	"bookshelf.remove": {"en": "Remove", "uk": "Видалити"},
+
+	// Audiobook detail
+	"audio.tracks":     {"en": "Tracks", "uk": "Треки"},
+	"audio.parts":      {"en": "Parts", "uk": "Частини"},
+	"audio.duration":   {"en": "Duration", "uk": "Тривалість"},
+	"audio.download":   {"en": "Download ZIP", "uk": "Завантажити ZIP"},
+	"audio.collection": {"en": "Collection", "uk": "Збірка"},
+	"audio.book":       {"en": "Audiobook", "uk": "Аудіокнига"},
+	"audio.selectall":  {"en": "Select All", "uk": "Вибрати все"},
+	"audio.downloadsel": {"en": "Download Selected", "uk": "Завантажити вибране"},
+
+	// Error
+	"error.title": {"en": "Error", "uk": "Помилка"},
+	"error.back":  {"en": "Back to Home", "uk": "На головну"},
+
+	// Help page
+	"help.title":   {"en": "Help", "uk": "Довідка"},
+	"help.welcome": {"en": "Welcome to SOPDS Library", "uk": "Ласкаво просимо до бібліотеки SOPDS"},
+	"help.intro":   {"en": "SOPDS is an OPDS catalog server for your e-book collection.", "uk": "SOPDS — це OPDS-сервер каталогу для вашої колекції електронних книг."},
+
+	"help.search.title":  {"en": "Search", "uk": "Пошук"},
+	"help.search.p1":     {"en": "The search bar has two fields:", "uk": "Панель пошуку має два поля:"},
+	"help.search.field1": {"en": "Title field — searches in book titles", "uk": "Поле назви — шукає в назвах книг"},
+	"help.search.field2": {"en": "Author field — searches in author names (first and last)", "uk": "Поле автора — шукає в іменах авторів"},
+	"help.search.p2":     {"en": "Both fields can be used together (AND logic). Check '+desc' to also search in book descriptions.", "uk": "Обидва поля можна використовувати разом (логіка І). Позначте '+опис', щоб шукати також в описах книг."},
+
+	"help.scope.title": {"en": "Scoped Search", "uk": "Контекстний пошук"},
+	"help.scope.p1":    {"en": "When browsing authors, genres, series, or languages, search is automatically scoped to that context.", "uk": "При перегляді авторів, жанрів, серій або мов, пошук автоматично обмежується цим контекстом."},
+
+	"help.filters.title":  {"en": "Advanced Filters", "uk": "Розширені фільтри"},
+	"help.filters.p1":     {"en": "You can add URL parameters for advanced filtering:", "uk": "Ви можете додати параметри URL для розширеної фільтрації:"},
+	"help.filters.lang":   {"en": "lang_pattern=uk — filter by language", "uk": "lang_pattern=uk — фільтр за мовою"},
+	"help.filters.genre":  {"en": "genre_pattern=comedy — filter by genre name", "uk": "genre_pattern=comedy — фільтр за назвою жанру"},
+	"help.filters.series": {"en": "series_pattern=Silo — filter by series name", "uk": "series_pattern=Silo — фільтр за назвою серії"},
+
+	"help.browse.title":  {"en": "Browsing", "uk": "Перегляд"},
+	"help.browse.p1":     {"en": "Use the navigation menu to browse by:", "uk": "Використовуйте меню навігації для перегляду за:"},
+	"help.browse.cat":    {"en": "Catalogs — folder structure of your library", "uk": "Каталоги — структура папок вашої бібліотеки"},
+	"help.browse.auth":   {"en": "Authors — alphabetical list with drill-down", "uk": "Автори — алфавітний список із деталізацією"},
+	"help.browse.genre":  {"en": "Genres — grouped by category", "uk": "Жанри — згруповані за категоріями"},
+	"help.browse.series": {"en": "Series — alphabetical with drill-down", "uk": "Серії — алфавітний із деталізацією"},
+	"help.browse.lang":   {"en": "Languages — books by language", "uk": "Мови — книги за мовами"},
+
+	"help.download.title": {"en": "Downloads", "uk": "Завантаження"},
+	"help.download.p1":    {"en": "Each book can be downloaded in its original format. FB2 books can also be converted to EPUB or MOBI.", "uk": "Кожну книгу можна завантажити в оригінальному форматі. Книги FB2 також можна конвертувати в EPUB або MOBI."},
+
+	"help.opds.title": {"en": "OPDS Access", "uk": "Доступ OPDS"},
+	"help.opds.p1":    {"en": "Use the OPDS endpoint with e-book readers like Moon+ Reader, FBReader, or Calibre:", "uk": "Використовуйте OPDS-ендпоінт з читалками електронних книг, такими як Moon+ Reader, FBReader або Calibre:"},
+
+	"help.bookshelf.title": {"en": "Bookshelf", "uk": "Полиця"},
+	"help.bookshelf.p1":    {"en": "Add books to your personal bookshelf for quick access. Click 'Add to Shelf' on any book.", "uk": "Додавайте книги на особисту полицю для швидкого доступу. Натисніть 'На полицю' на будь-якій книзі."},
+}
+
 // Template data structures
 type PageData struct {
 	Title       string
 	SiteTitle   string
 	WebPrefix   string
 	OPDSPrefix  string
-	Query       string
+	Query       string // Title search query (q=)
+	AuthorQuery string // Author search query (author=)
 	Prefix      string // 1, 2, or 3 char prefix for drilling down
 	Page        int
 	PageSize    int
@@ -53,11 +242,66 @@ type PageData struct {
 	CurrentPath string
 	HasEPUB     bool
 	HasMOBI     bool
+	// Search scope - if set, search only within this context
+	ScopeAuthorID  int64
+	ScopeGenreID   int64
+	ScopeSeriesID  int64
+	ScopeCatalogID int64
+	ScopeLang      string // Scope to specific language (exact match)
+	ScopeName      string // Human-readable scope name for display
+	IncludeDesc    bool   // Include description in search
+	// i18n
+	Lang      string     // Current language code
+	Languages []Language // Available languages for switcher
 }
 
 // Available page sizes
 var pageSizes = []int{10, 50, 100, 200, 0} // 0 means "all"
 const defaultPageSize = 50
+
+// newPageData creates PageData with common fields including i18n
+func (s *Server) newPageData(r *http.Request, title string) PageData {
+	// Check query param first (takes priority), then cookie
+	lang := r.URL.Query().Get("lang")
+	if !isValidLang(lang) {
+		if cookie, err := r.Cookie("lang"); err == nil && isValidLang(cookie.Value) {
+			lang = cookie.Value
+		} else {
+			lang = defaultLang
+		}
+	}
+	return PageData{
+		Title:      title,
+		SiteTitle:  s.config.Site.Title,
+		WebPrefix:  s.config.Server.WebPrefix,
+		OPDSPrefix: s.config.Server.OPDSPrefix,
+		HasEPUB:    true, // Internal converter always available
+		HasMOBI:    checkEbookConvert(s.config.Converters.FB2ToMOBI),
+		Lang:       lang,
+		Languages:  supportedLanguages,
+	}
+}
+
+// setLangCookie sets language cookie if lang param is present
+func setLangCookie(w http.ResponseWriter, r *http.Request) {
+	if lang := r.URL.Query().Get("lang"); isValidLang(lang) {
+		http.SetCookie(w, &http.Cookie{Name: "lang", Value: lang, Path: "/", MaxAge: 86400 * 365})
+	}
+}
+
+// addI18n adds language fields to PageData (for handlers that don't use newPageData)
+func (s *Server) addI18n(pd *PageData, r *http.Request) {
+	lang := r.URL.Query().Get("lang")
+	if !isValidLang(lang) {
+		if cookie, err := r.Cookie("lang"); err == nil && isValidLang(cookie.Value) {
+			lang = cookie.Value
+		} else {
+			lang = defaultLang
+		}
+	}
+	pd.Lang = lang
+	pd.Languages = supportedLanguages
+}
 
 func getPageSize(r *http.Request) int {
 	sizeStr := r.URL.Query().Get("size")
@@ -86,15 +330,20 @@ type MainMenuData struct {
 	NewBooks int64
 }
 
+type LangOption struct {
+	Code string
+	Name string
+}
+
 type BooksData struct {
 	PageData
 	Books      []BookView
 	TotalCount int
-	// Filter options (collected from results)
-	Languages  []string
-	FirstNames []string
-	LastNames  []string
-	Genres     []LinkedItem
+	// Filter options (from entire scope, not just current page)
+	FilterLangs []LangOption // Available languages for filtering
+	FirstNames  []string
+	LastNames   []string
+	Genres      []LinkedItem
 	// Current filter values
 	FilterLang      string
 	FilterFirstName string
@@ -119,6 +368,12 @@ type BookView struct {
 	CanMOBI        bool
 	DuplicateOf    int64 // ID of original book if this is a duplicate
 	DuplicateCount int   // Number of duplicates this book has
+	// Audiobook fields
+	IsAudiobook     bool
+	Duration        string // formatted "3h 45m"
+	DurationSeconds int
+	TrackCount      int
+	Narrators       []LinkedItem
 }
 
 type LinkedItem struct {
@@ -188,22 +443,16 @@ type CatalogItem struct {
 
 func (s *Server) handleWebHome(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	setLangCookie(w, r)
 
-	info, _ := s.db.GetDBInfo(ctx, false)
+	info, _ := s.svc.GetDBInfo(ctx, false)
 	var newBooks int64
-	if newInfo, err := s.db.GetNewInfo(ctx, 7); err == nil && newInfo != nil {
+	if newInfo, err := s.svc.GetNewInfo(ctx, 7); err == nil && newInfo != nil {
 		newBooks = newInfo.NewBooks
 	}
 
 	data := MainMenuData{
-		PageData: PageData{
-			Title:      "Library",
-			SiteTitle:  s.config.Site.Title,
-			WebPrefix:  s.config.Server.WebPrefix,
-			OPDSPrefix: s.config.Server.OPDSPrefix,
-			HasEPUB:    true, // Internal converter always available
-			HasMOBI:    checkEbookConvert(s.config.Converters.FB2ToMOBI),
-		},
+		PageData: s.newPageData(r, "Library"),
 		Stats:    info,
 		NewBooks: newBooks,
 	}
@@ -213,11 +462,13 @@ func (s *Server) handleWebHome(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	query := r.URL.Query().Get("q")
+	setLangCookie(w, r)
+	titleQuery := r.URL.Query().Get("q")
+	authorQuery := r.URL.Query().Get("author")
 	page := getPage(r)
 	pageSize := getPageSize(r)
 
-	// Parse filter parameters
+	// Parse filter parameters (pattern matching)
 	filterLang := r.URL.Query().Get("lang")
 	filterFirstName := r.URL.Query().Get("fname")
 	filterLastName := r.URL.Query().Get("lname")
@@ -227,26 +478,65 @@ func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 		filterGenre, _ = strconv.ParseInt(filterGenreStr, 10, 64)
 	}
 
-	if query == "" {
+	// Pattern filters for ILIKE matching
+	langPattern := r.URL.Query().Get("lang_pattern")
+	genrePattern := r.URL.Query().Get("genre_pattern")
+	seriesPattern := r.URL.Query().Get("series_pattern")
+
+	// Parse scope parameters (for scoped search within current context)
+	authorIDStr := r.URL.Query().Get("author_id")
+	genreIDStr := r.URL.Query().Get("genre_id")
+	seriesIDStr := r.URL.Query().Get("series_id")
+	catalogIDStr := r.URL.Query().Get("catalog_id")
+	var authorID, genreID, seriesID, catalogID int64
+	if authorIDStr != "" {
+		authorID, _ = strconv.ParseInt(authorIDStr, 10, 64)
+	}
+	if genreIDStr != "" {
+		genreID, _ = strconv.ParseInt(genreIDStr, 10, 64)
+	}
+	if seriesIDStr != "" {
+		seriesID, _ = strconv.ParseInt(seriesIDStr, 10, 64)
+	}
+	if catalogIDStr != "" {
+		catalogID, _ = strconv.ParseInt(catalogIDStr, 10, 64)
+	}
+
+	// Parse search options
+	includeDesc := r.URL.Query().Get("desc") == "1"
+
+	// If no search criteria at all, show empty search page
+	if titleQuery == "" && authorQuery == "" && langPattern == "" && genrePattern == "" && seriesPattern == "" {
 		data := PageData{
-			Title:      "Search",
+			Title:      T(getLang(r), "search.books"),
 			SiteTitle:  s.config.Site.Title,
 			WebPrefix:  s.config.Server.WebPrefix,
 			OPDSPrefix: s.config.Server.OPDSPrefix,
 		}
+		s.addI18n(&data, r)
 		s.renderTemplate(w, "search", data)
 		return
 	}
 
-	// Build filters
-	var filters *database.SearchFilters
-	if filterLang != "" || filterFirstName != "" || filterLastName != "" || filterGenre > 0 {
-		filters = &database.SearchFilters{
-			Lang:      filterLang,
-			FirstName: filterFirstName,
-			LastName:  filterLastName,
-			GenreID:   filterGenre,
-		}
+	// Build search options
+	opts := persistence.SearchOptions{
+		TitleQuery:        titleQuery,
+		AuthorQuery:       authorQuery,
+		IncludeAnnotation: includeDesc,
+		AuthorID:          authorID,
+		GenreID:           genreID,
+		SeriesID:          seriesID,
+		CatalogID:         catalogID,
+		Lang:              filterLang,
+		LangPattern:       langPattern,
+		GenrePattern:      genrePattern,
+		SeriesPattern:     seriesPattern,
+		FirstNameFilter:   filterFirstName,
+		LastNameFilter:    filterLastName,
+	}
+	// Use genre filter if set (overrides scope)
+	if filterGenre > 0 && genreID == 0 {
+		opts.GenreID = filterGenre
 	}
 
 	// For "all", use large limit; otherwise use pageSize
@@ -255,59 +545,102 @@ func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 		limit = 10000
 	}
 	pagination := database.NewPagination(page, limit)
-	books, err := s.db.SearchBooks(ctx, query, pagination, false, filters)
+	books, err := s.svc.SearchBooks(ctx, opts, pagination)
 	if err != nil {
 		s.renderError(w, "Search failed", err)
 		return
 	}
 
-	// Convert books to view and collect filter options from results
-	bookViews, filterOpts := s.booksToViewWithFilters(ctx, books)
+	// Convert books to view
+	bookViews := s.booksToView(ctx, books)
+
+	// Get filter options for the SCOPE (search query without filters)
+	scopeOpts := persistence.SearchOptions{
+		TitleQuery:        titleQuery,
+		AuthorQuery:       authorQuery,
+		IncludeAnnotation: includeDesc,
+		AuthorID:          authorID,
+		GenreID:           genreID, // scope genre, not filter
+		SeriesID:          seriesID,
+		CatalogID:         catalogID,
+		LangPattern:       langPattern,
+		GenrePattern:      genrePattern,
+		SeriesPattern:     seriesPattern,
+	}
+	filterOpts, _ := s.svc.GetFilterOptions(ctx, scopeOpts)
 
 	// Look up genre name if filter is active
 	var filterGenreName string
 	if filterGenre > 0 {
-		for _, g := range filterOpts.Genres {
-			if g.ID == filterGenre {
-				filterGenreName = g.Name
-				break
-			}
-		}
-		if filterGenreName == "" {
-			// Genre not in current results, look it up
-			if genre, err := s.db.GetGenre(ctx, filterGenre); err == nil {
-				filterGenreName = genre.Subsection
-				if filterGenreName == "" {
-					filterGenreName = genre.Genre
-				}
+		if genre, err := s.svc.GetGenre(ctx, filterGenre); err == nil {
+			filterGenreName = genre.Subsection
+			if filterGenreName == "" {
+				filterGenreName = genre.Genre
 			}
 		}
 	}
 
 	hasMore := pageSize > 0 && len(books) >= pageSize
 
+	// Build search description for title
+	var searchParts []string
+	if titleQuery != "" {
+		searchParts = append(searchParts, titleQuery)
+	}
+	if authorQuery != "" {
+		searchParts = append(searchParts, "author:"+authorQuery)
+	}
+	if langPattern != "" {
+		searchParts = append(searchParts, "lang:"+langPattern)
+	}
+	if genrePattern != "" {
+		searchParts = append(searchParts, "genre:"+genrePattern)
+	}
+	if seriesPattern != "" {
+		searchParts = append(searchParts, "series:"+seriesPattern)
+	}
+	searchDesc := strings.Join(searchParts, " + ")
+	if searchDesc == "" {
+		searchDesc = "all books"
+	}
+
+	pd := PageData{
+		Title:       fmt.Sprintf("%s: %s", T(getLang(r), "main.search"), searchDesc),
+		SiteTitle:   s.config.Site.Title,
+		WebPrefix:   s.config.Server.WebPrefix,
+		OPDSPrefix:  s.config.Server.OPDSPrefix,
+		Query:       titleQuery,  // Pre-fill title search field
+		AuthorQuery: authorQuery, // Pre-fill author search field
+		Page:        page,
+		PageSize:    pageSize,
+		HasMore:     hasMore,
+		PrevPage:    page - 1,
+		NextPage:    page + 1,
+		CurrentPath: s.config.Server.WebPrefix + "/search",
+		HasEPUB:     true, // Internal converter always available
+		HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
+	}
+	s.addI18n(&pd, r)
+
+	// Build filter options with proper types
+	var langOptions []LangOption
+	var firstNames, lastNames []string
+	var genres []LinkedItem
+	if filterOpts != nil {
+		langOptions = langsToOptions(filterOpts.Languages)
+		firstNames = filterOpts.FirstNames
+		lastNames = filterOpts.LastNames
+		genres = genresToLinkedItems(filterOpts.GenreIDs, filterOpts.GenreNames)
+	}
+
 	data := BooksData{
-		PageData: PageData{
-			Title:       fmt.Sprintf("Search: %s", query),
-			SiteTitle:   s.config.Site.Title,
-			WebPrefix:   s.config.Server.WebPrefix,
-			OPDSPrefix:  s.config.Server.OPDSPrefix,
-			Query:       query,
-			Page:        page,
-			PageSize:    pageSize,
-			HasMore:     hasMore,
-			PrevPage:    page - 1,
-			NextPage:    page + 1,
-			CurrentPath: s.config.Server.WebPrefix + "/search",
-			HasEPUB:     true, // Internal converter always available
-			HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
-		},
+		PageData:        pd,
 		Books:           bookViews,
 		TotalCount:      int(pagination.TotalCount),
-		Languages:       filterOpts.Languages,
-		FirstNames:      filterOpts.FirstNames,
-		LastNames:       filterOpts.LastNames,
-		Genres:          filterOpts.Genres,
+		FilterLangs:     langOptions,
+		FirstNames:      firstNames,
+		LastNames:       lastNames,
+		Genres:          genres,
 		FilterLang:      filterLang,
 		FilterFirstName: filterFirstName,
 		FilterLastName:  filterLastName,
@@ -320,19 +653,23 @@ func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebAuthors(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	setLangCookie(w, r)
 	prefix := r.URL.Query().Get("prefix")
 	page := getPage(r)
+	lang := getLang(r)
 
 	// First level: show 1-char prefixes
 	if prefix == "" {
 		prefixes := s.getAuthorPrefixes(ctx, "", 1)
+		pd := PageData{
+			Title:      T(lang, "authors.title"),
+			SiteTitle:  s.config.Site.Title,
+			WebPrefix:  s.config.Server.WebPrefix,
+			OPDSPrefix: s.config.Server.OPDSPrefix,
+		}
+		s.addI18n(&pd, r)
 		data := AuthorsData{
-			PageData: PageData{
-				Title:      "Authors",
-				SiteTitle:  s.config.Site.Title,
-				WebPrefix:  s.config.Server.WebPrefix,
-				OPDSPrefix: s.config.Server.OPDSPrefix,
-			},
+			PageData: pd,
 			Prefixes: prefixes,
 			IsIndex:  true,
 		}
@@ -346,14 +683,16 @@ func (s *Server) handleWebAuthors(w http.ResponseWriter, r *http.Request) {
 	// If more than 100 and prefix < 3 chars, drill down
 	if count > 100 && len(prefix) < 3 {
 		prefixes := s.getAuthorPrefixes(ctx, prefix, len(prefix)+1)
+		pd := PageData{
+			Title:      fmt.Sprintf("%s: %s", T(lang, "authors.title"), prefix),
+			SiteTitle:  s.config.Site.Title,
+			WebPrefix:  s.config.Server.WebPrefix,
+			OPDSPrefix: s.config.Server.OPDSPrefix,
+			Prefix:     prefix,
+		}
+		s.addI18n(&pd, r)
 		data := AuthorsData{
-			PageData: PageData{
-				Title:      fmt.Sprintf("Authors: %s", prefix),
-				SiteTitle:  s.config.Site.Title,
-				WebPrefix:  s.config.Server.WebPrefix,
-				OPDSPrefix: s.config.Server.OPDSPrefix,
-				Prefix:     prefix,
-			},
+			PageData: pd,
 			Prefixes: prefixes,
 			IsIndex:  true,
 		}
@@ -363,7 +702,7 @@ func (s *Server) handleWebAuthors(w http.ResponseWriter, r *http.Request) {
 
 	// Show actual authors list
 	pagination := database.NewPagination(page, 100)
-	authors, err := s.db.GetAuthorsByPrefix(ctx, prefix, pagination)
+	authors, err := s.svc.GetAuthorsByPrefix(ctx, prefix, pagination)
 	if err != nil {
 		s.renderError(w, "Failed to get authors", err)
 		return
@@ -374,21 +713,23 @@ func (s *Server) handleWebAuthors(w http.ResponseWriter, r *http.Request) {
 		authorViews = append(authorViews, AuthorView{ID: a.ID, Name: a.FullName()})
 	}
 
+	pd := PageData{
+		Title:       fmt.Sprintf("%s: %s", T(lang, "authors.title"), prefix),
+		SiteTitle:   s.config.Site.Title,
+		WebPrefix:   s.config.Server.WebPrefix,
+		OPDSPrefix:  s.config.Server.OPDSPrefix,
+		Prefix:      prefix,
+		Page:        page,
+		HasMore:     len(authors) >= 100,
+		PrevPage:    page - 1,
+		NextPage:    page + 1,
+		CurrentPath: s.config.Server.WebPrefix + "/authors",
+	}
+	s.addI18n(&pd, r)
 	data := AuthorsData{
-		PageData: PageData{
-			Title:       fmt.Sprintf("Authors: %s", prefix),
-			SiteTitle:   s.config.Site.Title,
-			WebPrefix:   s.config.Server.WebPrefix,
-			OPDSPrefix:  s.config.Server.OPDSPrefix,
-			Prefix:      prefix,
-			Page:        page,
-			HasMore:     len(authors) >= 100,
-			PrevPage:    page - 1,
-			NextPage:    page + 1,
-			CurrentPath: s.config.Server.WebPrefix + "/authors",
-		},
-		Authors: authorViews,
-		IsIndex: false,
+		PageData: pd,
+		Authors:  authorViews,
+		IsIndex:  false,
 	}
 
 	s.renderTemplate(w, "authors", data)
@@ -396,6 +737,7 @@ func (s *Server) handleWebAuthors(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebAuthor(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	setLangCookie(w, r)
 	authorID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		s.renderError(w, "Invalid author ID", err)
@@ -404,13 +746,29 @@ func (s *Server) handleWebAuthor(w http.ResponseWriter, r *http.Request) {
 
 	page := getPage(r)
 	pageSize := getPageSize(r)
+
+	// Parse filter parameters
+	filterLang := r.URL.Query().Get("lang")
+	filterGenreStr := r.URL.Query().Get("genre")
+	var filterGenre int64
+	if filterGenreStr != "" {
+		filterGenre, _ = strconv.ParseInt(filterGenreStr, 10, 64)
+	}
+
+	// Build search options with author scope
+	opts := persistence.SearchOptions{
+		AuthorID: authorID,
+		Lang:     filterLang,
+		GenreID:  filterGenre,
+	}
+
 	limit := pageSize
 	if limit == 0 {
 		limit = 10000
 	}
 	pagination := database.NewPagination(page, limit)
 
-	books, err := s.db.GetBooksForAuthor(ctx, authorID, pagination, false)
+	books, err := s.svc.SearchBooks(ctx, opts, pagination)
 	if err != nil {
 		s.renderError(w, "Failed to get books", err)
 		return
@@ -418,7 +776,7 @@ func (s *Server) handleWebAuthor(w http.ResponseWriter, r *http.Request) {
 
 	authorName := "Author"
 	if len(books) > 0 {
-		if authors, err := s.db.GetBookAuthors(ctx, books[0].ID); err == nil {
+		if authors, err := s.svc.GetBookAuthors(ctx, books[0].ID); err == nil {
 			for _, a := range authors {
 				if a.ID == authorID {
 					authorName = a.FullName()
@@ -429,23 +787,58 @@ func (s *Server) handleWebAuthor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hasMore := pageSize > 0 && len(books) >= pageSize
+	bookViews := s.booksToView(ctx, books)
+
+	// Get filter options for the SCOPE (author only, without filters)
+	scopeOpts := persistence.SearchOptions{AuthorID: authorID}
+	filterOpts, _ := s.svc.GetFilterOptions(ctx, scopeOpts)
+
+	// Get filter genre name
+	filterGenreName := ""
+	if filterGenre > 0 {
+		if g, err := s.svc.GetGenre(ctx, filterGenre); err == nil {
+			filterGenreName = g.Subsection
+			if filterGenreName == "" {
+				filterGenreName = g.Genre
+			}
+		}
+	}
+
+	pd := PageData{
+		Title:         authorName,
+		SiteTitle:     s.config.Site.Title,
+		WebPrefix:     s.config.Server.WebPrefix,
+		OPDSPrefix:    s.config.Server.OPDSPrefix,
+		Page:          page,
+		PageSize:      pageSize,
+		HasMore:       hasMore,
+		PrevPage:      page - 1,
+		NextPage:      page + 1,
+		CurrentPath:   fmt.Sprintf("%s/authors/%d", s.config.Server.WebPrefix, authorID),
+		HasEPUB:       true,
+		HasMOBI:       checkEbookConvert(s.config.Converters.FB2ToMOBI),
+		ScopeAuthorID: authorID,
+		ScopeName:     authorName,
+	}
+	s.addI18n(&pd, r)
+
+	// Build filter options with proper types
+	var langOptions []LangOption
+	var genres []LinkedItem
+	if filterOpts != nil {
+		langOptions = langsToOptions(filterOpts.Languages)
+		genres = genresToLinkedItems(filterOpts.GenreIDs, filterOpts.GenreNames)
+	}
 
 	data := BooksData{
-		PageData: PageData{
-			Title:       authorName,
-			SiteTitle:   s.config.Site.Title,
-			WebPrefix:   s.config.Server.WebPrefix,
-			OPDSPrefix:  s.config.Server.OPDSPrefix,
-			Page:        page,
-			PageSize:    pageSize,
-			HasMore:     hasMore,
-			PrevPage:    page - 1,
-			NextPage:    page + 1,
-			CurrentPath: fmt.Sprintf("%s/authors/%d", s.config.Server.WebPrefix, authorID),
-			HasEPUB:     true, // Internal converter always available
-			HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
-		},
-		Books: s.booksToView(ctx, books),
+		PageData:        pd,
+		Books:           bookViews,
+		TotalCount:      int(pagination.TotalCount),
+		FilterLangs:     langOptions,
+		Genres:          genres,
+		FilterLang:      filterLang,
+		FilterGenre:     filterGenre,
+		FilterGenreName: filterGenreName,
 	}
 
 	s.renderTemplate(w, "books", data)
@@ -453,29 +846,33 @@ func (s *Server) handleWebAuthor(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebGenres(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	setLangCookie(w, r)
 	section := r.URL.Query().Get("section")
+	lang := getLang(r)
 
 	if section == "" {
-		sections, err := s.db.GetGenreSections(ctx)
+		sections, err := s.svc.GetGenreSections(ctx)
 		if err != nil {
 			s.renderError(w, "Failed to get genres", err)
 			return
 		}
 
+		pd := PageData{
+			Title:      T(lang, "genres.title"),
+			SiteTitle:  s.config.Site.Title,
+			WebPrefix:  s.config.Server.WebPrefix,
+			OPDSPrefix: s.config.Server.OPDSPrefix,
+		}
+		s.addI18n(&pd, r)
 		data := GenresData{
-			PageData: PageData{
-				Title:      "Genres",
-				SiteTitle:  s.config.Site.Title,
-				WebPrefix:  s.config.Server.WebPrefix,
-				OPDSPrefix: s.config.Server.OPDSPrefix,
-			},
+			PageData: pd,
 			Sections: sections,
 		}
 		s.renderTemplate(w, "genres_index", data)
 		return
 	}
 
-	genres, err := s.db.GetGenresInSection(ctx, section)
+	genres, err := s.svc.GetGenresInSection(ctx, section)
 	if err != nil {
 		s.renderError(w, "Failed to get genres", err)
 		return
@@ -490,14 +887,16 @@ func (s *Server) handleWebGenres(w http.ResponseWriter, r *http.Request) {
 		genreViews = append(genreViews, GenreView{ID: g.ID, Name: name})
 	}
 
+	pd := PageData{
+		Title:      section,
+		SiteTitle:  s.config.Site.Title,
+		WebPrefix:  s.config.Server.WebPrefix,
+		OPDSPrefix: s.config.Server.OPDSPrefix,
+	}
+	s.addI18n(&pd, r)
 	data := GenresData{
-		PageData: PageData{
-			Title:      section,
-			SiteTitle:  s.config.Site.Title,
-			WebPrefix:  s.config.Server.WebPrefix,
-			OPDSPrefix: s.config.Server.OPDSPrefix,
-		},
-		Genres: genreViews,
+		PageData: pd,
+		Genres:   genreViews,
 	}
 
 	s.renderTemplate(w, "genres", data)
@@ -505,6 +904,7 @@ func (s *Server) handleWebGenres(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebGenre(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	setLangCookie(w, r)
 	genreID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		s.renderError(w, "Invalid genre ID", err)
@@ -513,36 +913,83 @@ func (s *Server) handleWebGenre(w http.ResponseWriter, r *http.Request) {
 
 	page := getPage(r)
 	pageSize := getPageSize(r)
+
+	// Parse filter parameters
+	filterLang := r.URL.Query().Get("lang")
+	filterFirstName := r.URL.Query().Get("fname")
+	filterLastName := r.URL.Query().Get("lname")
+
+	// Get genre name
+	genreName := "Genre"
+	if genre, err := s.svc.GetGenre(ctx, genreID); err == nil {
+		genreName = genre.Subsection
+		if genreName == "" {
+			genreName = genre.Genre
+		}
+	}
+
+	// Build search options with genre scope + filters
+	opts := persistence.SearchOptions{
+		GenreID:         genreID,
+		Lang:            filterLang,
+		FirstNameFilter: filterFirstName,
+		LastNameFilter:  filterLastName,
+	}
+
 	limit := pageSize
 	if limit == 0 {
 		limit = 10000
 	}
 	pagination := database.NewPagination(page, limit)
 
-	books, err := s.db.GetBooksForGenre(ctx, genreID, pagination, false)
+	books, err := s.svc.SearchBooks(ctx, opts, pagination)
 	if err != nil {
 		s.renderError(w, "Failed to get books", err)
 		return
 	}
 
-	hasMore := pageSize > 0 && len(books) >= pageSize
+	// Get filter options for the SCOPE (not filtered results) to show all available options
+	scopeOpts := persistence.SearchOptions{GenreID: genreID}
+	filterOpts, _ := s.svc.GetFilterOptions(ctx, scopeOpts)
 
+	hasMore := pageSize > 0 && len(books) >= pageSize
+	bookViews := s.booksToView(ctx, books)
+
+	// Convert language codes to LangOption with names
+	var langOptions []LangOption
+	if filterOpts != nil {
+		for _, code := range filterOpts.Languages {
+			langOptions = append(langOptions, LangOption{Code: code, Name: getLanguageName(code)})
+		}
+	}
+
+	pd := PageData{
+		Title:        genreName,
+		SiteTitle:    s.config.Site.Title,
+		WebPrefix:    s.config.Server.WebPrefix,
+		OPDSPrefix:   s.config.Server.OPDSPrefix,
+		Page:         page,
+		PageSize:     pageSize,
+		HasMore:      hasMore,
+		PrevPage:     page - 1,
+		NextPage:     page + 1,
+		CurrentPath:  fmt.Sprintf("%s/genres/%d", s.config.Server.WebPrefix, genreID),
+		HasEPUB:      true,
+		HasMOBI:      checkEbookConvert(s.config.Converters.FB2ToMOBI),
+		ScopeGenreID: genreID,
+		ScopeName:    genreName,
+	}
+	s.addI18n(&pd, r)
 	data := BooksData{
-		PageData: PageData{
-			Title:       "Genre Books",
-			SiteTitle:   s.config.Site.Title,
-			WebPrefix:   s.config.Server.WebPrefix,
-			OPDSPrefix:  s.config.Server.OPDSPrefix,
-			Page:        page,
-			PageSize:    pageSize,
-			HasMore:     hasMore,
-			PrevPage:    page - 1,
-			NextPage:    page + 1,
-			CurrentPath: fmt.Sprintf("%s/genres/%d", s.config.Server.WebPrefix, genreID),
-			HasEPUB:     true, // Internal converter always available
-			HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
-		},
-		Books: s.booksToView(ctx, books),
+		PageData:        pd,
+		Books:           bookViews,
+		TotalCount:      int(pagination.TotalCount),
+		FilterLangs:     langOptions,
+		FirstNames:      filterOpts.FirstNames,
+		LastNames:       filterOpts.LastNames,
+		FilterLang:      filterLang,
+		FilterFirstName: filterFirstName,
+		FilterLastName:  filterLastName,
 	}
 
 	s.renderTemplate(w, "books", data)
@@ -550,18 +997,22 @@ func (s *Server) handleWebGenre(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebSeries(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	setLangCookie(w, r)
 	prefix := r.URL.Query().Get("prefix")
 	page := getPage(r)
+	lang := getLang(r)
 
 	if prefix == "" {
 		prefixes := s.getSeriesPrefixes(ctx, "", 1)
+		pd := PageData{
+			Title:      T(lang, "series.title"),
+			SiteTitle:  s.config.Site.Title,
+			WebPrefix:  s.config.Server.WebPrefix,
+			OPDSPrefix: s.config.Server.OPDSPrefix,
+		}
+		s.addI18n(&pd, r)
 		data := SeriesData{
-			PageData: PageData{
-				Title:      "Series",
-				SiteTitle:  s.config.Site.Title,
-				WebPrefix:  s.config.Server.WebPrefix,
-				OPDSPrefix: s.config.Server.OPDSPrefix,
-			},
+			PageData: pd,
 			Prefixes: prefixes,
 			IsIndex:  true,
 		}
@@ -573,14 +1024,16 @@ func (s *Server) handleWebSeries(w http.ResponseWriter, r *http.Request) {
 
 	if count > 100 && len(prefix) < 3 {
 		prefixes := s.getSeriesPrefixes(ctx, prefix, len(prefix)+1)
+		pd := PageData{
+			Title:      fmt.Sprintf("%s: %s", T(lang, "series.title"), prefix),
+			SiteTitle:  s.config.Site.Title,
+			WebPrefix:  s.config.Server.WebPrefix,
+			OPDSPrefix: s.config.Server.OPDSPrefix,
+			Prefix:     prefix,
+		}
+		s.addI18n(&pd, r)
 		data := SeriesData{
-			PageData: PageData{
-				Title:      fmt.Sprintf("Series: %s", prefix),
-				SiteTitle:  s.config.Site.Title,
-				WebPrefix:  s.config.Server.WebPrefix,
-				OPDSPrefix: s.config.Server.OPDSPrefix,
-				Prefix:     prefix,
-			},
+			PageData: pd,
 			Prefixes: prefixes,
 			IsIndex:  true,
 		}
@@ -589,7 +1042,7 @@ func (s *Server) handleWebSeries(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pagination := database.NewPagination(page, 100)
-	seriesList, err := s.db.GetSeriesByPrefix(ctx, prefix, pagination)
+	seriesList, err := s.svc.GetSeriesByPrefix(ctx, prefix, pagination)
 	if err != nil {
 		s.renderError(w, "Failed to get series", err)
 		return
@@ -600,21 +1053,23 @@ func (s *Server) handleWebSeries(w http.ResponseWriter, r *http.Request) {
 		seriesViews = append(seriesViews, SeriesView{ID: ser.ID, Name: ser.Name})
 	}
 
+	pd := PageData{
+		Title:       fmt.Sprintf("%s: %s", T(lang, "series.title"), prefix),
+		SiteTitle:   s.config.Site.Title,
+		WebPrefix:   s.config.Server.WebPrefix,
+		OPDSPrefix:  s.config.Server.OPDSPrefix,
+		Prefix:      prefix,
+		Page:        page,
+		HasMore:     len(seriesList) >= 100,
+		PrevPage:    page - 1,
+		NextPage:    page + 1,
+		CurrentPath: s.config.Server.WebPrefix + "/series",
+	}
+	s.addI18n(&pd, r)
 	data := SeriesData{
-		PageData: PageData{
-			Title:       fmt.Sprintf("Series: %s", prefix),
-			SiteTitle:   s.config.Site.Title,
-			WebPrefix:   s.config.Server.WebPrefix,
-			OPDSPrefix:  s.config.Server.OPDSPrefix,
-			Prefix:      prefix,
-			Page:        page,
-			HasMore:     len(seriesList) >= 100,
-			PrevPage:    page - 1,
-			NextPage:    page + 1,
-			CurrentPath: s.config.Server.WebPrefix + "/series",
-		},
-		Series:  seriesViews,
-		IsIndex: false,
+		PageData: pd,
+		Series:   seriesViews,
+		IsIndex:  false,
 	}
 
 	s.renderTemplate(w, "series", data)
@@ -622,6 +1077,7 @@ func (s *Server) handleWebSeries(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebSeriesBooks(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	setLangCookie(w, r)
 	seriesID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		s.renderError(w, "Invalid series ID", err)
@@ -630,36 +1086,104 @@ func (s *Server) handleWebSeriesBooks(w http.ResponseWriter, r *http.Request) {
 
 	page := getPage(r)
 	pageSize := getPageSize(r)
+
+	// Parse filter parameters
+	filterLang := r.URL.Query().Get("lang")
+	filterFirstName := r.URL.Query().Get("fname")
+	filterLastName := r.URL.Query().Get("lname")
+	filterGenreStr := r.URL.Query().Get("genre")
+	var filterGenre int64
+	if filterGenreStr != "" {
+		filterGenre, _ = strconv.ParseInt(filterGenreStr, 10, 64)
+	}
+
+	// Get series name
+	seriesName := "Series"
+	if ser, err := s.svc.GetSeries(ctx, seriesID); err == nil {
+		seriesName = ser.Name
+	}
+
+	// Build search options with series scope
+	opts := persistence.SearchOptions{
+		SeriesID:        seriesID,
+		Lang:            filterLang,
+		FirstNameFilter: filterFirstName,
+		LastNameFilter:  filterLastName,
+		GenreID:         filterGenre,
+	}
+
 	limit := pageSize
 	if limit == 0 {
 		limit = 10000
 	}
 	pagination := database.NewPagination(page, limit)
 
-	books, err := s.db.GetBooksForSeries(ctx, seriesID, pagination, false)
+	books, err := s.svc.SearchBooks(ctx, opts, pagination)
 	if err != nil {
 		s.renderError(w, "Failed to get books", err)
 		return
 	}
 
 	hasMore := pageSize > 0 && len(books) >= pageSize
+	bookViews := s.booksToView(ctx, books)
+
+	// Get filter options for the SCOPE (series only, without filters)
+	scopeOpts := persistence.SearchOptions{SeriesID: seriesID}
+	filterOpts, _ := s.svc.GetFilterOptions(ctx, scopeOpts)
+
+	// Get filter genre name
+	filterGenreName := ""
+	if filterGenre > 0 {
+		if g, err := s.svc.GetGenre(ctx, filterGenre); err == nil {
+			filterGenreName = g.Subsection
+			if filterGenreName == "" {
+				filterGenreName = g.Genre
+			}
+		}
+	}
+
+	pd := PageData{
+		Title:         seriesName,
+		SiteTitle:     s.config.Site.Title,
+		WebPrefix:     s.config.Server.WebPrefix,
+		OPDSPrefix:    s.config.Server.OPDSPrefix,
+		Page:          page,
+		PageSize:      pageSize,
+		HasMore:       hasMore,
+		PrevPage:      page - 1,
+		NextPage:      page + 1,
+		CurrentPath:   fmt.Sprintf("%s/series/%d", s.config.Server.WebPrefix, seriesID),
+		HasEPUB:       true,
+		HasMOBI:       checkEbookConvert(s.config.Converters.FB2ToMOBI),
+		ScopeSeriesID: seriesID,
+		ScopeName:     seriesName,
+	}
+	s.addI18n(&pd, r)
+
+	// Build filter options with proper types
+	var langOptions []LangOption
+	var firstNames, lastNames []string
+	var genres []LinkedItem
+	if filterOpts != nil {
+		langOptions = langsToOptions(filterOpts.Languages)
+		firstNames = filterOpts.FirstNames
+		lastNames = filterOpts.LastNames
+		genres = genresToLinkedItems(filterOpts.GenreIDs, filterOpts.GenreNames)
+	}
 
 	data := BooksData{
-		PageData: PageData{
-			Title:       "Series Books",
-			SiteTitle:   s.config.Site.Title,
-			WebPrefix:   s.config.Server.WebPrefix,
-			OPDSPrefix:  s.config.Server.OPDSPrefix,
-			Page:        page,
-			PageSize:    pageSize,
-			HasMore:     hasMore,
-			PrevPage:    page - 1,
-			NextPage:    page + 1,
-			CurrentPath: fmt.Sprintf("%s/series/%d", s.config.Server.WebPrefix, seriesID),
-			HasEPUB:     true, // Internal converter always available
-			HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
-		},
-		Books: s.booksToView(ctx, books),
+		PageData:        pd,
+		Books:           bookViews,
+		TotalCount:      int(pagination.TotalCount),
+		FilterLangs:     langOptions,
+		FirstNames:      firstNames,
+		LastNames:       lastNames,
+		Genres:          genres,
+		FilterLang:      filterLang,
+		FilterFirstName: filterFirstName,
+		FilterLastName:  filterLastName,
+		FilterGenre:     filterGenre,
+		FilterGenreName: filterGenreName,
 	}
 
 	s.renderTemplate(w, "books", data)
@@ -667,37 +1191,435 @@ func (s *Server) handleWebSeriesBooks(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebNew(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	setLangCookie(w, r)
+	lang := getLang(r)
+	page := getPage(r)
 	pageSize := getPageSize(r)
+
+	// Parse filter parameters
+	filterLang := r.URL.Query().Get("lang")
+	filterFirstName := r.URL.Query().Get("fname")
+	filterLastName := r.URL.Query().Get("lname")
+	filterGenreStr := r.URL.Query().Get("genre")
+	var filterGenre int64
+	if filterGenreStr != "" {
+		filterGenre, _ = strconv.ParseInt(filterGenreStr, 10, 64)
+	}
+
+	// Build search options with new period
+	opts := persistence.SearchOptions{
+		NewPeriod:       7, // Last 7 days
+		Lang:            filterLang,
+		FirstNameFilter: filterFirstName,
+		LastNameFilter:  filterLastName,
+		GenreID:         filterGenre,
+	}
+
 	limit := pageSize
 	if limit == 0 {
 		limit = 10000
 	}
+	pagination := database.NewPagination(page, limit)
 
-	books, err := s.db.GetLastBooks(ctx, limit, 7)
+	books, err := s.svc.SearchBooks(ctx, opts, pagination)
 	if err != nil {
 		s.renderError(w, "Failed to get new books", err)
 		return
 	}
 
+	hasMore := pageSize > 0 && len(books) >= pageSize
+	bookViews := s.booksToView(ctx, books)
+
+	// Get filter options for the SCOPE (new period only, without filters)
+	scopeOpts := persistence.SearchOptions{NewPeriod: 7}
+	filterOpts, _ := s.svc.GetFilterOptions(ctx, scopeOpts)
+
+	// Get filter genre name
+	filterGenreName := ""
+	if filterGenre > 0 {
+		if g, err := s.svc.GetGenre(ctx, filterGenre); err == nil {
+			filterGenreName = g.Subsection
+			if filterGenreName == "" {
+				filterGenreName = g.Genre
+			}
+		}
+	}
+
+	pd := PageData{
+		Title:       T(lang, "main.newbooks"),
+		SiteTitle:   s.config.Site.Title,
+		WebPrefix:   s.config.Server.WebPrefix,
+		OPDSPrefix:  s.config.Server.OPDSPrefix,
+		Page:        page,
+		PageSize:    pageSize,
+		HasMore:     hasMore,
+		PrevPage:    page - 1,
+		NextPage:    page + 1,
+		CurrentPath: s.config.Server.WebPrefix + "/new",
+		HasEPUB:     true,
+		HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
+	}
+	s.addI18n(&pd, r)
+
+	// Build filter options with proper types
+	var langOptions []LangOption
+	var firstNames, lastNames []string
+	var genres []LinkedItem
+	if filterOpts != nil {
+		langOptions = langsToOptions(filterOpts.Languages)
+		firstNames = filterOpts.FirstNames
+		lastNames = filterOpts.LastNames
+		genres = genresToLinkedItems(filterOpts.GenreIDs, filterOpts.GenreNames)
+	}
+
 	data := BooksData{
-		PageData: PageData{
-			Title:       "New Books (Last 7 Days)",
-			SiteTitle:   s.config.Site.Title,
-			WebPrefix:   s.config.Server.WebPrefix,
-			OPDSPrefix:  s.config.Server.OPDSPrefix,
-			PageSize:    pageSize,
-			CurrentPath: s.config.Server.WebPrefix + "/new",
-			HasEPUB:     true, // Internal converter always available
-			HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
-		},
-		Books: s.booksToView(ctx, books),
+		PageData:        pd,
+		Books:           bookViews,
+		TotalCount:      int(pagination.TotalCount),
+		FilterLangs:     langOptions,
+		FirstNames:      firstNames,
+		LastNames:       lastNames,
+		Genres:          genres,
+		FilterLang:      filterLang,
+		FilterFirstName: filterFirstName,
+		FilterLastName:  filterLastName,
+		FilterGenre:     filterGenre,
+		FilterGenreName: filterGenreName,
 	}
 
 	s.renderTemplate(w, "books", data)
 }
 
+func (s *Server) handleWebAudio(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	setLangCookie(w, r)
+	lang := getLang(r)
+	page := getPage(r)
+	pageSize := getPageSize(r)
+
+	// Parse filter parameters
+	filterLang := r.URL.Query().Get("lang")
+	filterFirstName := r.URL.Query().Get("fname")
+	filterLastName := r.URL.Query().Get("lname")
+	filterGenreStr := r.URL.Query().Get("genre")
+	var filterGenre int64
+	if filterGenreStr != "" {
+		filterGenre, _ = strconv.ParseInt(filterGenreStr, 10, 64)
+	}
+
+	// Build search options for audiobooks only
+	opts := persistence.SearchOptions{
+		AudioOnly:       true,
+		Lang:            filterLang,
+		FirstNameFilter: filterFirstName,
+		LastNameFilter:  filterLastName,
+		GenreID:         filterGenre,
+	}
+
+	limit := pageSize
+	if limit == 0 {
+		limit = 10000
+	}
+	pagination := database.NewPagination(page, limit)
+
+	books, err := s.svc.SearchBooks(ctx, opts, pagination)
+	if err != nil {
+		s.renderError(w, "Failed to get audiobooks", err)
+		return
+	}
+
+	hasMore := pageSize > 0 && len(books) >= pageSize
+	bookViews := s.booksToView(ctx, books)
+
+	// Get filter options for the SCOPE (audiobooks only, without filters)
+	scopeOpts := persistence.SearchOptions{AudioOnly: true}
+	filterOpts, _ := s.svc.GetFilterOptions(ctx, scopeOpts)
+
+	// Get filter genre name
+	filterGenreName := ""
+	if filterGenre > 0 {
+		if g, err := s.svc.GetGenre(ctx, filterGenre); err == nil {
+			filterGenreName = g.Subsection
+			if filterGenreName == "" {
+				filterGenreName = g.Genre
+			}
+		}
+	}
+
+	pd := PageData{
+		Title:       T(lang, "main.audiobooks"),
+		SiteTitle:   s.config.Site.Title,
+		WebPrefix:   s.config.Server.WebPrefix,
+		OPDSPrefix:  s.config.Server.OPDSPrefix,
+		Page:        page,
+		PageSize:    pageSize,
+		HasMore:     hasMore,
+		PrevPage:    page - 1,
+		NextPage:    page + 1,
+		CurrentPath: s.config.Server.WebPrefix + "/audio",
+		HasEPUB:     true,
+		HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
+	}
+	s.addI18n(&pd, r)
+
+	// Build filter options with proper types
+	var langOptions []LangOption
+	var firstNames, lastNames []string
+	var genres []LinkedItem
+	if filterOpts != nil {
+		langOptions = langsToOptions(filterOpts.Languages)
+		firstNames = filterOpts.FirstNames
+		lastNames = filterOpts.LastNames
+		genres = genresToLinkedItems(filterOpts.GenreIDs, filterOpts.GenreNames)
+	}
+
+	data := BooksData{
+		PageData:        pd,
+		Books:           bookViews,
+		TotalCount:      int(pagination.TotalCount),
+		FilterLangs:     langOptions,
+		FirstNames:      firstNames,
+		LastNames:       lastNames,
+		Genres:          genres,
+		FilterLang:      filterLang,
+		FilterFirstName: filterFirstName,
+		FilterLastName:  filterLastName,
+		FilterGenre:     filterGenre,
+		FilterGenreName: filterGenreName,
+	}
+
+	s.renderTemplate(w, "books", data)
+}
+
+// AudiobookStructure for parsing chapters JSON
+type AudiobookStructure struct {
+	Type   string          `json:"type"`
+	Parts  []AudiobookPart `json:"parts,omitempty"`
+	Tracks []AudioTrack    `json:"tracks,omitempty"`
+}
+
+type AudiobookPart struct {
+	Name     string       `json:"name"`
+	Duration int          `json:"duration"`
+	Tracks   []AudioTrack `json:"tracks"`
+}
+
+type AudioTrack struct {
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Duration int    `json:"duration"`
+	Size     int64  `json:"size"`
+}
+
+// AudioDetailData holds data for the audiobook detail page
+type AudioDetailData struct {
+	PageData
+	Book      BookView
+	Structure *AudiobookStructure
+	Authors   []database.Author
+}
+
+func (s *Server) handleWebAudioDetail(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	setLangCookie(w, r)
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		s.renderError(w, "Invalid audiobook ID", err)
+		return
+	}
+
+	book, err := s.svc.GetBook(ctx, id)
+	if err != nil {
+		s.renderError(w, "Audiobook not found", err)
+		return
+	}
+
+	if !book.IsAudiobook {
+		http.Redirect(w, r, s.config.Server.WebPrefix+"/", http.StatusFound)
+		return
+	}
+
+	// Parse chapters JSON
+	var structure *AudiobookStructure
+	if book.Chapters != "" {
+		structure = &AudiobookStructure{}
+		if err := json.Unmarshal([]byte(book.Chapters), structure); err != nil {
+			log.Printf("Failed to parse chapters JSON for book %d: %v", id, err)
+			structure = nil
+		}
+	}
+
+	// Get authors and narrators
+	authors, _ := s.svc.GetBookAuthors(ctx, id)
+	var authorLinks []LinkedItem
+	for _, a := range authors {
+		authorLinks = append(authorLinks, LinkedItem{ID: a.ID, Name: a.FullName()})
+	}
+
+	var narratorLinks []LinkedItem
+	if narrators, err := s.svc.GetBookNarrators(ctx, id); err == nil {
+		for _, n := range narrators {
+			narratorLinks = append(narratorLinks, LinkedItem{ID: n.ID, Name: n.FullName()})
+		}
+	}
+
+	// Build book view
+	bookView := BookView{
+		ID:              book.ID,
+		Title:           book.Title,
+		Authors:         authorLinks,
+		Lang:            book.Lang,
+		LangName:        getLanguageName(book.Lang),
+		Format:          strings.ToUpper(book.Format),
+		Size:            formatSize(book.Filesize),
+		Annotation:      book.Annotation,
+		IsAudiobook:     book.IsAudiobook,
+		Duration:        formatDuration(book.DurationSeconds),
+		DurationSeconds: book.DurationSeconds,
+		TrackCount:      book.TrackCount,
+		Narrators:       narratorLinks,
+	}
+
+	pd := PageData{
+		Title:      book.Title,
+		SiteTitle:  s.config.Site.Title,
+		WebPrefix:  s.config.Server.WebPrefix,
+		OPDSPrefix: s.config.Server.OPDSPrefix,
+	}
+	s.addI18n(&pd, r)
+
+	data := AudioDetailData{
+		PageData:  pd,
+		Book:      bookView,
+		Structure: structure,
+		Authors:   authors,
+	}
+
+	s.renderTemplate(w, "audiodetail", data)
+}
+
+// handleAudioTrackDownload serves individual audio files from archive
+func (s *Server) handleAudioTrackDownload(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid audiobook ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get the file path from query parameter
+	trackPath := r.URL.Query().Get("file")
+	if trackPath == "" {
+		http.Error(w, "Missing file parameter", http.StatusBadRequest)
+		return
+	}
+
+	book, err := s.svc.GetBook(ctx, id)
+	if err != nil {
+		http.Error(w, "Audiobook not found", http.StatusNotFound)
+		return
+	}
+
+	if !book.IsAudiobook {
+		http.Error(w, "Not an audiobook", http.StatusBadRequest)
+		return
+	}
+
+	// Construct archive path
+	archivePath := filepath.Join(s.config.Library.Root, book.Path, book.Filename)
+	format := strings.ToLower(book.Format)
+
+	// Determine MIME type from track extension
+	trackExt := strings.ToLower(strings.TrimPrefix(filepath.Ext(trackPath), "."))
+	mimeType := "application/octet-stream"
+	switch trackExt {
+	case "mp3":
+		mimeType = "audio/mpeg"
+	case "m4b", "m4a", "aac":
+		mimeType = "audio/mp4"
+	case "flac":
+		mimeType = "audio/flac"
+	case "ogg", "opus":
+		mimeType = "audio/ogg"
+	case "wav":
+		mimeType = "audio/wav"
+	}
+
+	trackFilename := filepath.Base(trackPath)
+
+	if format == "zip" {
+		s.serveTrackFromZip(w, archivePath, trackPath, trackFilename, mimeType)
+	} else if format == "7z" {
+		s.serveTrackFrom7z(w, archivePath, trackPath, trackFilename, mimeType)
+	} else {
+		http.Error(w, "Unsupported archive format", http.StatusBadRequest)
+	}
+}
+
+func (s *Server) serveTrackFromZip(w http.ResponseWriter, archivePath, trackPath, filename, mimeType string) {
+	zr, err := zip.OpenReader(archivePath)
+	if err != nil {
+		http.Error(w, "Failed to open archive", http.StatusInternalServerError)
+		return
+	}
+	defer zr.Close()
+
+	for _, f := range zr.File {
+		if f.Name == trackPath || strings.HasSuffix(f.Name, "/"+trackPath) {
+			rc, err := f.Open()
+			if err != nil {
+				http.Error(w, "Failed to open file in archive", http.StatusInternalServerError)
+				return
+			}
+			defer rc.Close()
+
+			w.Header().Set("Content-Type", mimeType)
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", f.UncompressedSize64))
+			io.Copy(w, rc)
+			return
+		}
+	}
+
+	http.Error(w, "File not found in archive", http.StatusNotFound)
+}
+
+func (s *Server) serveTrackFrom7z(w http.ResponseWriter, archivePath, trackPath, filename, mimeType string) {
+	szr, err := sevenzip.OpenReader(archivePath)
+	if err != nil {
+		http.Error(w, "Failed to open archive", http.StatusInternalServerError)
+		return
+	}
+	defer szr.Close()
+
+	for _, f := range szr.File {
+		if f.Name == trackPath || strings.HasSuffix(f.Name, "/"+trackPath) {
+			rc, err := f.Open()
+			if err != nil {
+				http.Error(w, "Failed to open file in archive", http.StatusInternalServerError)
+				return
+			}
+			defer rc.Close()
+
+			w.Header().Set("Content-Type", mimeType)
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", f.UncompressedSize))
+			io.Copy(w, rc)
+			return
+		}
+	}
+
+	http.Error(w, "File not found in archive", http.StatusNotFound)
+}
+
 func (s *Server) handleWebBookshelf(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	setLangCookie(w, r)
+	lang := getLang(r)
 
 	user := s.getWebUser(r)
 
@@ -709,30 +1631,32 @@ func (s *Server) handleWebBookshelf(w http.ResponseWriter, r *http.Request) {
 	}
 	pagination := database.NewPagination(page, limit)
 
-	books, err := s.db.GetBookShelf(ctx, user, pagination)
+	books, err := s.svc.GetBookShelf(ctx, user, pagination)
 	if err != nil {
 		s.renderError(w, "Failed to get bookshelf", err)
 		return
 	}
 
-	count, _ := s.db.CountBookShelf(ctx, user)
+	count, _ := s.svc.CountBookShelf(ctx, user)
 	hasMore := pageSize > 0 && count > int64(pagination.Offset()+len(books))
 
+	pd := PageData{
+		Title:       T(lang, "bookshelf.title"),
+		SiteTitle:   s.config.Site.Title,
+		WebPrefix:   s.config.Server.WebPrefix,
+		OPDSPrefix:  s.config.Server.OPDSPrefix,
+		HasEPUB:     true,
+		HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
+		CurrentPath: s.config.Server.WebPrefix + "/bookshelf",
+		Page:        page,
+		PageSize:    pageSize,
+		HasMore:     hasMore,
+		PrevPage:    page - 1,
+		NextPage:    page + 1,
+	}
+	s.addI18n(&pd, r)
 	data := BooksData{
-		PageData: PageData{
-			Title:       "My Bookshelf",
-			SiteTitle:   s.config.Site.Title,
-			WebPrefix:   s.config.Server.WebPrefix,
-			OPDSPrefix:  s.config.Server.OPDSPrefix,
-			HasEPUB:     true, // Internal converter always available
-			HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
-			CurrentPath: s.config.Server.WebPrefix + "/bookshelf",
-			Page:        page,
-			PageSize:    pageSize,
-			HasMore:     hasMore,
-			PrevPage:    page - 1,
-			NextPage:    page + 1,
-		},
+		PageData:   pd,
 		Books:      s.booksToView(ctx, books),
 		TotalCount: int(count),
 	}
@@ -790,10 +1714,30 @@ func getLanguageName(code string) string {
 	return code
 }
 
+// langsToOptions converts language codes to LangOption with human-readable names
+func langsToOptions(codes []string) []LangOption {
+	var opts []LangOption
+	for _, code := range codes {
+		opts = append(opts, LangOption{Code: code, Name: getLanguageName(code)})
+	}
+	return opts
+}
+
+// genresToLinkedItems converts genre IDs and names to LinkedItem slice
+func genresToLinkedItems(ids []int64, names []string) []LinkedItem {
+	var items []LinkedItem
+	for i := 0; i < len(ids) && i < len(names); i++ {
+		items = append(items, LinkedItem{ID: ids[i], Name: names[i]})
+	}
+	return items
+}
+
 func (s *Server) handleWebLanguages(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	setLangCookie(w, r)
+	lang := getLang(r)
 
-	langs, err := s.db.GetLanguages(ctx)
+	langs, err := s.svc.GetLanguages(ctx)
 	if err != nil {
 		s.renderError(w, "Failed to get languages", err)
 		return
@@ -808,13 +1752,15 @@ func (s *Server) handleWebLanguages(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	pd := PageData{
+		Title:      T(lang, "languages.title"),
+		SiteTitle:  s.config.Site.Title,
+		WebPrefix:  s.config.Server.WebPrefix,
+		OPDSPrefix: s.config.Server.OPDSPrefix,
+	}
+	s.addI18n(&pd, r)
 	data := LanguagesData{
-		PageData: PageData{
-			Title:      "Languages",
-			SiteTitle:  s.config.Site.Title,
-			WebPrefix:  s.config.Server.WebPrefix,
-			OPDSPrefix: s.config.Server.OPDSPrefix,
-		},
+		PageData:  pd,
 		Languages: langViews,
 	}
 
@@ -823,40 +1769,86 @@ func (s *Server) handleWebLanguages(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebLanguage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	lang := chi.URLParam(r, "lang")
+	setLangCookie(w, r)
+	uiLang := getLang(r)
+	bookLang := chi.URLParam(r, "lang")
 
 	page := getPage(r)
 	pageSize := getPageSize(r)
+
+	// Parse filter parameters
+	filterFirstName := r.URL.Query().Get("fname")
+	filterLastName := r.URL.Query().Get("lname")
+	filterGenreStr := r.URL.Query().Get("genre")
+	var filterGenre int64
+	if filterGenreStr != "" {
+		filterGenre, _ = strconv.ParseInt(filterGenreStr, 10, 64)
+	}
+
+	// Build search options with language scope
+	opts := persistence.SearchOptions{
+		Lang:            bookLang,
+		FirstNameFilter: filterFirstName,
+		LastNameFilter:  filterLastName,
+		GenreID:         filterGenre,
+	}
+
 	limit := pageSize
 	if limit == 0 {
 		limit = 10000
 	}
 	pagination := database.NewPagination(page, limit)
 
-	books, err := s.db.GetBooksForLanguage(ctx, lang, pagination, false)
+	books, err := s.svc.SearchBooks(ctx, opts, pagination)
 	if err != nil {
 		s.renderError(w, "Failed to get books", err)
 		return
 	}
 
 	hasMore := pageSize > 0 && len(books) >= pageSize
+	bookViews, filterOpts := s.booksToViewWithFilters(ctx, books)
 
+	// Get filter genre name
+	filterGenreName := ""
+	if filterGenre > 0 {
+		if g, err := s.svc.GetGenre(ctx, filterGenre); err == nil {
+			filterGenreName = g.Subsection
+			if filterGenreName == "" {
+				filterGenreName = g.Genre
+			}
+		}
+	}
+
+	langName := getLanguageName(bookLang)
+	pd := PageData{
+		Title:       fmt.Sprintf("%s: %s", T(uiLang, "languages.title"), langName),
+		SiteTitle:   s.config.Site.Title,
+		WebPrefix:   s.config.Server.WebPrefix,
+		OPDSPrefix:  s.config.Server.OPDSPrefix,
+		Page:        page,
+		PageSize:    pageSize,
+		HasMore:     hasMore,
+		PrevPage:    page - 1,
+		NextPage:    page + 1,
+		CurrentPath: fmt.Sprintf("%s/languages/%s", s.config.Server.WebPrefix, bookLang),
+		HasEPUB:     true,
+		HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
+		ScopeLang:   bookLang,
+		ScopeName:   langName,
+	}
+	s.addI18n(&pd, r)
 	data := BooksData{
-		PageData: PageData{
-			Title:       fmt.Sprintf("Language: %s", getLanguageName(lang)),
-			SiteTitle:   s.config.Site.Title,
-			WebPrefix:   s.config.Server.WebPrefix,
-			OPDSPrefix:  s.config.Server.OPDSPrefix,
-			Page:        page,
-			PageSize:    pageSize,
-			HasMore:     hasMore,
-			PrevPage:    page - 1,
-			NextPage:    page + 1,
-			CurrentPath: fmt.Sprintf("%s/languages/%s", s.config.Server.WebPrefix, lang),
-			HasEPUB:     true, // Internal converter always available
-			HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
-		},
-		Books: s.booksToView(ctx, books),
+		PageData:        pd,
+		Books:           bookViews,
+		TotalCount:      int(pagination.TotalCount),
+		FilterLang:      bookLang, // Show current language as active filter
+		FirstNames:      filterOpts.FirstNames,
+		LastNames:       filterOpts.LastNames,
+		Genres:          filterOpts.Genres,
+		FilterFirstName: filterFirstName,
+		FilterLastName:  filterLastName,
+		FilterGenre:     filterGenre,
+		FilterGenreName: filterGenreName,
 	}
 
 	s.renderTemplate(w, "books", data)
@@ -864,28 +1856,32 @@ func (s *Server) handleWebLanguage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebCatalogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	setLangCookie(w, r)
+	lang := getLang(r)
 	page := getPage(r)
 	pagination := database.NewPagination(page, 100)
 
-	items, err := s.db.GetItemsInCatalog(ctx, 0, pagination, false)
+	items, err := s.svc.GetItemsInCatalog(ctx, 0, pagination, false)
 	if err != nil {
 		s.renderError(w, "Failed to get catalogs", err)
 		return
 	}
 
+	pd := PageData{
+		Title:       T(lang, "catalogs.title"),
+		SiteTitle:   s.config.Site.Title,
+		WebPrefix:   s.config.Server.WebPrefix,
+		OPDSPrefix:  s.config.Server.OPDSPrefix,
+		Page:        page,
+		HasMore:     len(items) >= 100,
+		PrevPage:    page - 1,
+		NextPage:    page + 1,
+		CurrentPath: s.config.Server.WebPrefix + "/catalogs",
+	}
+	s.addI18n(&pd, r)
 	data := CatalogsData{
-		PageData: PageData{
-			Title:       "Catalogs",
-			SiteTitle:   s.config.Site.Title,
-			WebPrefix:   s.config.Server.WebPrefix,
-			OPDSPrefix:  s.config.Server.OPDSPrefix,
-			Page:        page,
-			HasMore:     len(items) >= 100,
-			PrevPage:    page - 1,
-			NextPage:    page + 1,
-			CurrentPath: s.config.Server.WebPrefix + "/catalogs",
-		},
-		Items: s.catalogItemsToView(items),
+		PageData: pd,
+		Items:    s.catalogItemsToView(items),
 	}
 
 	s.renderTemplate(w, "catalogs", data)
@@ -893,6 +1889,7 @@ func (s *Server) handleWebCatalogs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebCatalog(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	setLangCookie(w, r)
 	catID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		s.renderError(w, "Invalid catalog ID", err)
@@ -902,31 +1899,35 @@ func (s *Server) handleWebCatalog(w http.ResponseWriter, r *http.Request) {
 	page := getPage(r)
 	pagination := database.NewPagination(page, 100)
 
-	items, err := s.db.GetItemsInCatalog(ctx, catID, pagination, false)
+	items, err := s.svc.GetItemsInCatalog(ctx, catID, pagination, false)
 	if err != nil {
 		s.renderError(w, "Failed to get catalog", err)
 		return
 	}
 
-	cat, _ := s.db.GetCatalog(ctx, catID)
+	cat, _ := s.svc.GetCatalog(ctx, catID)
 	title := "Catalog"
 	if cat != nil {
 		title = cat.Name
 	}
 
+	pd := PageData{
+		Title:          title,
+		SiteTitle:      s.config.Site.Title,
+		WebPrefix:      s.config.Server.WebPrefix,
+		OPDSPrefix:     s.config.Server.OPDSPrefix,
+		Page:           page,
+		HasMore:        len(items) >= 100,
+		PrevPage:       page - 1,
+		NextPage:       page + 1,
+		CurrentPath:    fmt.Sprintf("%s/catalogs/%d", s.config.Server.WebPrefix, catID),
+		ScopeCatalogID: catID,
+		ScopeName:      title,
+	}
+	s.addI18n(&pd, r)
 	data := CatalogsData{
-		PageData: PageData{
-			Title:       title,
-			SiteTitle:   s.config.Site.Title,
-			WebPrefix:   s.config.Server.WebPrefix,
-			OPDSPrefix:  s.config.Server.OPDSPrefix,
-			Page:        page,
-			HasMore:     len(items) >= 100,
-			PrevPage:    page - 1,
-			NextPage:    page + 1,
-			CurrentPath: fmt.Sprintf("%s/catalogs/%d", s.config.Server.WebPrefix, catID),
-		},
-		Items: s.catalogItemsToView(items),
+		PageData: pd,
+		Items:    s.catalogItemsToView(items),
 	}
 
 	s.renderTemplate(w, "catalogs", data)
@@ -934,6 +1935,8 @@ func (s *Server) handleWebCatalog(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebDuplicates(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	setLangCookie(w, r)
+	lang := getLang(r)
 	bookID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		s.renderError(w, "Invalid book ID", err)
@@ -948,35 +1951,37 @@ func (s *Server) handleWebDuplicates(w http.ResponseWriter, r *http.Request) {
 	}
 	pagination := database.NewPagination(page, limit)
 
-	books, err := s.db.GetBookDuplicates(ctx, bookID, pagination)
+	books, err := s.svc.GetBookDuplicates(ctx, bookID, pagination)
 	if err != nil {
 		s.renderError(w, "Failed to get duplicates", err)
 		return
 	}
 
 	// Get the book title for the page header
-	title := "Duplicates"
+	title := T(lang, "books.duplicates")
 	if len(books) > 0 {
-		title = fmt.Sprintf("Duplicates: %s", books[0].Title)
+		title = fmt.Sprintf("%s: %s", T(lang, "books.duplicates"), books[0].Title)
 	}
 
 	hasMore := pageSize > 0 && len(books) >= pageSize
 
+	pd := PageData{
+		Title:       title,
+		SiteTitle:   s.config.Site.Title,
+		WebPrefix:   s.config.Server.WebPrefix,
+		OPDSPrefix:  s.config.Server.OPDSPrefix,
+		Page:        page,
+		PageSize:    pageSize,
+		HasMore:     hasMore,
+		PrevPage:    page - 1,
+		NextPage:    page + 1,
+		CurrentPath: fmt.Sprintf("%s/duplicates/%d", s.config.Server.WebPrefix, bookID),
+		HasEPUB:     true,
+		HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
+	}
+	s.addI18n(&pd, r)
 	data := BooksData{
-		PageData: PageData{
-			Title:       title,
-			SiteTitle:   s.config.Site.Title,
-			WebPrefix:   s.config.Server.WebPrefix,
-			OPDSPrefix:  s.config.Server.OPDSPrefix,
-			Page:        page,
-			PageSize:    pageSize,
-			HasMore:     hasMore,
-			PrevPage:    page - 1,
-			NextPage:    page + 1,
-			CurrentPath: fmt.Sprintf("%s/duplicates/%d", s.config.Server.WebPrefix, bookID),
-			HasEPUB:     true,
-			HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
-		},
+		PageData:   pd,
 		Books:      s.booksToView(ctx, books),
 		TotalCount: int(pagination.TotalCount),
 	}
@@ -984,92 +1989,54 @@ func (s *Server) handleWebDuplicates(w http.ResponseWriter, r *http.Request) {
 	s.renderTemplate(w, "books", data)
 }
 
+// HelpData contains data for the help page
+type HelpData struct {
+	PageData
+}
+
+func (s *Server) handleWebHelp(w http.ResponseWriter, r *http.Request) {
+	setLangCookie(w, r)
+	pd := s.newPageData(r, "")
+	pd.Title = T(pd.Lang, "help.title")
+	data := HelpData{
+		PageData: pd,
+	}
+
+	s.renderTemplate(w, "help", data)
+}
+
 // Helper functions for prefix-based navigation
 
 func (s *Server) getAuthorPrefixes(ctx context.Context, prefix string, length int) []string {
-	query := `SELECT DISTINCT UPPER(LEFT(last_name, $1)) as pfx
-	          FROM authors a
-	          JOIN bauthors ba ON a.author_id = ba.author_id
-	          JOIN books b ON ba.book_id = b.book_id
-	          WHERE b.avail <> 0 AND last_name <> ''`
-	if prefix != "" {
-		query += ` AND UPPER(last_name) LIKE $2`
-	}
-	query += ` ORDER BY pfx`
-
-	var rows pgx.Rows
-	var err error
-	if prefix != "" {
-		rows, err = s.db.Pool().Query(ctx, query, length, prefix+"%")
-	} else {
-		rows, err = s.db.Pool().Query(ctx, query, length)
-	}
+	prefixes, err := s.svc.GetAuthorPrefixesFiltered(ctx, prefix, length)
 	if err != nil {
 		return nil
-	}
-	defer rows.Close()
-
-	var prefixes []string
-	for rows.Next() {
-		var pfx string
-		if err := rows.Scan(&pfx); err == nil && pfx != "" {
-			prefixes = append(prefixes, pfx)
-		}
 	}
 	return prefixes
 }
 
 func (s *Server) countAuthorsByPrefix(ctx context.Context, prefix string) int {
-	var count int
-	s.db.Pool().QueryRow(ctx, `
-		SELECT COUNT(DISTINCT a.author_id) FROM authors a
-		JOIN bauthors ba ON a.author_id = ba.author_id
-		JOIN books b ON ba.book_id = b.book_id
-		WHERE b.avail <> 0 AND UPPER(last_name) LIKE $1`, prefix+"%").Scan(&count)
-	return count
+	count, err := s.svc.CountAuthorsByPrefixQuery(ctx, prefix)
+	if err != nil {
+		return 0
+	}
+	return int(count)
 }
 
 func (s *Server) getSeriesPrefixes(ctx context.Context, prefix string, length int) []string {
-	query := `SELECT DISTINCT UPPER(LEFT(ser, $1)) as pfx
-	          FROM series s
-	          JOIN bseries bs ON s.ser_id = bs.ser_id
-	          JOIN books b ON bs.book_id = b.book_id
-	          WHERE b.avail <> 0 AND ser <> ''`
-	if prefix != "" {
-		query += ` AND UPPER(ser) LIKE $2`
-	}
-	query += ` ORDER BY pfx`
-
-	var rows pgx.Rows
-	var err error
-	if prefix != "" {
-		rows, err = s.db.Pool().Query(ctx, query, length, prefix+"%")
-	} else {
-		rows, err = s.db.Pool().Query(ctx, query, length)
-	}
+	prefixes, err := s.svc.GetSeriesPrefixesFiltered(ctx, prefix, length)
 	if err != nil {
 		return nil
-	}
-	defer rows.Close()
-
-	var prefixes []string
-	for rows.Next() {
-		var pfx string
-		if err := rows.Scan(&pfx); err == nil && pfx != "" {
-			prefixes = append(prefixes, pfx)
-		}
 	}
 	return prefixes
 }
 
 func (s *Server) countSeriesByPrefix(ctx context.Context, prefix string) int {
-	var count int
-	s.db.Pool().QueryRow(ctx, `
-		SELECT COUNT(DISTINCT s.ser_id) FROM series s
-		JOIN bseries bs ON s.ser_id = bs.ser_id
-		JOIN books b ON bs.book_id = b.book_id
-		WHERE b.avail <> 0 AND UPPER(ser) LIKE $1`, prefix+"%").Scan(&count)
-	return count
+	count, err := s.svc.CountSeriesByPrefixQuery(ctx, prefix)
+	if err != nil {
+		return 0
+	}
+	return int(count)
 }
 
 // SearchFilterOptions holds unique filter values collected from search results
@@ -1095,9 +2062,9 @@ func (s *Server) booksToViewWithFilters(ctx context.Context, books []database.Bo
 	genreMap := make(map[int64]string)
 
 	for _, b := range books {
-		authors, _ := s.db.GetBookAuthors(ctx, b.ID)
-		genres, _ := s.db.GetBookGenres(ctx, b.ID)
-		series, _ := s.db.GetBookSeries(ctx, b.ID)
+		authors, _ := s.svc.GetBookAuthors(ctx, b.ID)
+		genres, _ := s.svc.GetBookGenres(ctx, b.ID)
+		series, _ := s.svc.GetBookSeries(ctx, b.ID)
 
 		var authorLinks []LinkedItem
 		for _, a := range authors {
@@ -1136,27 +2103,53 @@ func (s *Server) booksToViewWithFilters(ctx context.Context, books []database.Bo
 
 		// Get duplicate info
 		var dupCount int
-		if b.Duplicate == 0 {
-			// This is an original - count its duplicates
-			dupCount, _ = s.db.GetDuplicateCount(ctx, b.ID)
+		var duplicateOf int64
+		if b.DuplicateOf != nil {
+			duplicateOf = *b.DuplicateOf
+		} else {
+			// This is an original - count its duplicates (subtract 1 to exclude self)
+			cnt, _ := s.svc.GetDuplicateCount(ctx, b.ID)
+			if cnt > 1 {
+				dupCount = cnt - 1 // Show only additional duplicates
+			}
+		}
+
+		// Audiobook fields
+		var narratorLinks []LinkedItem
+		var durationStr string
+		if b.IsAudiobook {
+			if narrators, err := s.svc.GetBookNarrators(ctx, b.ID); err == nil {
+				for _, n := range narrators {
+					narratorLinks = append(narratorLinks, LinkedItem{
+						ID:   n.ID,
+						Name: n.FullName(),
+					})
+				}
+			}
+			durationStr = formatDuration(b.DurationSeconds)
 		}
 
 		views = append(views, BookView{
-			ID:             b.ID,
-			Title:          b.Title,
-			Authors:        authorLinks,
-			Genres:         genreLinks,
-			Series:         seriesLinks,
-			Lang:           b.Lang,
-			LangName:       getLanguageName(b.Lang),
-			Format:         strings.ToUpper(b.Format),
-			Size:           formatSize(b.Filesize),
-			Annotation:     truncate(b.Annotation, 300),
-			HasCover:       isFB2,
-			CanEPUB:        isFB2,
-			CanMOBI:        isFB2,
-			DuplicateOf:    b.Duplicate,
-			DuplicateCount: dupCount,
+			ID:              b.ID,
+			Title:           b.Title,
+			Authors:         authorLinks,
+			Genres:          genreLinks,
+			Series:          seriesLinks,
+			Lang:            b.Lang,
+			LangName:        getLanguageName(b.Lang),
+			Format:          strings.ToUpper(b.Format),
+			Size:            formatSize(b.Filesize),
+			Annotation:      truncate(b.Annotation, 300),
+			HasCover:        isFB2,
+			CanEPUB:         isFB2,
+			CanMOBI:         isFB2,
+			DuplicateOf:     duplicateOf,
+			DuplicateCount:  dupCount,
+			IsAudiobook:     b.IsAudiobook,
+			Duration:        durationStr,
+			DurationSeconds: b.DurationSeconds,
+			TrackCount:      b.TrackCount,
+			Narrators:       narratorLinks,
 		})
 	}
 
@@ -1229,6 +2222,21 @@ func formatSize(bytes int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
+func formatDuration(seconds int) string {
+	if seconds <= 0 {
+		return ""
+	}
+	h := seconds / 3600
+	m := (seconds % 3600) / 60
+	if h > 0 {
+		if m > 0 {
+			return fmt.Sprintf("%dh %dm", h, m)
+		}
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dm", m)
+}
+
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -1251,7 +2259,43 @@ func (s *Server) renderError(w http.ResponseWriter, message string, err error) {
 }
 
 func (s *Server) renderTemplate(w http.ResponseWriter, name string, data interface{}) {
+	// Extract language from data for translation function
+	lang := defaultLang
+	if pd, ok := data.(interface{ GetLang() string }); ok {
+		lang = pd.GetLang()
+	} else {
+		// Try to get Lang field via reflection-free type assertions
+		switch d := data.(type) {
+		case PageData:
+			lang = d.Lang
+		case *PageData:
+			lang = d.Lang
+		case MainMenuData:
+			lang = d.Lang
+		case BooksData:
+			lang = d.Lang
+		case AuthorsData:
+			lang = d.Lang
+		case GenresData:
+			lang = d.Lang
+		case SeriesData:
+			lang = d.Lang
+		case LanguagesData:
+			lang = d.Lang
+		case CatalogsData:
+			lang = d.Lang
+		case HelpData:
+			lang = d.Lang
+		}
+	}
+	if lang == "" {
+		lang = defaultLang
+	}
+
 	funcMap := template.FuncMap{
+		"t": func(key string) string {
+			return T(lang, key)
+		},
 		"sortPrefixes": func(prefixes []string) []string {
 			sorted := make([]string, len(prefixes))
 			copy(sorted, prefixes)
@@ -1260,6 +2304,21 @@ func (s *Server) renderTemplate(w http.ResponseWriter, name string, data interfa
 		},
 		"sub": func(a, b int) int {
 			return a - b
+		},
+		"formatDuration": func(seconds int) string {
+			if seconds <= 0 {
+				return ""
+			}
+			hours := seconds / 3600
+			minutes := (seconds % 3600) / 60
+			secs := seconds % 60
+			if hours > 0 {
+				return fmt.Sprintf("%dh %dm", hours, minutes)
+			}
+			if minutes > 0 {
+				return fmt.Sprintf("%dm %ds", minutes, secs)
+			}
+			return fmt.Sprintf("%ds", secs)
 		},
 	}
 
@@ -1387,6 +2446,10 @@ const baseTemplate = `<!DOCTYPE html>
             font-size: 1rem;
             transition: all 0.3s;
         }
+        .search-form input.search-author {
+            flex: 0 0 150px;
+            min-width: 100px;
+        }
         .search-form input:focus {
             outline: none;
             border-color: var(--primary);
@@ -1405,6 +2468,20 @@ const baseTemplate = `<!DOCTYPE html>
         .search-form button:hover {
             transform: scale(1.05);
             box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+        }
+        .search-option {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.85rem;
+            color: rgba(255,255,255,0.8);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .search-option input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--primary);
         }
         main {
             background: rgba(255,255,255,0.95);
@@ -1788,6 +2865,10 @@ const baseTemplate = `<!DOCTYPE html>
             transform: translateX(5px);
         }
         .section-card i { font-size: 1.2rem; }
+        .lang-switch { display: flex; gap: 5px; margin-left: 10px; padding-left: 10px; border-left: 1px solid var(--border); }
+        .lang-switch a { padding: 4px 8px; border-radius: 4px; text-decoration: none; color: var(--gray); font-size: 0.85rem; text-transform: uppercase; }
+        .lang-switch a:hover { background: var(--border); }
+        .lang-switch a.active { background: var(--primary); color: white; }
         @media (max-width: 768px) {
             .header-top { flex-direction: column; align-items: stretch; }
             nav { justify-content: center; }
@@ -1801,20 +2882,30 @@ const baseTemplate = `<!DOCTYPE html>
             <div class="header-top">
                 <h1><i class="fas fa-book-open"></i> {{.SiteTitle}}</h1>
                 <nav>
-                    <a href="{{.WebPrefix}}/"><i class="fas fa-home"></i> Home</a>
-                    <a href="{{.WebPrefix}}/catalogs"><i class="fas fa-folder"></i> Catalogs</a>
-                    <a href="{{.WebPrefix}}/authors"><i class="fas fa-user-pen"></i> Authors</a>
-                    <a href="{{.WebPrefix}}/genres"><i class="fas fa-tags"></i> Genres</a>
-                    <a href="{{.WebPrefix}}/series"><i class="fas fa-layer-group"></i> Series</a>
-                    <a href="{{.WebPrefix}}/languages"><i class="fas fa-globe"></i> Languages</a>
-                    <a href="{{.WebPrefix}}/new"><i class="fas fa-sparkles"></i> New</a>
-                    <a href="{{.WebPrefix}}/bookshelf"><i class="fas fa-bookmark"></i> Bookshelf</a>
+                    <a href="{{.WebPrefix}}/"><i class="fas fa-home"></i> {{t "nav.home"}}</a>
+                    <a href="{{.WebPrefix}}/catalogs"><i class="fas fa-folder"></i> {{t "nav.catalogs"}}</a>
+                    <a href="{{.WebPrefix}}/authors"><i class="fas fa-user-pen"></i> {{t "nav.authors"}}</a>
+                    <a href="{{.WebPrefix}}/genres"><i class="fas fa-tags"></i> {{t "nav.genres"}}</a>
+                    <a href="{{.WebPrefix}}/series"><i class="fas fa-layer-group"></i> {{t "nav.series"}}</a>
+                    <a href="{{.WebPrefix}}/languages"><i class="fas fa-globe"></i> {{t "nav.languages"}}</a>
+                    <a href="{{.WebPrefix}}/new"><i class="fas fa-sparkles"></i> {{t "nav.new"}}</a>
+                    <a href="{{.WebPrefix}}/audio"><i class="fas fa-headphones"></i> {{t "nav.audio"}}</a>
+                    <a href="{{.WebPrefix}}/bookshelf"><i class="fas fa-bookmark"></i> {{t "nav.bookshelf"}}</a>
                     <a href="{{.OPDSPrefix}}/"><i class="fas fa-rss"></i> OPDS</a>
+                    <a href="{{.WebPrefix}}/help"><i class="fas fa-circle-question"></i> {{t "nav.help"}}</a>
+                    <span class="lang-switch">{{range .Languages}}<a href="javascript:void(0)" onclick="switchLang('{{.Code}}')"{{if eq $.Lang .Code}} class="active"{{end}}>{{.Code}}</a>{{end}}</span>
                 </nav>
             </div>
             <form class="search-form" action="{{.WebPrefix}}/search" method="get">
-                <input type="text" name="q" placeholder="Search books by title or author..." value="{{.Query}}">
-                <button type="submit"><i class="fas fa-search"></i> Search</button>
+                <input type="text" name="q" placeholder="{{t "search.title"}}{{if .ScopeName}} {{t "search.in"}} {{.ScopeName}}{{end}}..." value="{{.Query}}">
+                <input type="text" name="author" placeholder="{{t "search.author"}}" class="search-author">
+                {{if .ScopeAuthorID}}<input type="hidden" name="author_id" value="{{.ScopeAuthorID}}">{{end}}
+                {{if .ScopeGenreID}}<input type="hidden" name="genre_id" value="{{.ScopeGenreID}}">{{end}}
+                {{if .ScopeSeriesID}}<input type="hidden" name="series_id" value="{{.ScopeSeriesID}}">{{end}}
+                {{if .ScopeCatalogID}}<input type="hidden" name="catalog_id" value="{{.ScopeCatalogID}}">{{end}}
+                {{if .ScopeLang}}<input type="hidden" name="lang" value="{{.ScopeLang}}">{{end}}
+                <label class="search-option" title="Also search in book description"><input type="checkbox" name="desc" value="1"{{if .IncludeDesc}} checked{{end}}> +desc</label>
+                <button type="submit"><i class="fas fa-search"></i></button>
             </form>
         </header>
         <main>
@@ -1843,6 +2934,10 @@ const baseTemplate = `<!DOCTYPE html>
             .catch(err => console.error(err));
         return false;
     }
+    function switchLang(code) {
+        document.cookie = 'lang=' + code + ';path=/;max-age=31536000';
+        location.reload();
+    }
     </script>
 </body>
 </html>
@@ -1850,100 +2945,104 @@ const baseTemplate = `<!DOCTYPE html>
 
 var templates = map[string]string{
 	"main": `{{define "content"}}
-<h2><i class="fas fa-chart-pie"></i> Library Statistics</h2>
+<h2><i class="fas fa-chart-pie"></i> {{t "main.stats"}}</h2>
 {{if .Stats}}
 <div class="stats-grid">
     <div class="stat-card">
         <div class="number">{{.Stats.BooksCount}}</div>
-        <div class="label"><i class="fas fa-book"></i> Books</div>
+        <div class="label"><i class="fas fa-book"></i> {{t "main.books"}}</div>
     </div>
     <div class="stat-card">
         <div class="number">{{.Stats.AuthorsCount}}</div>
-        <div class="label"><i class="fas fa-users"></i> Authors</div>
+        <div class="label"><i class="fas fa-users"></i> {{t "main.authors"}}</div>
     </div>
     <div class="stat-card">
         <div class="number">{{.Stats.GenresCount}}</div>
-        <div class="label"><i class="fas fa-tags"></i> Genres</div>
+        <div class="label"><i class="fas fa-tags"></i> {{t "main.genres"}}</div>
     </div>
     <div class="stat-card">
         <div class="number">{{.Stats.SeriesCount}}</div>
-        <div class="label"><i class="fas fa-list"></i> Series</div>
+        <div class="label"><i class="fas fa-list"></i> {{t "main.series"}}</div>
     </div>
     {{if .NewBooks}}
     <div class="stat-card">
         <div class="number">{{.NewBooks}}</div>
-        <div class="label"><i class="fas fa-star"></i> New (7d)</div>
+        <div class="label"><i class="fas fa-star"></i> {{t "main.new7d"}}</div>
     </div>
     {{end}}
 </div>
 {{end}}
-<h2><i class="fas fa-compass"></i> Browse Library</h2>
+<h2><i class="fas fa-compass"></i> {{t "main.browse"}}</h2>
 <div class="menu-grid">
     <a href="{{.WebPrefix}}/catalogs" class="menu-card">
         <i class="fas fa-folder-tree"></i>
-        <div class="title">Catalogs</div>
+        <div class="title">{{t "nav.catalogs"}}</div>
     </a>
     <a href="{{.WebPrefix}}/authors" class="menu-card">
         <i class="fas fa-user-pen"></i>
-        <div class="title">Authors</div>
+        <div class="title">{{t "nav.authors"}}</div>
     </a>
     <a href="{{.WebPrefix}}/genres" class="menu-card">
         <i class="fas fa-masks-theater"></i>
-        <div class="title">Genres</div>
+        <div class="title">{{t "nav.genres"}}</div>
     </a>
     <a href="{{.WebPrefix}}/series" class="menu-card">
         <i class="fas fa-layer-group"></i>
-        <div class="title">Series</div>
+        <div class="title">{{t "nav.series"}}</div>
     </a>
     <a href="{{.WebPrefix}}/languages" class="menu-card">
         <i class="fas fa-globe"></i>
-        <div class="title">Languages</div>
+        <div class="title">{{t "nav.languages"}}</div>
     </a>
     <a href="{{.WebPrefix}}/new" class="menu-card">
         <i class="fas fa-wand-magic-sparkles"></i>
-        <div class="title">New Books</div>
+        <div class="title">{{t "main.newbooks"}}</div>
+    </a>
+    <a href="{{.WebPrefix}}/audio" class="menu-card">
+        <i class="fas fa-headphones"></i>
+        <div class="title">{{t "main.audiobooks"}}</div>
     </a>
     <a href="{{.WebPrefix}}/search" class="menu-card">
         <i class="fas fa-magnifying-glass"></i>
-        <div class="title">Search</div>
+        <div class="title">{{t "main.search"}}</div>
     </a>
     <a href="{{.WebPrefix}}/bookshelf" class="menu-card">
         <i class="fas fa-bookmark"></i>
-        <div class="title">Bookshelf</div>
+        <div class="title">{{t "nav.bookshelf"}}</div>
     </a>
 </div>
 {{end}}`,
 
 	"search": `{{define "content"}}
-<h2><i class="fas fa-search"></i> Search Books</h2>
-<p style="color: var(--gray); font-size: 1.1rem;">Use the search box above to find books by title or author name.</p>
+<h2><i class="fas fa-search"></i> {{t "search.books"}}</h2>
+<p style="color: var(--gray); font-size: 1.1rem;">{{t "search.hint"}}</p>
 {{end}}`,
 
 	"books": `{{define "content"}}
 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; margin-bottom: 20px;">
-    <h2 style="margin: 0;"><i class="fas fa-book"></i> {{.Title}}{{if .TotalCount}} <span style="color: var(--gray); font-weight: normal; font-size: 0.7em;">({{.TotalCount}} books)</span>{{end}}</h2>
+    <h2 style="margin: 0;"><i class="fas fa-book"></i> {{.Title}}{{if .TotalCount}} <span style="color: var(--gray); font-weight: normal; font-size: 0.7em;">({{.TotalCount}} {{t "main.books"}})</span>{{end}}</h2>
     {{if .CurrentPath}}
     <div class="page-size-selector">
-        <span style="color: var(--gray); margin-right: 10px;">Show:</span>
-        <a href="{{.CurrentPath}}?size=10{{if .Query}}&q={{.Query}}{{end}}{{if .Prefix}}&prefix={{.Prefix}}{{end}}" class="size-btn{{if eq .PageSize 10}} active{{end}}">10</a>
-        <a href="{{.CurrentPath}}?size=50{{if .Query}}&q={{.Query}}{{end}}{{if .Prefix}}&prefix={{.Prefix}}{{end}}" class="size-btn{{if eq .PageSize 50}} active{{end}}">50</a>
-        <a href="{{.CurrentPath}}?size=100{{if .Query}}&q={{.Query}}{{end}}{{if .Prefix}}&prefix={{.Prefix}}{{end}}" class="size-btn{{if eq .PageSize 100}} active{{end}}">100</a>
-        <a href="{{.CurrentPath}}?size=200{{if .Query}}&q={{.Query}}{{end}}{{if .Prefix}}&prefix={{.Prefix}}{{end}}" class="size-btn{{if eq .PageSize 200}} active{{end}}">200</a>
-        <a href="{{.CurrentPath}}?size=all{{if .Query}}&q={{.Query}}{{end}}{{if .Prefix}}&prefix={{.Prefix}}{{end}}" class="size-btn{{if eq .PageSize 0}} active{{end}}">All</a>
+        <span style="color: var(--gray); margin-right: 10px;">{{t "books.show"}}</span>
+        <a href="javascript:setPageSize(10)" class="size-btn{{if eq .PageSize 10}} active{{end}}">10</a>
+        <a href="javascript:setPageSize(50)" class="size-btn{{if eq .PageSize 50}} active{{end}}">50</a>
+        <a href="javascript:setPageSize(100)" class="size-btn{{if eq .PageSize 100}} active{{end}}">100</a>
+        <a href="javascript:setPageSize(200)" class="size-btn{{if eq .PageSize 200}} active{{end}}">200</a>
+        <a href="javascript:setPageSize('all')" class="size-btn{{if eq .PageSize 0}} active{{end}}">{{t "books.all"}}</a>
     </div>
     {{end}}
 </div>
-{{if or .Languages .FirstNames .LastNames .Genres}}
+{{if or .FilterLangs .FirstNames .LastNames .Genres}}
 <div style="display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; align-items: center;">
-    <span style="color: var(--gray);"><i class="fas fa-filter"></i> Filters:</span>
-    {{if and .Languages (not .FilterLang)}}
+    <span style="color: var(--gray);"><i class="fas fa-filter"></i> {{t "books.filters"}}</span>
+    {{if and .FilterLangs (not .FilterLang)}}
     <select onchange="applyFilter('lang', this.value)" style="padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);">
-        <option value="">All Languages</option>
-        {{range .Languages}}<option value="{{.}}">{{.}}</option>{{end}}
+        <option value="">{{t "books.alllang"}}</option>
+        {{range .FilterLangs}}<option value="{{.Code}}">{{.Name}}</option>{{end}}
     </select>
     {{end}}
     {{if .FilterLang}}
-    <span style="padding: 8px 12px; border-radius: 8px; background: var(--accent); color: white;">Lang: {{.FilterLang}} <a href="javascript:applyFilter('lang','')" style="color: white; margin-left: 5px;">×</a></span>
+    <span style="padding: 8px 12px; border-radius: 8px; background: var(--accent); color: white;">Lang: {{.FilterLang}}{{if not .ScopeLang}} <a href="javascript:applyFilter('lang','')" style="color: white; margin-left: 5px;">×</a>{{end}}</span>
     {{end}}
     {{if and .FirstNames (not .FilterFirstName)}}
     <select onchange="applyFilter('fname', this.value)" style="padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text);">
@@ -1973,7 +3072,7 @@ var templates = map[string]string{
     <span style="padding: 8px 12px; border-radius: 8px; background: var(--accent); color: white;">Genre: {{.FilterGenreName}} <a href="javascript:applyFilter('genre','')" style="color: white; margin-left: 5px;">×</a></span>
     {{end}}
     {{if or .FilterLang .FilterFirstName .FilterLastName .FilterGenre}}
-    <a href="{{.CurrentPath}}?q={{.Query}}" style="color: var(--accent); text-decoration: none;"><i class="fas fa-times"></i> Clear all</a>
+    <a href="javascript:clearFilters()" style="color: var(--accent); text-decoration: none;"><i class="fas fa-times"></i> Clear all</a>
     {{end}}
 </div>
 <script>
@@ -1987,6 +3086,34 @@ function applyFilter(name, value) {
     url.searchParams.delete('page');
     window.location.href = url.toString();
 }
+function setPageSize(size) {
+    var url = new URL(window.location.href);
+    if (size === 'all') {
+        url.searchParams.set('size', 'all');
+    } else {
+        url.searchParams.set('size', size);
+    }
+    url.searchParams.delete('page');
+    window.location.href = url.toString();
+}
+function clearFilters() {
+    var url = new URL(window.location.href);
+    url.searchParams.delete('lang');
+    url.searchParams.delete('fname');
+    url.searchParams.delete('lname');
+    url.searchParams.delete('genre');
+    url.searchParams.delete('page');
+    window.location.href = url.toString();
+}
+function goToPage(page) {
+    var url = new URL(window.location.href);
+    if (page > 0) {
+        url.searchParams.set('page', page);
+    } else {
+        url.searchParams.delete('page');
+    }
+    window.location.href = url.toString();
+}
 </script>
 {{end}}
 {{if .Books}}
@@ -1996,13 +3123,15 @@ function applyFilter(name, value) {
         <div class="book-card-content">
             {{if .HasCover}}<img src="{{$.OPDSPrefix}}/book/{{.ID}}/cover" class="book-cover" alt="Cover" onerror="this.style.display='none'">{{end}}
             <div class="book-info">
-                <div class="book-title">{{.Title}}</div>
+                <div class="book-title">{{if .IsAudiobook}}<i class="fas fa-headphones" style="color: var(--primary);"></i> {{end}}{{.Title}}</div>
                 <div class="book-meta">
                     {{if .Authors}}<span><i class="fas fa-user"></i> {{range $i, $a := .Authors}}{{if lt $i 2}}{{if $i}}, {{end}}<a href="{{$.WebPrefix}}/authors/{{$a.ID}}" class="meta-link">{{$a.Name}}</a>{{end}}{{end}}{{if gt (len .Authors) 2}} <span class="more-info">+{{sub (len .Authors) 2}}<div class="more-info-tooltip{{if gt (len .Authors) 70}} below{{end}}">{{range $i, $a := .Authors}}{{if ge $i 2}}<a href="{{$.WebPrefix}}/authors/{{$a.ID}}">{{$a.Name}}</a>{{end}}{{end}}</div></span>{{end}}</span>{{end}}
+                    {{if .Narrators}}<span><i class="fas fa-microphone"></i> {{range $i, $n := .Narrators}}{{if lt $i 2}}{{if $i}}, {{end}}<a href="{{$.WebPrefix}}/authors/{{$n.ID}}" class="meta-link">{{$n.Name}}</a>{{end}}{{end}}{{if gt (len .Narrators) 2}} <span class="more-info">+{{sub (len .Narrators) 2}}</span>{{end}}</span>{{end}}
                     {{if .Series}}<span><i class="fas fa-layer-group"></i> {{range $i, $s := .Series}}{{if $i}}, {{end}}<a href="{{$.WebPrefix}}/series/{{$s.ID}}" class="meta-link">{{$s.Name}}</a>{{end}}</span>{{end}}
                     {{if .Lang}}<span><i class="fas fa-globe"></i> <a href="{{$.WebPrefix}}/languages/{{.Lang}}" class="meta-link">{{.LangName}}</a></span>{{end}}
                     <span><i class="fas fa-file"></i> {{.Format}}</span>
-                    <span><i class="fas fa-weight-hanging"></i> {{.Size}}</span>
+                    {{if .Duration}}<span><i class="fas fa-clock"></i> {{.Duration}}</span>{{else}}<span><i class="fas fa-weight-hanging"></i> {{.Size}}</span>{{end}}
+                    {{if gt .TrackCount 1}}<a href="{{$.WebPrefix}}/audio/{{.ID}}" class="meta-link"><i class="fas fa-list-ol"></i> {{.TrackCount}} {{t "audio.tracks"}}</a>{{end}}
                 </div>
                 {{if .Genres}}<div class="book-meta"><span><i class="fas fa-tag"></i> {{range $i, $g := .Genres}}{{if lt $i 3}}{{if $i}}, {{end}}<a href="{{$.WebPrefix}}/genres/{{$g.ID}}" class="meta-link">{{$g.Name}}</a>{{end}}{{end}}{{if gt (len .Genres) 3}} <span class="more-info">+{{sub (len .Genres) 3}}<div class="more-info-tooltip{{if gt (len .Genres) 71}} below{{end}}">{{range $i, $g := .Genres}}{{if ge $i 3}}<a href="{{$.WebPrefix}}/genres/{{$g.ID}}">{{$g.Name}}</a>{{end}}{{end}}</div></span>{{end}}</span></div>{{end}}
                 {{if .Annotation}}<div class="book-annotation">{{.Annotation}}</div>{{end}}
@@ -2012,33 +3141,395 @@ function applyFilter(name, value) {
             <a href="{{$.OPDSPrefix}}/book/{{.ID}}/download" class="btn btn-primary"><i class="fas fa-download"></i> {{.Format}}</a>
             {{if and $.HasEPUB .CanEPUB}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/epub" class="btn btn-success"><i class="fas fa-file-arrow-down"></i> EPUB</a>{{end}}
             {{if and $.HasMOBI .CanMOBI}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/mobi" class="btn btn-warning"><i class="fas fa-file-arrow-down"></i> MOBI</a>{{end}}
-            <a href="#" onclick="return bookshelfAction(this, '{{$.WebPrefix}}/bookshelf/add/{{.ID}}')" class="btn btn-secondary"><i class="fas fa-bookmark"></i> Bookshelf</a>
-            {{if or (gt .DuplicateCount 0) (gt .DuplicateOf 0)}}<a href="{{$.WebPrefix}}/duplicates/{{.ID}}" class="btn btn-secondary"><i class="fas fa-copy"></i> Duplicates{{if gt .DuplicateCount 0}} ({{.DuplicateCount}}){{end}}</a>{{end}}
+            <a href="#" onclick="return bookshelfAction(this, '{{$.WebPrefix}}/bookshelf/add/{{.ID}}')" class="btn btn-secondary"><i class="fas fa-bookmark"></i> {{t "books.addshelf"}}</a>
+            {{if or (gt .DuplicateCount 0) (gt .DuplicateOf 0)}}<a href="{{$.WebPrefix}}/duplicates/{{.ID}}" class="btn btn-secondary"><i class="fas fa-copy"></i> {{t "books.duplicates"}}{{if gt .DuplicateCount 0}} ({{.DuplicateCount}}){{end}}</a>{{end}}
         </div>
     </div>
 {{end}}
 </div>
 {{if or (gt .Page 0) .HasMore}}
 <div class="pagination">
-    {{if gt .Page 0}}<a href="{{.CurrentPath}}?page={{.PrevPage}}{{if .Query}}&q={{.Query}}{{end}}{{if .Prefix}}&prefix={{.Prefix}}{{end}}{{if .PageSize}}&size={{.PageSize}}{{end}}"><i class="fas fa-arrow-left"></i> Previous</a>{{end}}
-    {{if .HasMore}}<a href="{{.CurrentPath}}?page={{.NextPage}}{{if .Query}}&q={{.Query}}{{end}}{{if .Prefix}}&prefix={{.Prefix}}{{end}}{{if .PageSize}}&size={{.PageSize}}{{end}}">Next <i class="fas fa-arrow-right"></i></a>{{end}}
+    {{if gt .Page 0}}<a href="javascript:goToPage({{.PrevPage}})"><i class="fas fa-arrow-left"></i> {{t "books.prev"}}</a>{{end}}
+    {{if .HasMore}}<a href="javascript:goToPage({{.NextPage}})">{{t "books.next"}} <i class="fas fa-arrow-right"></i></a>{{end}}
 </div>
 {{end}}
 {{else}}
-<p style="text-align: center; color: var(--gray); padding: 40px;">No books found.</p>
+<p style="text-align: center; color: var(--gray); padding: 40px;">{{t "books.nobooks"}}</p>
 {{end}}
+{{end}}`,
+
+	"audiodetail": `{{define "content"}}
+<div class="audio-detail">
+    <div class="audio-header">
+        <div class="audio-info">
+            <h1><i class="fas fa-headphones"></i> {{.Book.Title}}</h1>
+            {{if .Authors}}
+            <div class="audio-authors">
+                <i class="fas fa-user"></i>
+                {{range $i, $a := .Authors}}{{if $i}}, {{end}}<a href="{{$.WebPrefix}}/authors/{{$a.ID}}">{{$a.FirstName}} {{$a.LastName}}</a>{{end}}
+            </div>
+            {{end}}
+            <div class="audio-meta">
+                {{if .Structure}}
+                    {{if eq .Structure.Type "collection"}}
+                    <span class="badge badge-collection"><i class="fas fa-folder-tree"></i> {{t "audio.collection"}}</span>
+                    {{else}}
+                    <span class="badge badge-book"><i class="fas fa-book"></i> {{t "audio.book"}}</span>
+                    {{end}}
+                {{end}}
+                <span><i class="fas fa-clock"></i> {{.Book.Duration}}</span>
+                <span><i class="fas fa-list-ol"></i> {{.Book.TrackCount}} {{t "audio.tracks"}}</span>
+                <span><i class="fas fa-weight-hanging"></i> {{.Book.Size}}</span>
+            </div>
+        </div>
+        <div class="audio-actions">
+            <a href="{{.OPDSPrefix}}/book/{{.Book.ID}}/download" class="btn btn-primary btn-lg">
+                <i class="fas fa-file-archive"></i> {{t "audio.download"}}
+            </a>
+            <button onclick="downloadSelected()" class="btn btn-success btn-lg" id="downloadSelectedBtn" disabled>
+                <i class="fas fa-download"></i> <span id="downloadSelectedText">{{t "audio.downloadsel"}}</span>
+            </button>
+            <a href="{{.WebPrefix}}/bookshelf/add/{{.Book.ID}}" class="btn btn-secondary">
+                <i class="fas fa-bookmark"></i> {{t "books.addshelf"}}
+            </a>
+        </div>
+    </div>
+
+    {{if .Structure}}
+    <div class="audio-structure">
+        <div class="select-controls">
+            <label class="select-all-label">
+                <input type="checkbox" id="selectAll" onchange="toggleSelectAll()">
+                <span>{{t "audio.selectall"}}</span>
+            </label>
+        </div>
+        {{if eq .Structure.Type "collection"}}
+        <h2><i class="fas fa-folder-tree"></i> {{t "audio.parts"}} ({{len .Structure.Parts}})</h2>
+        <div class="audio-parts">
+            {{range $i, $part := .Structure.Parts}}
+            <details class="audio-part" {{if eq $i 0}}open{{end}}>
+                <summary>
+                    <label class="part-checkbox" onclick="event.stopPropagation()">
+                        <input type="checkbox" class="part-select" data-part="{{$i}}" onchange="togglePartSelect({{$i}})">
+                    </label>
+                    <i class="fas fa-folder"></i>
+                    <span class="part-name">{{$part.Name}}</span>
+                    <span class="part-meta">
+                        <span class="track-count">{{len $part.Tracks}} {{t "audio.tracks"}}</span>
+                        <span class="part-duration">{{formatDuration $part.Duration}}</span>
+                    </span>
+                </summary>
+                <ul class="track-list">
+                    {{range $j, $track := $part.Tracks}}
+                    <li>
+                        <label class="track-checkbox">
+                            <input type="checkbox" class="track-select" data-part="{{$i}}" data-path="{{$track.Path}}" onchange="updateSelection()">
+                        </label>
+                        <i class="fas fa-music"></i>
+                        <span class="track-name">{{$track.Name}}</span>
+                        <span class="track-duration">{{formatDuration $track.Duration}}</span>
+                        <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" class="track-download" title="Download">
+                            <i class="fas fa-download"></i>
+                        </a>
+                    </li>
+                    {{end}}
+                </ul>
+            </details>
+            {{end}}
+        </div>
+        {{else}}
+        <h2><i class="fas fa-list-ol"></i> {{t "audio.tracks"}} ({{len .Structure.Tracks}})</h2>
+        <ul class="track-list flat">
+            {{range $i, $track := .Structure.Tracks}}
+            <li>
+                <label class="track-checkbox">
+                    <input type="checkbox" class="track-select" data-path="{{$track.Path}}" onchange="updateSelection()">
+                </label>
+                <i class="fas fa-music"></i>
+                <span class="track-name">{{$track.Name}}</span>
+                <span class="track-duration">{{formatDuration $track.Duration}}</span>
+                <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" class="track-download" title="Download">
+                    <i class="fas fa-download"></i>
+                </a>
+            </li>
+            {{end}}
+        </ul>
+        {{end}}
+    </div>
+    {{end}}
+</div>
+
+<script>
+const bookId = {{.Book.ID}};
+const webPrefix = "{{.WebPrefix}}";
+const i18n = {
+    downloadsel: "{{t "audio.downloadsel"}}"
+};
+
+function updateSelection() {
+    const checkboxes = document.querySelectorAll('.track-select:checked');
+    const btn = document.getElementById('downloadSelectedBtn');
+    const text = document.getElementById('downloadSelectedText');
+    btn.disabled = checkboxes.length === 0;
+    text.textContent = checkboxes.length > 0 ? i18n.downloadsel + ' (' + checkboxes.length + ')' : i18n.downloadsel;
+
+    // Update select all checkbox state
+    const allCheckboxes = document.querySelectorAll('.track-select');
+    const selectAll = document.getElementById('selectAll');
+    if (checkboxes.length === 0) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+    } else if (checkboxes.length === allCheckboxes.length) {
+        selectAll.checked = true;
+        selectAll.indeterminate = false;
+    } else {
+        selectAll.checked = false;
+        selectAll.indeterminate = true;
+    }
+
+    // Update part checkboxes
+    document.querySelectorAll('.part-select').forEach(function(partCb) {
+        const partIdx = partCb.dataset.part;
+        const partTracks = document.querySelectorAll('.track-select[data-part="' + partIdx + '"]');
+        const partChecked = document.querySelectorAll('.track-select[data-part="' + partIdx + '"]:checked');
+        if (partChecked.length === 0) {
+            partCb.checked = false;
+            partCb.indeterminate = false;
+        } else if (partChecked.length === partTracks.length) {
+            partCb.checked = true;
+            partCb.indeterminate = false;
+        } else {
+            partCb.checked = false;
+            partCb.indeterminate = true;
+        }
+    });
+}
+
+function toggleSelectAll() {
+    const selectAll = document.getElementById('selectAll');
+    document.querySelectorAll('.track-select').forEach(function(cb) {
+        cb.checked = selectAll.checked;
+    });
+    updateSelection();
+}
+
+function togglePartSelect(partIdx) {
+    const partCb = document.querySelector('.part-select[data-part="' + partIdx + '"]');
+    document.querySelectorAll('.track-select[data-part="' + partIdx + '"]').forEach(function(cb) {
+        cb.checked = partCb.checked;
+    });
+    updateSelection();
+}
+
+function downloadSelected() {
+    const checkboxes = document.querySelectorAll('.track-select:checked');
+    checkboxes.forEach(function(cb) {
+        const path = cb.dataset.path;
+        const url = webPrefix + '/audio/' + bookId + '/track?file=' + encodeURIComponent(path);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = '';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    });
+}
+</script>
+
+<style>
+.audio-detail {
+    max-width: 1000px;
+    margin: 0 auto;
+}
+.audio-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+    margin-bottom: 30px;
+    padding: 20px;
+    background: var(--card-bg);
+    border-radius: 12px;
+    flex-wrap: wrap;
+}
+.audio-info h1 {
+    margin: 0 0 10px 0;
+    font-size: 1.8rem;
+}
+.audio-authors {
+    font-size: 1.2rem;
+    margin-bottom: 10px;
+}
+.audio-authors a {
+    color: var(--primary);
+    text-decoration: none;
+}
+.audio-authors a:hover {
+    text-decoration: underline;
+}
+.audio-meta {
+    display: flex;
+    gap: 15px;
+    flex-wrap: wrap;
+    color: var(--gray);
+}
+.audio-meta span {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.badge {
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+.badge-collection {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+.badge-book {
+    background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+    color: white;
+}
+.audio-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.btn-lg {
+    padding: 12px 24px;
+    font-size: 1.1rem;
+}
+.audio-structure h2 {
+    margin: 0 0 15px 0;
+    font-size: 1.4rem;
+}
+.audio-parts {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.audio-part {
+    background: var(--card-bg);
+    border-radius: 8px;
+    overflow: hidden;
+}
+.audio-part summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 15px;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 500;
+}
+.audio-part summary:hover {
+    background: rgba(255,255,255,0.05);
+}
+.audio-part[open] summary {
+    border-bottom: 1px solid var(--border);
+}
+.part-name {
+    flex: 1;
+}
+.part-meta {
+    display: flex;
+    gap: 15px;
+    color: var(--gray);
+    font-weight: normal;
+    font-size: 0.9rem;
+}
+.track-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.track-list li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 15px 8px 35px;
+    border-bottom: 1px solid var(--border);
+}
+.track-list li:last-child {
+    border-bottom: none;
+}
+.track-list li i {
+    color: var(--gray);
+    font-size: 0.85rem;
+}
+.track-name {
+    flex: 1;
+}
+.track-duration {
+    color: var(--gray);
+    font-size: 0.9rem;
+}
+.track-list.flat {
+    background: var(--card-bg);
+    border-radius: 8px;
+}
+.track-list.flat li {
+    padding-left: 15px;
+}
+.select-controls {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 15px;
+    padding: 10px 15px;
+    background: var(--card-bg);
+    border-radius: 8px;
+}
+.select-all-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-weight: 500;
+}
+.select-all-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+.track-checkbox, .part-checkbox {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.track-download {
+    color: var(--primary);
+    padding: 5px;
+    border-radius: 4px;
+    transition: background 0.2s;
+}
+.track-download:hover {
+    background: var(--primary);
+    color: white;
+}
+.part-header label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+</style>
 {{end}}`,
 
 	"bookshelf": `{{define "content"}}
 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; margin-bottom: 20px;">
-    <h2 style="margin: 0;"><i class="fas fa-bookmark"></i> My Bookshelf {{if .TotalCount}}(<span id="bookshelf-count">{{.TotalCount}}</span> books){{end}}</h2>
+    <h2 style="margin: 0;"><i class="fas fa-bookmark"></i> {{t "bookshelf.title"}} {{if .TotalCount}}(<span id="bookshelf-count">{{.TotalCount}}</span> {{t "main.books"}}){{end}}</h2>
     <div class="page-size-selector">
-        <span style="color: var(--gray); margin-right: 10px;">Show:</span>
+        <span style="color: var(--gray); margin-right: 10px;">{{t "books.show"}}</span>
         <a href="{{.CurrentPath}}?size=10" class="size-btn{{if eq .PageSize 10}} active{{end}}">10</a>
         <a href="{{.CurrentPath}}?size=50" class="size-btn{{if eq .PageSize 50}} active{{end}}">50</a>
         <a href="{{.CurrentPath}}?size=100" class="size-btn{{if eq .PageSize 100}} active{{end}}">100</a>
         <a href="{{.CurrentPath}}?size=200" class="size-btn{{if eq .PageSize 200}} active{{end}}">200</a>
-        <a href="{{.CurrentPath}}?size=all" class="size-btn{{if eq .PageSize 0}} active{{end}}">All</a>
+        <a href="{{.CurrentPath}}?size=all" class="size-btn{{if eq .PageSize 0}} active{{end}}">{{t "books.all"}}</a>
     </div>
 </div>
 {{if .Books}}
@@ -2048,13 +3539,15 @@ function applyFilter(name, value) {
         <div class="book-card-content">
             {{if .HasCover}}<img src="{{$.OPDSPrefix}}/book/{{.ID}}/cover" class="book-cover" alt="Cover" onerror="this.style.display='none'">{{end}}
             <div class="book-info">
-                <div class="book-title">{{.Title}}</div>
+                <div class="book-title">{{if .IsAudiobook}}<i class="fas fa-headphones" style="color: var(--primary);"></i> {{end}}{{.Title}}</div>
                 <div class="book-meta">
                     {{if .Authors}}<span><i class="fas fa-user"></i> {{range $i, $a := .Authors}}{{if lt $i 2}}{{if $i}}, {{end}}<a href="{{$.WebPrefix}}/authors/{{$a.ID}}" class="meta-link">{{$a.Name}}</a>{{end}}{{end}}{{if gt (len .Authors) 2}} <span class="more-info">+{{sub (len .Authors) 2}}<div class="more-info-tooltip{{if gt (len .Authors) 70}} below{{end}}">{{range $i, $a := .Authors}}{{if ge $i 2}}<a href="{{$.WebPrefix}}/authors/{{$a.ID}}">{{$a.Name}}</a>{{end}}{{end}}</div></span>{{end}}</span>{{end}}
+                    {{if .Narrators}}<span><i class="fas fa-microphone"></i> {{range $i, $n := .Narrators}}{{if lt $i 2}}{{if $i}}, {{end}}<a href="{{$.WebPrefix}}/authors/{{$n.ID}}" class="meta-link">{{$n.Name}}</a>{{end}}{{end}}{{if gt (len .Narrators) 2}} <span class="more-info">+{{sub (len .Narrators) 2}}</span>{{end}}</span>{{end}}
                     {{if .Series}}<span><i class="fas fa-layer-group"></i> {{range $i, $s := .Series}}{{if $i}}, {{end}}<a href="{{$.WebPrefix}}/series/{{$s.ID}}" class="meta-link">{{$s.Name}}</a>{{end}}</span>{{end}}
                     {{if .Lang}}<span><i class="fas fa-globe"></i> <a href="{{$.WebPrefix}}/languages/{{.Lang}}" class="meta-link">{{.LangName}}</a></span>{{end}}
                     <span><i class="fas fa-file"></i> {{.Format}}</span>
-                    <span><i class="fas fa-weight-hanging"></i> {{.Size}}</span>
+                    {{if .Duration}}<span><i class="fas fa-clock"></i> {{.Duration}}</span>{{else}}<span><i class="fas fa-weight-hanging"></i> {{.Size}}</span>{{end}}
+                    {{if gt .TrackCount 1}}<a href="{{$.WebPrefix}}/audio/{{.ID}}" class="meta-link"><i class="fas fa-list-ol"></i> {{.TrackCount}} {{t "audio.tracks"}}</a>{{end}}
                 </div>
                 {{if .Genres}}<div class="book-meta"><span><i class="fas fa-tag"></i> {{range $i, $g := .Genres}}{{if lt $i 3}}{{if $i}}, {{end}}<a href="{{$.WebPrefix}}/genres/{{$g.ID}}" class="meta-link">{{$g.Name}}</a>{{end}}{{end}}{{if gt (len .Genres) 3}} <span class="more-info">+{{sub (len .Genres) 3}}<div class="more-info-tooltip{{if gt (len .Genres) 71}} below{{end}}">{{range $i, $g := .Genres}}{{if ge $i 3}}<a href="{{$.WebPrefix}}/genres/{{$g.ID}}">{{$g.Name}}</a>{{end}}{{end}}</div></span>{{end}}</span></div>{{end}}
                 {{if .Annotation}}<div class="book-annotation">{{.Annotation}}</div>{{end}}
@@ -2064,25 +3557,25 @@ function applyFilter(name, value) {
             <a href="{{$.OPDSPrefix}}/book/{{.ID}}/download" class="btn btn-primary"><i class="fas fa-download"></i> {{.Format}}</a>
             {{if and $.HasEPUB .CanEPUB}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/epub" class="btn btn-success"><i class="fas fa-file-arrow-down"></i> EPUB</a>{{end}}
             {{if and $.HasMOBI .CanMOBI}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/mobi" class="btn btn-warning"><i class="fas fa-file-arrow-down"></i> MOBI</a>{{end}}
-            {{if or (gt .DuplicateCount 0) (gt .DuplicateOf 0)}}<a href="{{$.WebPrefix}}/duplicates/{{.ID}}" class="btn btn-secondary"><i class="fas fa-copy"></i> Duplicates{{if gt .DuplicateCount 0}} ({{.DuplicateCount}}){{end}}</a>{{end}}
-            <a href="#" onclick="return bookshelfAction(this, '{{$.WebPrefix}}/bookshelf/remove/{{.ID}}')" class="btn btn-danger"><i class="fas fa-trash"></i> Remove</a>
+            {{if or (gt .DuplicateCount 0) (gt .DuplicateOf 0)}}<a href="{{$.WebPrefix}}/duplicates/{{.ID}}" class="btn btn-secondary"><i class="fas fa-copy"></i> {{t "books.duplicates"}}{{if gt .DuplicateCount 0}} ({{.DuplicateCount}}){{end}}</a>{{end}}
+            <a href="#" onclick="return bookshelfAction(this, '{{$.WebPrefix}}/bookshelf/remove/{{.ID}}')" class="btn btn-danger"><i class="fas fa-trash"></i> {{t "bookshelf.remove"}}</a>
         </div>
     </div>
 {{end}}
 </div>
 {{if or (gt .Page 0) .HasMore}}
 <div class="pagination">
-    {{if gt .Page 0}}<a href="{{.CurrentPath}}?page={{.PrevPage}}{{if .PageSize}}&size={{.PageSize}}{{end}}"><i class="fas fa-arrow-left"></i> Previous</a>{{end}}
-    {{if .HasMore}}<a href="{{.CurrentPath}}?page={{.NextPage}}{{if .PageSize}}&size={{.PageSize}}{{end}}">Next <i class="fas fa-arrow-right"></i></a>{{end}}
+    {{if gt .Page 0}}<a href="{{.CurrentPath}}?page={{.PrevPage}}{{if .PageSize}}&size={{.PageSize}}{{end}}"><i class="fas fa-arrow-left"></i> {{t "books.prev"}}</a>{{end}}
+    {{if .HasMore}}<a href="{{.CurrentPath}}?page={{.NextPage}}{{if .PageSize}}&size={{.PageSize}}{{end}}">{{t "books.next"}} <i class="fas fa-arrow-right"></i></a>{{end}}
 </div>
 {{end}}
 {{else}}
-<p style="text-align: center; color: var(--gray); padding: 40px;">Your bookshelf is empty. Add books by clicking the bookmark button on any book.</p>
+<p style="text-align: center; color: var(--gray); padding: 40px;">{{t "bookshelf.empty"}}</p>
 {{end}}
 {{end}}`,
 
 	"authors_index": `{{define "content"}}
-<h2><i class="fas fa-user-pen"></i> Authors{{if .Prefix}}: {{.Prefix}}{{end}}</h2>
+<h2><i class="fas fa-user-pen"></i> {{t "authors.title"}}{{if .Prefix}}: {{.Prefix}}{{end}}</h2>
 {{if .Prefixes}}
 <div class="prefix-cloud">
 {{range .Prefixes}}
@@ -2090,7 +3583,7 @@ function applyFilter(name, value) {
 {{end}}
 </div>
 {{else}}
-<p style="text-align: center; color: var(--gray);">No authors found.</p>
+<p style="text-align: center; color: var(--gray);">{{t "authors.none"}}</p>
 {{end}}
 {{end}}`,
 
@@ -2104,17 +3597,17 @@ function applyFilter(name, value) {
 </ul>
 {{if or (gt .Page 0) .HasMore}}
 <div class="pagination">
-    {{if gt .Page 0}}<a href="{{.CurrentPath}}?prefix={{.Prefix}}&page={{.PrevPage}}"><i class="fas fa-arrow-left"></i> Previous</a>{{end}}
-    {{if .HasMore}}<a href="{{.CurrentPath}}?prefix={{.Prefix}}&page={{.NextPage}}">Next <i class="fas fa-arrow-right"></i></a>{{end}}
+    {{if gt .Page 0}}<a href="{{.CurrentPath}}?prefix={{.Prefix}}&page={{.PrevPage}}"><i class="fas fa-arrow-left"></i> {{t "books.prev"}}</a>{{end}}
+    {{if .HasMore}}<a href="{{.CurrentPath}}?prefix={{.Prefix}}&page={{.NextPage}}">{{t "books.next"}} <i class="fas fa-arrow-right"></i></a>{{end}}
 </div>
 {{end}}
 {{else}}
-<p style="text-align: center; color: var(--gray);">No authors found.</p>
+<p style="text-align: center; color: var(--gray);">{{t "authors.none"}}</p>
 {{end}}
 {{end}}`,
 
 	"genres_index": `{{define "content"}}
-<h2><i class="fas fa-masks-theater"></i> Genres</h2>
+<h2><i class="fas fa-masks-theater"></i> {{t "genres.title"}}</h2>
 {{if .Sections}}
 <div class="sections-grid">
 {{range .Sections}}
@@ -2122,7 +3615,7 @@ function applyFilter(name, value) {
 {{end}}
 </div>
 {{else}}
-<p style="text-align: center; color: var(--gray);">No genres found.</p>
+<p style="text-align: center; color: var(--gray);">{{t "genres.none"}}</p>
 {{end}}
 {{end}}`,
 
@@ -2135,12 +3628,12 @@ function applyFilter(name, value) {
 {{end}}
 </ul>
 {{else}}
-<p style="text-align: center; color: var(--gray);">No genres found.</p>
+<p style="text-align: center; color: var(--gray);">{{t "genres.none"}}</p>
 {{end}}
 {{end}}`,
 
 	"series_index": `{{define "content"}}
-<h2><i class="fas fa-layer-group"></i> Series{{if .Prefix}}: {{.Prefix}}{{end}}</h2>
+<h2><i class="fas fa-layer-group"></i> {{t "series.title"}}{{if .Prefix}}: {{.Prefix}}{{end}}</h2>
 {{if .Prefixes}}
 <div class="prefix-cloud">
 {{range .Prefixes}}
@@ -2148,7 +3641,7 @@ function applyFilter(name, value) {
 {{end}}
 </div>
 {{else}}
-<p style="text-align: center; color: var(--gray);">No series found.</p>
+<p style="text-align: center; color: var(--gray);">{{t "series.none"}}</p>
 {{end}}
 {{end}}`,
 
@@ -2162,12 +3655,12 @@ function applyFilter(name, value) {
 </ul>
 {{if or (gt .Page 0) .HasMore}}
 <div class="pagination">
-    {{if gt .Page 0}}<a href="{{.CurrentPath}}?prefix={{.Prefix}}&page={{.PrevPage}}"><i class="fas fa-arrow-left"></i> Previous</a>{{end}}
-    {{if .HasMore}}<a href="{{.CurrentPath}}?prefix={{.Prefix}}&page={{.NextPage}}">Next <i class="fas fa-arrow-right"></i></a>{{end}}
+    {{if gt .Page 0}}<a href="{{.CurrentPath}}?prefix={{.Prefix}}&page={{.PrevPage}}"><i class="fas fa-arrow-left"></i> {{t "books.prev"}}</a>{{end}}
+    {{if .HasMore}}<a href="{{.CurrentPath}}?prefix={{.Prefix}}&page={{.NextPage}}">{{t "books.next"}} <i class="fas fa-arrow-right"></i></a>{{end}}
 </div>
 {{end}}
 {{else}}
-<p style="text-align: center; color: var(--gray);">No series found.</p>
+<p style="text-align: center; color: var(--gray);">{{t "series.none"}}</p>
 {{end}}
 {{end}}`,
 
@@ -2191,17 +3684,17 @@ function applyFilter(name, value) {
 </ul>
 {{if or (gt .Page 0) .HasMore}}
 <div class="pagination">
-    {{if gt .Page 0}}<a href="{{.CurrentPath}}?page={{.PrevPage}}"><i class="fas fa-arrow-left"></i> Previous</a>{{end}}
-    {{if .HasMore}}<a href="{{.CurrentPath}}?page={{.NextPage}}">Next <i class="fas fa-arrow-right"></i></a>{{end}}
+    {{if gt .Page 0}}<a href="{{.CurrentPath}}?page={{.PrevPage}}"><i class="fas fa-arrow-left"></i> {{t "books.prev"}}</a>{{end}}
+    {{if .HasMore}}<a href="{{.CurrentPath}}?page={{.NextPage}}">{{t "books.next"}} <i class="fas fa-arrow-right"></i></a>{{end}}
 </div>
 {{end}}
 {{else}}
-<p style="text-align: center; color: var(--gray);">No items found.</p>
+<p style="text-align: center; color: var(--gray);">{{t "catalogs.none"}}</p>
 {{end}}
 {{end}}`,
 
 	"languages": `{{define "content"}}
-<h2><i class="fas fa-globe"></i> Languages</h2>
+<h2><i class="fas fa-globe"></i> {{t "languages.title"}}</h2>
 {{if .Languages}}
 <div class="sections-grid">
 {{range .Languages}}
@@ -2213,13 +3706,86 @@ function applyFilter(name, value) {
 {{end}}
 </div>
 {{else}}
-<p style="text-align: center; color: var(--gray);">No languages found.</p>
+<p style="text-align: center; color: var(--gray);">{{t "languages.none"}}</p>
 {{end}}
 {{end}}`,
 
 	"error": `{{define "content"}}
-<h2><i class="fas fa-exclamation-triangle" style="color: var(--danger);"></i> Error</h2>
+<h2><i class="fas fa-exclamation-triangle" style="color: var(--danger);"></i> {{t "error.title"}}</h2>
 <p style="color: var(--danger); padding: 20px; background: #fef2f2; border-radius: 10px;">{{.Error}}</p>
-<a href="{{.WebPrefix}}/" class="btn btn-primary" style="margin-top: 20px;"><i class="fas fa-home"></i> Back to Home</a>
+<a href="{{.WebPrefix}}/" class="btn btn-primary" style="margin-top: 20px;"><i class="fas fa-home"></i> {{t "error.back"}}</a>
+{{end}}`,
+
+	"help": `{{define "content"}}
+<div class="help-page">
+<h2><i class="fas fa-circle-question"></i> {{t "help.welcome"}}</h2>
+<p class="intro">{{t "help.intro"}}</p>
+
+<section>
+    <h3><i class="fas fa-search"></i> {{t "help.search.title"}}</h3>
+    <p>{{t "help.search.p1"}}</p>
+    <ul>
+        <li><strong>{{t "search.title"}}</strong> — {{t "help.search.field1"}}</li>
+        <li><strong>{{t "search.author"}}</strong> — {{t "help.search.field2"}}</li>
+    </ul>
+    <p>{{t "help.search.p2"}}</p>
+</section>
+
+<section>
+    <h3><i class="fas fa-crosshairs"></i> {{t "help.scope.title"}}</h3>
+    <p>{{t "help.scope.p1"}}</p>
+</section>
+
+<section>
+    <h3><i class="fas fa-filter"></i> {{t "help.filters.title"}}</h3>
+    <p>{{t "help.filters.p1"}}</p>
+    <ul class="code-list">
+        <li><code>{{t "help.filters.lang"}}</code></li>
+        <li><code>{{t "help.filters.genre"}}</code></li>
+        <li><code>{{t "help.filters.series"}}</code></li>
+    </ul>
+</section>
+
+<section>
+    <h3><i class="fas fa-compass"></i> {{t "help.browse.title"}}</h3>
+    <p>{{t "help.browse.p1"}}</p>
+    <ul>
+        <li><i class="fas fa-folder"></i> <strong>{{t "nav.catalogs"}}</strong> — {{t "help.browse.cat"}}</li>
+        <li><i class="fas fa-user-pen"></i> <strong>{{t "nav.authors"}}</strong> — {{t "help.browse.auth"}}</li>
+        <li><i class="fas fa-tags"></i> <strong>{{t "nav.genres"}}</strong> — {{t "help.browse.genre"}}</li>
+        <li><i class="fas fa-layer-group"></i> <strong>{{t "nav.series"}}</strong> — {{t "help.browse.series"}}</li>
+        <li><i class="fas fa-globe"></i> <strong>{{t "nav.languages"}}</strong> — {{t "help.browse.lang"}}</li>
+    </ul>
+</section>
+
+<section>
+    <h3><i class="fas fa-download"></i> {{t "help.download.title"}}</h3>
+    <p>{{t "help.download.p1"}}</p>
+</section>
+
+<section>
+    <h3><i class="fas fa-rss"></i> {{t "help.opds.title"}}</h3>
+    <p>{{t "help.opds.p1"}}</p>
+    <code class="url">{{.OPDSPrefix}}/</code>
+</section>
+
+<section>
+    <h3><i class="fas fa-bookmark"></i> {{t "help.bookshelf.title"}}</h3>
+    <p>{{t "help.bookshelf.p1"}}</p>
+</section>
+</div>
+
+<style>
+.help-page { max-width: 800px; margin: 0 auto; }
+.help-page .intro { font-size: 1.1rem; color: var(--gray); margin-bottom: 30px; }
+.help-page section { background: white; padding: 20px 25px; border-radius: 12px; margin-bottom: 20px; box-shadow: var(--shadow); }
+.help-page h3 { color: var(--primary); margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }
+.help-page ul { margin: 15px 0; padding-left: 25px; }
+.help-page li { margin: 8px 0; line-height: 1.6; }
+.help-page .code-list { list-style: none; padding-left: 0; }
+.help-page .code-list li { background: #f8fafc; padding: 8px 15px; border-radius: 6px; margin: 5px 0; }
+.help-page code { background: #f1f5f9; padding: 2px 8px; border-radius: 4px; font-family: monospace; }
+.help-page code.url { display: block; background: var(--dark); color: #22c55e; padding: 12px 15px; border-radius: 8px; margin-top: 10px; }
+</style>
 {{end}}`,
 }

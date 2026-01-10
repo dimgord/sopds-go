@@ -47,10 +47,16 @@ type Book struct {
 	CatID        int64     `db:"cat_id"`
 	CatType      CatType   `db:"cat_type"`
 	Avail        Avail     `db:"avail"`
-	Duplicate    int64     `db:"doublicat"`
+	DuplicateOf  *int64    `db:"duplicate_of"`
 	Cover        string    `db:"cover"`
 	CoverType    string    `db:"cover_type"`
-	Favorite     int       `db:"favorite"`
+	Favorite     bool      `db:"favorite"`
+	// Audiobook fields
+	DurationSeconds int    `db:"duration_seconds"`
+	Bitrate         int    `db:"bitrate"`
+	IsAudiobook     bool   `db:"is_audiobook"`
+	TrackCount      int    `db:"track_count"`
+	Chapters        string `db:"chapters"` // JSON array
 }
 
 // Author represents an author
@@ -175,4 +181,11 @@ func NewPagination(page, limit int) *Pagination {
 // Offset returns the SQL offset for this page
 func (p *Pagination) Offset() int {
 	return p.Page * p.Limit
+}
+
+// SearchFilters holds optional filters for book searches
+type SearchFilters struct {
+	Lang     *string
+	AuthorID *int64
+	GenreID  *int64
 }
