@@ -54,7 +54,10 @@
       "Bash(sudo systemctl restart:*)",
       "Bash(sudo systemctl status:*)",
       "Bash(timeout 30 ./sopds scan:*)",
-      "Bash(timeout 20 ./sopds scan:*)"
+      "Bash(timeout 20 ./sopds scan:*)",
+      "Bash(git config:*)",
+      "Bash(gpg --list-secret-keys:*)",
+      "Bash(gpg:*)"
     ]
   }
 }
