@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/sopds/sopds-go/internal/database"
+	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
 	"github.com/sopds/sopds-go/internal/opds"
 )
 
@@ -25,7 +26,7 @@ func (s *Server) handleMainMenu(w http.ResponseWriter, r *http.Request) {
 	builder := s.getFeedBuilder(r)
 
 	// Get database info
-	info, err := s.db.GetDBInfo(ctx, false)
+	info, err := s.svc.GetDBInfo(ctx, false)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to get database info")
 		return
@@ -34,7 +35,7 @@ func (s *Server) handleMainMenu(w http.ResponseWriter, r *http.Request) {
 	// Get new books info
 	var newInfo *database.NewInfo
 	if s.config.Scanner.Duplicates != "none" {
-		newInfo, _ = s.db.GetNewInfo(ctx, 7) // Last 7 days
+		newInfo, _ = s.svc.GetNewInfo(ctx, 7) // Last 7 days
 	}
 
 	feed := builder.MainMenu(info, newInfo)
@@ -57,7 +58,7 @@ func (s *Server) handleCatalogs(w http.ResponseWriter, r *http.Request) {
 	pagination := database.NewPagination(page, s.config.Server.Port) // Use port as limit for now
 
 	// Get root catalogs (parent_id is NULL)
-	items, err := s.db.GetItemsInCatalog(ctx, 0, pagination, false)
+	items, err := s.svc.GetItemsInCatalog(ctx, 0, pagination, false)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to get catalogs")
 		return
@@ -109,13 +110,13 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	page := getPage(r)
 	pagination := database.NewPagination(page, 50)
 
-	items, err := s.db.GetItemsInCatalog(ctx, catID, pagination, false)
+	items, err := s.svc.GetItemsInCatalog(ctx, catID, pagination, false)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to get catalog items")
 		return
 	}
 
-	cat, _ := s.db.GetCatalog(ctx, catID)
+	cat, _ := s.svc.GetCatalog(ctx, catID)
 	title := "Catalog"
 	if cat != nil {
 		title = cat.Name
@@ -145,9 +146,9 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 				Cover:        item.Cover,
 				CoverType:    item.CoverType,
 			}
-			authors, _ := s.db.GetBookAuthors(ctx, item.ID)
-			genres, _ := s.db.GetBookGenres(ctx, item.ID)
-			series, _ := s.db.GetBookSeries(ctx, item.ID)
+			authors, _ := s.svc.GetBookAuthors(ctx, item.ID)
+			genres, _ := s.svc.GetBookGenres(ctx, item.ID)
+			series, _ := s.svc.GetBookSeries(ctx, item.ID)
 			entry := builder.AcquisitionEntry(book, authors, genres, series)
 			feed.Entries = append(feed.Entries, entry)
 		}
@@ -184,7 +185,7 @@ func (s *Server) handleAuthors(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Show authors starting with letter
-	authors, err := s.db.GetAuthorsByLetter(ctx, letter, pagination)
+	authors, err := s.svc.GetAuthorsByLetter(ctx, letter, pagination)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to get authors")
 		return
@@ -222,7 +223,7 @@ func (s *Server) handleAuthor(w http.ResponseWriter, r *http.Request) {
 	page := getPage(r)
 	pagination := database.NewPagination(page, 50)
 
-	books, err := s.db.GetBooksForAuthor(ctx, authorID, pagination, false)
+	books, err := s.svc.GetBooksForAuthor(ctx, authorID, pagination, false)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to get books")
 		return
@@ -230,9 +231,9 @@ func (s *Server) handleAuthor(w http.ResponseWriter, r *http.Request) {
 
 	feed := builder.NewFeedWithPath("Author's Books", fmt.Sprintf("author:%d", authorID), fmt.Sprintf("/authors/%d", authorID), "/authors")
 	for _, book := range books {
-		authors, _ := s.db.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.db.GetBookGenres(ctx, book.ID)
-		series, _ := s.db.GetBookSeries(ctx, book.ID)
+		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
+		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
+		series, _ := s.svc.GetBookSeries(ctx, book.ID)
 		entry := builder.AcquisitionEntry(&book, authors, genres, series)
 		feed.Entries = append(feed.Entries, entry)
 	}
@@ -271,7 +272,7 @@ func (s *Server) handleTitles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	books, err := s.db.GetBooksForTitle(ctx, letter, pagination, false, 0)
+	books, err := s.svc.GetBooksForTitle(ctx, letter, pagination, false, 0)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to get books")
 		return
@@ -279,9 +280,9 @@ func (s *Server) handleTitles(w http.ResponseWriter, r *http.Request) {
 
 	feed := builder.NewFeedWithPath(fmt.Sprintf("Titles: %s", letter), fmt.Sprintf("titles:letter:%s", letter), fmt.Sprintf("/titles?letter=%s", url.QueryEscape(letter)), "/titles")
 	for _, book := range books {
-		authors, _ := s.db.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.db.GetBookGenres(ctx, book.ID)
-		series, _ := s.db.GetBookSeries(ctx, book.ID)
+		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
+		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
+		series, _ := s.svc.GetBookSeries(ctx, book.ID)
 		entry := builder.AcquisitionEntry(&book, authors, genres, series)
 		feed.Entries = append(feed.Entries, entry)
 	}
@@ -302,7 +303,7 @@ func (s *Server) handleGenres(w http.ResponseWriter, r *http.Request) {
 
 	if section == "" {
 		// Show genre sections
-		sections, err := s.db.GetGenreSections(ctx)
+		sections, err := s.svc.GetGenreSections(ctx)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, "Failed to get genres")
 			return
@@ -323,7 +324,7 @@ func (s *Server) handleGenres(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Show genres in section
-	genres, err := s.db.GetGenresInSection(ctx, section)
+	genres, err := s.svc.GetGenresInSection(ctx, section)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to get genres")
 		return
@@ -356,7 +357,7 @@ func (s *Server) handleGenre(w http.ResponseWriter, r *http.Request) {
 	page := getPage(r)
 	pagination := database.NewPagination(page, 50)
 
-	books, err := s.db.GetBooksForGenre(ctx, genreID, pagination, false)
+	books, err := s.svc.GetBooksForGenre(ctx, genreID, pagination, false)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to get books")
 		return
@@ -364,9 +365,9 @@ func (s *Server) handleGenre(w http.ResponseWriter, r *http.Request) {
 
 	feed := builder.NewFeedWithPath("Genre Books", fmt.Sprintf("genre:%d", genreID), fmt.Sprintf("/genres/%d", genreID), "/genres")
 	for _, book := range books {
-		authors, _ := s.db.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.db.GetBookGenres(ctx, book.ID)
-		series, _ := s.db.GetBookSeries(ctx, book.ID)
+		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
+		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
+		series, _ := s.svc.GetBookSeries(ctx, book.ID)
 		entry := builder.AcquisitionEntry(&book, authors, genres, series)
 		feed.Entries = append(feed.Entries, entry)
 	}
@@ -405,7 +406,7 @@ func (s *Server) handleSeriesList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seriesList, err := s.db.GetSeriesByLetter(ctx, letter, pagination)
+	seriesList, err := s.svc.GetSeriesByLetter(ctx, letter, pagination)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to get series")
 		return
@@ -443,7 +444,7 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 	page := getPage(r)
 	pagination := database.NewPagination(page, 50)
 
-	books, err := s.db.GetBooksForSeries(ctx, seriesID, pagination, false)
+	books, err := s.svc.GetBooksForSeries(ctx, seriesID, pagination, false)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to get books")
 		return
@@ -451,9 +452,9 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 
 	feed := builder.NewFeedWithPath("Series Books", fmt.Sprintf("series:%d", seriesID), fmt.Sprintf("/series/%d", seriesID), "/series")
 	for _, book := range books {
-		authors, _ := s.db.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.db.GetBookGenres(ctx, book.ID)
-		series, _ := s.db.GetBookSeries(ctx, book.ID)
+		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
+		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
+		series, _ := s.svc.GetBookSeries(ctx, book.ID)
 		entry := builder.AcquisitionEntry(&book, authors, genres, series)
 		feed.Entries = append(feed.Entries, entry)
 	}
@@ -470,7 +471,7 @@ func (s *Server) handleNew(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	builder := s.getFeedBuilder(r)
 
-	books, err := s.db.GetLastBooks(ctx, 50, 7)
+	books, err := s.svc.GetLastBooks(ctx, 50, 7)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to get new books")
 		return
@@ -478,9 +479,9 @@ func (s *Server) handleNew(w http.ResponseWriter, r *http.Request) {
 
 	feed := builder.NewFeedWithPath("New Books", "new", "/new", "/")
 	for _, book := range books {
-		authors, _ := s.db.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.db.GetBookGenres(ctx, book.ID)
-		series, _ := s.db.GetBookSeries(ctx, book.ID)
+		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
+		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
+		series, _ := s.svc.GetBookSeries(ctx, book.ID)
 		entry := builder.AcquisitionEntry(&book, authors, genres, series)
 		feed.Entries = append(feed.Entries, entry)
 	}
@@ -509,7 +510,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	page := getPage(r)
 	pagination := database.NewPagination(page, 50)
 
-	books, err := s.db.SearchBooks(ctx, query, pagination, false, nil)
+	// OPDS search includes annotation by default for compatibility
+	opts := persistence.SearchOptions{
+		TitleQuery:        query,
+		IncludeAnnotation: true,
+	}
+	books, err := s.svc.SearchBooks(ctx, opts, pagination)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to search books")
 		return
@@ -517,9 +523,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	feed := builder.NewFeedWithPath(fmt.Sprintf("Search: %s", query), fmt.Sprintf("search:%s", query), fmt.Sprintf("/search?q=%s", url.QueryEscape(query)), "/")
 	for _, book := range books {
-		authors, _ := s.db.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.db.GetBookGenres(ctx, book.ID)
-		series, _ := s.db.GetBookSeries(ctx, book.ID)
+		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
+		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
+		series, _ := s.svc.GetBookSeries(ctx, book.ID)
 		entry := builder.AcquisitionEntry(&book, authors, genres, series)
 		feed.Entries = append(feed.Entries, entry)
 	}
@@ -541,7 +547,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	book, err := s.db.GetBook(ctx, bookID)
+	book, err := s.svc.GetBook(ctx, bookID)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, "Book not found")
 		return
@@ -642,7 +648,7 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	book, err := s.db.GetBook(ctx, bookID)
+	book, err := s.svc.GetBook(ctx, bookID)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, "Book not found")
 		return
@@ -776,7 +782,7 @@ func (s *Server) handleConvert(w http.ResponseWriter, r *http.Request, format st
 		return
 	}
 
-	book, err := s.db.GetBook(ctx, bookID)
+	book, err := s.svc.GetBook(ctx, bookID)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, "Book not found")
 		return
@@ -910,7 +916,7 @@ func (s *Server) handleBookshelf(w http.ResponseWriter, r *http.Request) {
 	page := getPage(r)
 	pagination := database.NewPagination(page, 50)
 
-	books, err := s.db.GetBookShelf(ctx, user, pagination)
+	books, err := s.svc.GetBookShelf(ctx, user, pagination)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to get bookshelf")
 		return
@@ -919,15 +925,15 @@ func (s *Server) handleBookshelf(w http.ResponseWriter, r *http.Request) {
 	feed := builder.NewFeedWithPath("My Bookshelf", "bookshelf", "/bookshelf", "/")
 
 	for _, book := range books {
-		authors, _ := s.db.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.db.GetBookGenres(ctx, book.ID)
-		series, _ := s.db.GetBookSeries(ctx, book.ID)
+		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
+		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
+		series, _ := s.svc.GetBookSeries(ctx, book.ID)
 		entry := builder.AcquisitionEntry(&book, authors, genres, series)
 		feed.Entries = append(feed.Entries, entry)
 	}
 
 	// Add pagination
-	count, _ := s.db.CountBookShelf(ctx, user)
+	count, _ := s.svc.CountBookShelf(ctx, user)
 	if count > int64(pagination.Offset()+len(books)) {
 		feed.Links = append(feed.Links, opds.Link{
 			Rel:  "next",
@@ -954,7 +960,7 @@ func (s *Server) handleBookshelfAdd(w http.ResponseWriter, r *http.Request) {
 		user = "anonymous"
 	}
 
-	if err := s.db.AddBookShelf(ctx, user, bookID); err != nil {
+	if err := s.svc.AddBookShelf(ctx, user, bookID); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to add to bookshelf")
 		return
 	}
@@ -985,7 +991,7 @@ func (s *Server) handleBookshelfRemove(w http.ResponseWriter, r *http.Request) {
 		user = "anonymous"
 	}
 
-	if err := s.db.RemoveBookShelf(ctx, user, bookID); err != nil {
+	if err := s.svc.RemoveBookShelf(ctx, user, bookID); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to remove from bookshelf")
 		return
 	}

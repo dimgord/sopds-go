@@ -3,28 +3,42 @@ package scanner
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/bodgit/sevenzip"
 	"github.com/robfig/cron/v3"
 	"github.com/sopds/sopds-go/internal/config"
 	"github.com/sopds/sopds-go/internal/database"
+	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
 )
+
+// bookWithMeta holds a book and its parsed FB2 metadata for batch processing
+type bookWithMeta struct {
+	Book    *database.Book
+	Authors []database.Author
+	Genres  []string
+	Series  []SeriesInfo
+}
 
 // Scanner scans library directory for books
 type Scanner struct {
 	config           *config.Config
-	db               *database.DB
+	svc              *persistence.Service
 	parser           *FB2Parser
+	audioParser      *AudioParser
 	cron             *cron.Cron
 	extSet           map[string]bool
+	audioExtSet      map[string]bool // Audio-specific extensions
 	stats            ScanStats
 	statsMu          sync.Mutex
 	isRunning        atomic.Bool
@@ -70,18 +84,26 @@ type ProgressInfo struct {
 type ProgressCallback func(info ProgressInfo)
 
 // New creates a new scanner
-func New(cfg *config.Config, db *database.DB) *Scanner {
+func New(cfg *config.Config, svc *persistence.Service) *Scanner {
 	// Build extension set
 	extSet := make(map[string]bool)
 	for _, ext := range cfg.Library.Formats {
 		extSet[strings.ToLower(ext)] = true
 	}
 
+	// Build audio extension set
+	audioExtSet := map[string]bool{
+		".mp3": true, ".m4b": true, ".m4a": true,
+		".flac": true, ".ogg": true, ".opus": true,
+	}
+
 	return &Scanner{
-		config: cfg,
-		db:     db,
-		parser: NewFB2Parser(cfg.Server.Port > 0), // Read covers if server is enabled
-		extSet: extSet,
+		config:      cfg,
+		svc:         svc,
+		parser:      NewFB2Parser(cfg.Server.Port > 0), // Read covers if server is enabled
+		audioParser: NewAudioParser(cfg.Server.Port > 0),
+		extSet:      extSet,
+		audioExtSet: audioExtSet,
 	}
 }
 
@@ -180,7 +202,7 @@ func (s *Scanner) countFiles(ctx context.Context) (int64, error) {
 		}
 
 		ext := strings.ToLower(filepath.Ext(path))
-		if ext == ".zip" && s.config.Library.ScanZip {
+		if (ext == ".zip" || ext == ".7z") && s.config.Library.ScanZip {
 			count++
 		} else if s.extSet[ext] {
 			count++
@@ -204,6 +226,12 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 	s.stats.StartTime = time.Now()
 	s.lastProgress = time.Now()
 
+	// Enable async commits for performance (data recoverable by re-scan if crash)
+	if err := s.svc.SetAsyncCommit(); err != nil {
+		log.Printf("Warning: could not enable async commit: %v", err)
+	}
+	defer s.svc.SetSyncCommit()
+
 	// Count total files first
 	s.reportProgress("counting")
 	log.Println("Counting files...")
@@ -218,7 +246,7 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 	s.knownZips = make(map[string]int64)
 	if !s.config.Library.RescanZip {
 		var err error
-		s.knownZips, err = s.db.GetAllZipCatalogs(ctx)
+		s.knownZips, err = s.svc.GetAllZipCatalogs(ctx)
 		if err != nil {
 			log.Printf("Failed to load ZIP catalogs: %v", err)
 		} else {
@@ -272,7 +300,7 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 
 				if len(removedCatIDs) > 0 {
 					log.Printf("Removing %d deleted archives from database...", len(removedCatIDs))
-					deletedCount, err := s.db.DeleteBooksInCatalogs(ctx, removedCatIDs)
+					deletedCount, err := s.svc.DeleteBooksInCatalogs(ctx, removedCatIDs)
 					if err != nil {
 						log.Printf("Failed to delete books from removed archives: %v", err)
 					} else {
@@ -332,7 +360,7 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 		}
 
 		ext := strings.ToLower(filepath.Ext(path))
-		if ext == ".zip" && s.config.Library.ScanZip {
+		if (ext == ".zip" || ext == ".7z") && s.config.Library.ScanZip {
 			fileChan <- path
 		} else if s.extSet[ext] {
 			fileChan <- path
@@ -356,7 +384,7 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 		case "clear":
 			mode = database.DupClear
 		}
-		if err := s.db.MarkDuplicates(ctx, mode); err != nil {
+		if err := s.svc.MarkDuplicates(ctx, mode); err != nil {
 			log.Printf("Failed to mark duplicates: %v", err)
 		}
 	}
@@ -402,6 +430,11 @@ func (s *Scanner) processPath(ctx context.Context, path string) {
 		return
 	}
 
+	if ext == ".7z" && s.config.Library.ScanZip {
+		s.process7z(ctx, path)
+		return
+	}
+
 	if !s.extSet[ext] {
 		return
 	}
@@ -425,10 +458,10 @@ func (s *Scanner) processFile(ctx context.Context, path string, size int64, catT
 	}
 
 	// Check if book already exists
-	book, err := s.db.FindBook(ctx, filename, relPath)
+	book, err := s.svc.FindBook(ctx, filename, relPath)
 	if err == nil && book != nil {
 		// Book exists, mark as verified
-		s.db.UpdateBookAvail(ctx, book.ID, database.AvailVerified)
+		s.svc.UpdateBookAvail(ctx, book.ID, database.AvailVerified)
 		atomic.AddInt64(&s.stats.BooksSkipped, 1)
 		return
 	}
@@ -436,7 +469,7 @@ func (s *Scanner) processFile(ctx context.Context, path string, size int64, catT
 	// Get or create catalog tree
 	if catID == 0 && relPath != "." && relPath != "" {
 		pathParts := strings.Split(relPath, string(filepath.Separator))
-		catID, err = s.db.GetOrCreateCatalogTree(ctx, pathParts, catType)
+		catID, err = s.svc.GetOrCreateCatalogTree(ctx, pathParts, catType)
 		if err != nil {
 			log.Printf("Failed to create catalog tree for %s: %v", path, err)
 		}
@@ -454,58 +487,90 @@ func (s *Scanner) processFile(ctx context.Context, path string, size int64, catT
 		Avail:    database.AvailVerified,
 	}
 
-	// Parse FB2 metadata if applicable
+	// Parse metadata based on format
+	var fb2Meta *FB2Metadata
+	var audioMeta *AudioMeta
 	if ext == "fb2" {
-		s.parseFB2Metadata(ctx, path, newBook, catType)
+		fb2Meta = s.parseFB2MetadataFull(ctx, path, newBook, catType)
+	} else if s.audioExtSet["."+ext] {
+		audioMeta = s.parseAudioMetadata(ctx, path, newBook)
 	} else {
-		// Use filename as title for non-FB2 files
+		// Use filename as title for other files
 		newBook.Title = strings.TrimSuffix(filename, filepath.Ext(filename))
 	}
 
 	// Insert book
-	bookID, err := s.db.AddBook(ctx, newBook)
+	bookID, err := s.svc.AddBook(ctx, newBook)
 	if err != nil {
 		log.Printf("Failed to add book %s: %v", path, err)
 		return
 	}
 
-	// Add author if no authors were found during parsing
-	if newBook.Title != "" && ext != "fb2" {
+	// Link authors, genres, series
+	if ext == "fb2" && fb2Meta != nil {
+		// Link authors from FB2 metadata
+		if len(fb2Meta.Authors) > 0 {
+			for _, author := range fb2Meta.Authors {
+				a, err := s.svc.GetOrCreateAuthor(ctx, author.FirstName, author.LastName)
+				if err == nil && a != nil {
+					s.svc.AddBookAuthor(ctx, bookID, a.ID)
+				}
+			}
+		} else {
+			s.svc.AddBookAuthor(ctx, bookID, 1) // Unknown author
+		}
+		// Link genres
+		for _, genreCode := range fb2Meta.Genres {
+			g, err := s.svc.GetOrCreateGenre(ctx, genreCode, "", "")
+			if err == nil && g != nil {
+				s.svc.AddBookGenre(ctx, bookID, g.ID)
+			}
+		}
+		// Link series
+		for _, ser := range fb2Meta.Series {
+			se, err := s.svc.GetOrCreateSeries(ctx, ser.Name)
+			if err == nil && se != nil {
+				s.svc.AddBookSeries(ctx, bookID, se.ID, ser.Number)
+			}
+		}
+	} else if audioMeta != nil {
+		// Link author from audio folder name
+		if audioMeta.Author.FirstName != "" || audioMeta.Author.LastName != "" {
+			a, err := s.svc.GetOrCreateAuthor(ctx, audioMeta.Author.FirstName, audioMeta.Author.LastName)
+			if err == nil && a != nil {
+				s.svc.AddBookAuthor(ctx, bookID, a.ID)
+			}
+		} else {
+			s.svc.AddBookAuthor(ctx, bookID, 1) // Unknown author
+		}
+	} else if ext != "fb2" {
 		// Add unknown author for non-FB2
-		s.db.AddBookAuthor(ctx, bookID, 1) // Unknown author ID = 1
+		s.svc.AddBookAuthor(ctx, bookID, 1)
 	}
 
 	atomic.AddInt64(&s.stats.BooksAdded, 1)
 }
 
-func (s *Scanner) parseFB2Metadata(ctx context.Context, path string, book *database.Book, catType database.CatType) {
-	var reader interface {
-		Read([]byte) (int, error)
-		Close() error
-	}
-
-	if catType == database.CatNormal {
-		f, err := os.Open(path)
-		if err != nil {
-			book.Title = strings.TrimSuffix(book.Filename, ".fb2")
-			return
-		}
-		defer f.Close()
-		reader = f
-	}
-
-	// For ZIP files, the reader is passed from processZip
-
-	if reader == nil {
+// parseFB2MetadataFull parses FB2 file and returns full metadata including authors/genres/series
+func (s *Scanner) parseFB2MetadataFull(ctx context.Context, path string, book *database.Book, catType database.CatType) *FB2Metadata {
+	if catType != database.CatNormal {
+		// For ZIP files, this function shouldn't be called
 		book.Title = strings.TrimSuffix(book.Filename, ".fb2")
-		return
+		return nil
 	}
 
-	meta, err := s.parser.Parse(reader)
+	f, err := os.Open(path)
+	if err != nil {
+		book.Title = strings.TrimSuffix(book.Filename, ".fb2")
+		return nil
+	}
+	defer f.Close()
+
+	meta, err := s.parser.Parse(f)
 	if err != nil {
 		log.Printf("Failed to parse FB2 %s: %v", path, err)
 		book.Title = strings.TrimSuffix(book.Filename, ".fb2")
-		return
+		return nil
 	}
 
 	book.Title = meta.Title
@@ -521,8 +586,122 @@ func (s *Scanner) parseFB2Metadata(ctx context.Context, path string, book *datab
 		book.CoverType = meta.CoverType
 	}
 
-	// Store metadata for later linking (after book is inserted)
-	// This is handled in processFile after AddBook
+	return meta
+}
+
+// AudioMeta holds parsed audio metadata including author info
+type AudioMeta struct {
+	Author database.Author
+}
+
+func (s *Scanner) parseAudioMetadata(ctx context.Context, path string, book *database.Book) *AudioMeta {
+	// Get relative path from library root to find topmost folder
+	relPath, err := filepath.Rel(s.config.Library.Root, path)
+	if err != nil {
+		relPath = path
+	}
+
+	// Get topmost folder name (e.g., "Author - Title [Year]")
+	parts := strings.Split(relPath, string(filepath.Separator))
+	topmostFolder := ""
+	if len(parts) > 1 {
+		topmostFolder = parts[0]
+	} else {
+		topmostFolder = filepath.Base(filepath.Dir(path))
+	}
+
+	// Parse author and title from folder name (format: "Author - Title" or "Author_-_Title")
+	author, title := parseAudioFolderName(topmostFolder)
+
+	meta, err := s.audioParser.ParseFile(path)
+	if err != nil {
+		log.Printf("Failed to parse audio %s: %v", path, err)
+		book.Title = title
+		if book.Title == "" {
+			book.Title = topmostFolder
+		}
+		book.IsAudiobook = true
+		return &AudioMeta{Author: author}
+	}
+
+	// Set title from metadata, then parsed folder title, then folder name
+	book.Title = meta.GetTitle()
+	if book.Title == "" {
+		book.Title = title
+	}
+	if book.Title == "" {
+		book.Title = topmostFolder
+	}
+
+	// Set audiobook-specific fields
+	book.IsAudiobook = true
+	book.DurationSeconds = int(meta.EstimateDuration().Seconds())
+	book.Bitrate = meta.Bitrate
+	book.TrackCount = 1 // Single file
+
+	// Set cover if available
+	if len(meta.Cover) > 0 {
+		book.Cover = "embedded"
+		book.CoverType = meta.CoverType
+	}
+
+	return &AudioMeta{Author: author}
+}
+
+// parseAudioFolderName parses "Author - Title" or "Author_-_Title" format
+// Returns author (first/last name) and title
+func parseAudioFolderName(folderName string) (database.Author, string) {
+	// Try " - " separator first
+	sep := " - "
+	idx := strings.Index(folderName, sep)
+	if idx == -1 {
+		// Try "_-_" separator
+		sep = "_-_"
+		idx = strings.Index(folderName, sep)
+	}
+	if idx == -1 {
+		// Try " – " (en-dash)
+		sep = " – "
+		idx = strings.Index(folderName, sep)
+	}
+
+	if idx == -1 {
+		// No separator found, use whole name as title
+		return database.Author{}, folderName
+	}
+
+	authorPart := strings.TrimSpace(folderName[:idx])
+	titlePart := strings.TrimSpace(folderName[idx+len(sep):])
+
+	// Clean up title (remove year in brackets like "[2007]" or "(2007)")
+	titlePart = strings.TrimSpace(regexp.MustCompile(`\s*[\[\(]\d{4}[\]\)]$`).ReplaceAllString(titlePart, ""))
+
+	// Parse author name into first/last
+	author := parseAuthorFullName(authorPart)
+
+	return author, titlePart
+}
+
+// parseAuthorFullName splits "First Last" or "First_Last" into first/last name
+func parseAuthorFullName(fullName string) database.Author {
+	// Replace underscores with spaces
+	fullName = strings.ReplaceAll(fullName, "_", " ")
+	fullName = strings.TrimSpace(fullName)
+
+	if fullName == "" {
+		return database.Author{}
+	}
+
+	parts := strings.Fields(fullName)
+	if len(parts) == 1 {
+		return database.Author{LastName: parts[0]}
+	}
+
+	// Last word is last name, rest is first name
+	return database.Author{
+		FirstName: strings.Join(parts[:len(parts)-1], " "),
+		LastName:  parts[len(parts)-1],
+	}
 }
 
 func (s *Scanner) processZip(ctx context.Context, path string) {
@@ -549,16 +728,30 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 	}
 	defer zr.Close()
 
+	// Check if this ZIP contains audio files - if so, treat as single audiobook
+	if s.isAudioZip(zr) {
+		s.processAudioZip(ctx, path, relPath, zr)
+		return
+	}
+
 	// Create catalog entry for ZIP
 	pathParts := strings.Split(relPath, string(filepath.Separator))
-	catID, err := s.db.GetOrCreateCatalogTree(ctx, pathParts, database.CatZip)
+	catID, err := s.svc.GetOrCreateCatalogTree(ctx, pathParts, database.CatZip)
 	if err != nil {
 		log.Printf("Failed to create catalog for ZIP %s: %v", path, err)
 		return
 	}
 
-	// Collect books for batch insert
-	var booksToAdd []*database.Book
+	// Get all existing books in this catalog (1 query instead of N)
+	existingBooks, err := s.svc.GetBookMapByCatalog(ctx, catID)
+	if err != nil {
+		log.Printf("Failed to get existing books for ZIP %s: %v", path, err)
+		existingBooks = make(map[string]int64) // Continue with empty map
+	}
+
+	// Collect books for batch insert and IDs for batch availability update
+	var booksToAdd []bookWithMeta
+	var booksToVerify []int64
 	var skippedCount int64
 
 	// Process files in ZIP
@@ -572,24 +765,25 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 			continue
 		}
 
-		// Check if file already exists
+		// Check if file already exists (in-memory lookup)
 		zipPath := relPath + "/" + f.Name
-		book, err := s.db.FindBook(ctx, f.Name, zipPath)
-		if err == nil && book != nil {
-			s.db.UpdateBookAvail(ctx, book.ID, database.AvailVerified)
+		if bookID, exists := existingBooks[zipPath]; exists {
+			booksToVerify = append(booksToVerify, bookID)
 			skippedCount++
 			continue
 		}
 
-		// Create book record
-		newBook := &database.Book{
-			Filename: f.Name,
-			Path:     zipPath,
-			Format:   strings.TrimPrefix(ext, "."),
-			Filesize: int64(f.UncompressedSize64),
-			CatID:    catID,
-			CatType:  database.CatZip,
-			Avail:    database.AvailVerified,
+		// Create book record with metadata
+		bwm := bookWithMeta{
+			Book: &database.Book{
+				Filename: f.Name,
+				Path:     zipPath,
+				Format:   strings.TrimPrefix(ext, "."),
+				Filesize: int64(f.UncompressedSize64),
+				CatID:    catID,
+				CatType:  database.CatZip,
+				Avail:    database.AvailVerified,
+			},
 		}
 
 		// Parse FB2 if applicable
@@ -599,55 +793,778 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 				meta, err := s.parser.Parse(rc)
 				rc.Close()
 				if err == nil {
-					newBook.Title = meta.Title
-					newBook.Annotation = meta.Annotation
-					newBook.Lang = meta.Lang
-					newBook.DocDate = meta.DocDate
+					bwm.Book.Title = meta.Title
+					bwm.Book.Annotation = meta.Annotation
+					bwm.Book.Lang = meta.Lang
+					bwm.Book.DocDate = meta.DocDate
 					if len(meta.Cover) > 0 {
-						newBook.Cover = "embedded"
-						newBook.CoverType = meta.CoverType
+						bwm.Book.Cover = "embedded"
+						bwm.Book.CoverType = meta.CoverType
 					}
+					// Store authors/genres/series for linking after insert
+					bwm.Authors = meta.Authors
+					bwm.Genres = meta.Genres
+					bwm.Series = meta.Series
 				}
 			}
 		}
 
-		if newBook.Title == "" {
-			newBook.Title = strings.TrimSuffix(f.Name, ext)
+		if bwm.Book.Title == "" {
+			bwm.Book.Title = strings.TrimSuffix(f.Name, ext)
 		}
 
-		booksToAdd = append(booksToAdd, newBook)
+		booksToAdd = append(booksToAdd, bwm)
 	}
 
-	// Batch insert books
-	if len(booksToAdd) > 0 {
-		bookIDs, err := s.db.AddBooksBatch(ctx, booksToAdd)
-		if err != nil {
-			log.Printf("Failed to batch insert books from ZIP %s: %v", path, err)
-			// Fallback to individual inserts
-			for _, book := range booksToAdd {
-				bookID, err := s.db.AddBook(ctx, book)
+	// Execute all database operations in a single transaction for performance
+	// (reduces fsync overhead from N operations to 1)
+	var addedCount int64
+	if len(booksToAdd) > 0 || len(booksToVerify) > 0 {
+		// Extract books for batch insert
+		books := make([]*database.Book, len(booksToAdd))
+		for i := range booksToAdd {
+			books[i] = booksToAdd[i].Book
+		}
+
+		err = s.svc.Transaction(func(tx *persistence.Service) error {
+			// Batch insert books
+			if len(books) > 0 {
+				bookIDs, err := tx.AddBooksBatch(ctx, books)
 				if err != nil {
-					log.Printf("Failed to add book %s: %v", book.Filename, err)
+					return err
+				}
+
+				// Link authors, genres, series for each book
+				for i, id := range bookIDs {
+					if id <= 0 {
+						continue
+					}
+					bwm := booksToAdd[i]
+
+					// Link authors (or Unknown Author if none)
+					if len(bwm.Authors) > 0 {
+						for _, author := range bwm.Authors {
+							a, err := tx.GetOrCreateAuthor(ctx, author.FirstName, author.LastName)
+							if err == nil && a != nil {
+								tx.AddBookAuthor(ctx, id, a.ID)
+							}
+						}
+					} else {
+						tx.AddBookAuthor(ctx, id, 1) // Unknown author
+					}
+
+					// Link genres
+					for _, genreCode := range bwm.Genres {
+						g, err := tx.GetOrCreateGenre(ctx, genreCode, "", "")
+						if err == nil && g != nil {
+							tx.AddBookGenre(ctx, id, g.ID)
+						}
+					}
+
+					// Link series
+					for _, ser := range bwm.Series {
+						se, err := tx.GetOrCreateSeries(ctx, ser.Name)
+						if err == nil && se != nil {
+							tx.AddBookSeries(ctx, id, se.ID, ser.Number)
+						}
+					}
+				}
+				addedCount = int64(len(bookIDs))
+			}
+
+			// Batch update availability for existing books
+			if len(booksToVerify) > 0 {
+				if err := tx.UpdateBookAvailBatch(ctx, booksToVerify, database.AvailVerified); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+
+		if err != nil {
+			log.Printf("Failed to process ZIP %s: %v", path, err)
+			// Fallback to individual inserts without transaction
+			for _, bwm := range booksToAdd {
+				bookID, err := s.svc.AddBook(ctx, bwm.Book)
+				if err != nil {
+					log.Printf("Failed to add book %s: %v", bwm.Book.Filename, err)
 					continue
 				}
-				s.db.AddBookAuthor(ctx, bookID, 1)
+				// Link authors
+				if len(bwm.Authors) > 0 {
+					for _, author := range bwm.Authors {
+						a, err := s.svc.GetOrCreateAuthor(ctx, author.FirstName, author.LastName)
+						if err == nil && a != nil {
+							s.svc.AddBookAuthor(ctx, bookID, a.ID)
+						}
+					}
+				} else {
+					s.svc.AddBookAuthor(ctx, bookID, 1)
+				}
+				// Link genres
+				for _, genreCode := range bwm.Genres {
+					g, err := s.svc.GetOrCreateGenre(ctx, genreCode, "", "")
+					if err == nil && g != nil {
+						s.svc.AddBookGenre(ctx, bookID, g.ID)
+					}
+				}
+				// Link series
+				for _, ser := range bwm.Series {
+					se, err := s.svc.GetOrCreateSeries(ctx, ser.Name)
+					if err == nil && se != nil {
+						s.svc.AddBookSeries(ctx, bookID, se.ID, ser.Number)
+					}
+				}
 				atomic.AddInt64(&s.stats.BooksAdded, 1)
 				atomic.AddInt64(&s.stats.BooksInArchives, 1)
 			}
 		} else {
-			// Batch insert author links
-			authorPairs := make([][2]int64, len(bookIDs))
-			for i, id := range bookIDs {
-				authorPairs[i] = [2]int64{id, 1} // Unknown author ID = 1
-			}
-			if err := s.db.AddBookAuthorsBatch(ctx, authorPairs); err != nil {
-				log.Printf("Failed to batch insert authors: %v", err)
-			}
-			atomic.AddInt64(&s.stats.BooksAdded, int64(len(bookIDs)))
-			atomic.AddInt64(&s.stats.BooksInArchives, int64(len(bookIDs)))
+			atomic.AddInt64(&s.stats.BooksAdded, addedCount)
+			atomic.AddInt64(&s.stats.BooksInArchives, addedCount)
 		}
 	}
 
 	atomic.AddInt64(&s.stats.BooksSkipped, skippedCount)
+	atomic.AddInt64(&s.stats.ArchivesScanned, 1)
+}
+
+// isAudioZip checks if a ZIP contains audio files
+func (s *Scanner) isAudioZip(zr *zip.ReadCloser) bool {
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if s.audioExtSet[ext] {
+			return true
+		}
+	}
+	return false
+}
+
+// process7z processes a 7z archive
+func (s *Scanner) process7z(ctx context.Context, path string) {
+	relPath, err := filepath.Rel(s.config.Library.Root, path)
+	if err != nil {
+		relPath = path
+	}
+
+	// Check if already scanned (using in-memory cache)
+	if !s.config.Library.RescanZip {
+		if _, ok := s.knownZips[relPath]; ok {
+			atomic.AddInt64(&s.stats.ArchivesSkipped, 1)
+			return
+		}
+	}
+
+	szr, err := sevenzip.OpenReader(path)
+	if err != nil {
+		log.Printf("Failed to open 7z %s: %v", path, err)
+		atomic.AddInt64(&s.stats.BadArchives, 1)
+		return
+	}
+	defer szr.Close()
+
+	// Check if this 7z contains audio files - if so, treat as single audiobook
+	if s.isAudio7z(szr) {
+		s.processAudio7z(ctx, path, relPath, szr)
+		return
+	}
+
+	// Create catalog entry for 7z
+	pathParts := strings.Split(relPath, string(filepath.Separator))
+	catID, err := s.svc.GetOrCreateCatalogTree(ctx, pathParts, database.CatZip)
+	if err != nil {
+		log.Printf("Failed to create catalog for 7z %s: %v", path, err)
+		return
+	}
+
+	// Get all existing books in this catalog (1 query instead of N)
+	existingBooks, err := s.svc.GetBookMapByCatalog(ctx, catID)
+	if err != nil {
+		log.Printf("Failed to get existing books for 7z %s: %v", path, err)
+		existingBooks = make(map[string]int64)
+	}
+
+	// Collect books for batch insert
+	var booksToAdd []bookWithMeta
+	var booksToVerify []int64
+	var skippedCount int64
+
+	for _, f := range szr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if !s.extSet[ext] {
+			continue
+		}
+
+		// Check if file already exists
+		szPath := relPath + "/" + f.Name
+		if bookID, exists := existingBooks[szPath]; exists {
+			booksToVerify = append(booksToVerify, bookID)
+			skippedCount++
+			continue
+		}
+
+		// Create book record
+		bwm := bookWithMeta{
+			Book: &database.Book{
+				Filename: f.Name,
+				Path:     szPath,
+				Format:   strings.TrimPrefix(ext, "."),
+				Filesize: int64(f.UncompressedSize),
+				CatID:    catID,
+				CatType:  database.CatZip,
+				Avail:    database.AvailVerified,
+			},
+		}
+
+		// Parse FB2 if applicable
+		if ext == ".fb2" {
+			rc, err := f.Open()
+			if err == nil {
+				meta, err := s.parser.Parse(rc)
+				rc.Close()
+				if err == nil {
+					bwm.Book.Title = meta.Title
+					bwm.Book.Annotation = meta.Annotation
+					bwm.Book.Lang = meta.Lang
+					bwm.Book.DocDate = meta.DocDate
+					if len(meta.Cover) > 0 {
+						bwm.Book.Cover = "embedded"
+						bwm.Book.CoverType = meta.CoverType
+					}
+					bwm.Authors = meta.Authors
+					bwm.Genres = meta.Genres
+					bwm.Series = meta.Series
+				}
+			}
+		}
+
+		if bwm.Book.Title == "" {
+			bwm.Book.Title = strings.TrimSuffix(f.Name, ext)
+		}
+
+		booksToAdd = append(booksToAdd, bwm)
+	}
+
+	// Execute all database operations in a single transaction
+	var addedCount int64
+	if len(booksToAdd) > 0 || len(booksToVerify) > 0 {
+		books := make([]*database.Book, len(booksToAdd))
+		for i := range booksToAdd {
+			books[i] = booksToAdd[i].Book
+		}
+
+		err = s.svc.Transaction(func(tx *persistence.Service) error {
+			if len(books) > 0 {
+				bookIDs, err := tx.AddBooksBatch(ctx, books)
+				if err != nil {
+					return fmt.Errorf("batch insert: %w", err)
+				}
+
+				// Link authors, genres, series
+				for i, bwm := range booksToAdd {
+					if i >= len(bookIDs) {
+						break
+					}
+					bookID := bookIDs[i]
+					if bookID == 0 {
+						continue
+					}
+
+					// Link authors
+					if len(bwm.Authors) > 0 {
+						for _, a := range bwm.Authors {
+							author, err := tx.GetOrCreateAuthor(ctx, a.FirstName, a.LastName)
+							if err == nil && author != nil && author.ID != 0 {
+								tx.AddBookAuthor(ctx, bookID, author.ID)
+							}
+						}
+					} else {
+						tx.AddBookAuthor(ctx, bookID, 1) // Unknown author
+					}
+
+					// Link genres
+					for _, genreCode := range bwm.Genres {
+						g, err := tx.GetOrCreateGenre(ctx, genreCode, "", "")
+						if err == nil && g != nil {
+							tx.AddBookGenre(ctx, bookID, g.ID)
+						}
+					}
+
+					// Link series
+					for _, si := range bwm.Series {
+						series, err := tx.GetOrCreateSeries(ctx, si.Name)
+						if err == nil && series != nil {
+							tx.AddBookSeries(ctx, bookID, series.ID, si.Number)
+						}
+					}
+				}
+				addedCount = int64(len(bookIDs))
+			}
+
+			// Update availability for existing books
+			if len(booksToVerify) > 0 {
+				if err := tx.UpdateBookAvailBatch(ctx, booksToVerify, database.AvailVerified); err != nil {
+					log.Printf("Failed to update availability for 7z %s: %v", path, err)
+				}
+			}
+
+			return nil
+		})
+
+		if err != nil {
+			log.Printf("Transaction failed for 7z %s: %v", path, err)
+		} else {
+			atomic.AddInt64(&s.stats.BooksAdded, addedCount)
+			atomic.AddInt64(&s.stats.BooksInArchives, addedCount)
+		}
+	}
+
+	atomic.AddInt64(&s.stats.BooksSkipped, skippedCount)
+	atomic.AddInt64(&s.stats.ArchivesScanned, 1)
+}
+
+// isAudio7z checks if a 7z contains audio files
+func (s *Scanner) isAudio7z(szr *sevenzip.ReadCloser) bool {
+	for _, f := range szr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if s.audioExtSet[ext] {
+			return true
+		}
+	}
+	return false
+}
+
+// processAudio7z processes a 7z containing audio files as a single audiobook
+func (s *Scanner) processAudio7z(ctx context.Context, path, relPath string, szr *sevenzip.ReadCloser) {
+	// Check if this audiobook already exists
+	existingBook, err := s.svc.FindBook(ctx, filepath.Base(path), filepath.Dir(relPath))
+	if err == nil && existingBook != nil {
+		s.svc.UpdateBookAvail(ctx, existingBook.ID, database.AvailVerified)
+		atomic.AddInt64(&s.stats.BooksSkipped, 1)
+		atomic.AddInt64(&s.stats.ArchivesScanned, 1)
+		return
+	}
+
+	// Create catalog entry for the 7z's parent directory
+	dir := filepath.Dir(relPath)
+	var catID int64
+	if dir != "." && dir != "" {
+		pathParts := strings.Split(dir, string(filepath.Separator))
+		catID, err = s.svc.GetOrCreateCatalogTree(ctx, pathParts, database.CatNormal)
+		if err != nil {
+			log.Printf("Failed to create catalog for audio 7z %s: %v", path, err)
+		}
+	}
+
+	// First pass: find top-level folder and collect audio files
+	type trackInfo struct {
+		name     string
+		relPath  string // path relative to top-level folder (for structure)
+		fullPath string // full path inside archive (for download)
+		duration int
+		size     int64
+	}
+	var tracks []trackInfo
+	var totalSize int64
+	var totalDuration int
+	var topLevelFolder string
+
+	for _, f := range szr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if !s.audioExtSet[ext] {
+			continue
+		}
+
+		// Find top-level folder from first audio file
+		if topLevelFolder == "" {
+			parts := strings.Split(f.Name, "/")
+			if len(parts) > 1 {
+				topLevelFolder = parts[0]
+			}
+		}
+
+		// Estimate duration from file size
+		bitrate := 128
+		switch strings.TrimPrefix(ext, ".") {
+		case "m4b", "m4a", "aac":
+			bitrate = 64
+		case "flac":
+			bitrate = 800
+		case "ogg", "opus":
+			bitrate = 96
+		}
+		duration := int(float64(f.UncompressedSize) * 8 / float64(bitrate*1000))
+
+		// Get path relative to top-level folder
+		relFilePath := f.Name
+		if topLevelFolder != "" && strings.HasPrefix(f.Name, topLevelFolder+"/") {
+			relFilePath = strings.TrimPrefix(f.Name, topLevelFolder+"/")
+		}
+
+		tracks = append(tracks, trackInfo{
+			name:     filepath.Base(f.Name),
+			relPath:  relFilePath,
+			fullPath: f.Name,
+			duration: duration,
+			size:     int64(f.UncompressedSize),
+		})
+		totalSize += int64(f.UncompressedSize)
+		totalDuration += duration
+	}
+
+	if len(tracks) == 0 {
+		atomic.AddInt64(&s.stats.ArchivesScanned, 1)
+		return
+	}
+
+	// Parse author and title from top-level folder name
+	var author database.Author
+	var title string
+	if topLevelFolder != "" {
+		author, title = parseAudioFolderName(topLevelFolder)
+	}
+	if title == "" {
+		// Fallback to 7z filename
+		szName := strings.TrimSuffix(filepath.Base(path), ".7z")
+		author, title = parseAudioFolderName(szName)
+		if title == "" {
+			title = szName
+		}
+	}
+
+	// Build audiobook structure
+	structure := AudiobookStructure{}
+
+	hasSubdirs := false
+	for _, t := range tracks {
+		if strings.Contains(t.relPath, "/") {
+			hasSubdirs = true
+			break
+		}
+	}
+
+	if hasSubdirs {
+		structure.Type = "collection"
+		partMap := make(map[string]*AudiobookPart)
+		var partOrder []string
+
+		for _, t := range tracks {
+			partName := filepath.Dir(t.relPath)
+			if idx := strings.Index(partName, "/"); idx > 0 {
+				partName = partName[:idx]
+			}
+
+			if _, exists := partMap[partName]; !exists {
+				partMap[partName] = &AudiobookPart{Name: partName}
+				partOrder = append(partOrder, partName)
+			}
+			part := partMap[partName]
+			part.Tracks = append(part.Tracks, AudiobookTrack{
+				Name:     t.name,
+				Path:     t.fullPath,
+				Duration: t.duration,
+				Size:     t.size,
+			})
+			part.Duration += t.duration
+		}
+
+		for _, name := range partOrder {
+			structure.Parts = append(structure.Parts, *partMap[name])
+		}
+	} else {
+		structure.Type = "book"
+		for _, t := range tracks {
+			structure.Tracks = append(structure.Tracks, AudiobookTrack{
+				Name:     t.name,
+				Path:     t.fullPath,
+				Duration: t.duration,
+				Size:     t.size,
+			})
+		}
+	}
+
+	// Serialize structure to JSON
+	chaptersJSON, err := json.Marshal(structure)
+	if err != nil {
+		log.Printf("Failed to marshal audiobook structure for %s: %v", path, err)
+		chaptersJSON = nil
+	}
+	chaptersStr := string(chaptersJSON)
+
+	// Create the audiobook entry
+	book := &database.Book{
+		Filename:        filepath.Base(path),
+		Path:            filepath.Dir(relPath),
+		Format:          "7z",
+		Filesize:        totalSize,
+		CatID:           catID,
+		CatType:         database.CatNormal,
+		Avail:           database.AvailVerified,
+		Title:           title,
+		IsAudiobook:     true,
+		DurationSeconds: totalDuration,
+		TrackCount:      len(tracks),
+		Chapters:        chaptersStr,
+	}
+
+	// Insert book
+	bookID, err := s.svc.AddBook(ctx, book)
+	if err != nil {
+		log.Printf("Failed to add audiobook %s: %v", path, err)
+		atomic.AddInt64(&s.stats.ArchivesScanned, 1)
+		return
+	}
+
+	// Link author
+	if author.FirstName != "" || author.LastName != "" {
+		a, err := s.svc.GetOrCreateAuthor(ctx, author.FirstName, author.LastName)
+		if err == nil && a != nil {
+			s.svc.AddBookAuthor(ctx, bookID, a.ID)
+		}
+	} else {
+		s.svc.AddBookAuthor(ctx, bookID, 1) // Unknown author
+	}
+
+	atomic.AddInt64(&s.stats.BooksAdded, 1)
+	atomic.AddInt64(&s.stats.ArchivesScanned, 1)
+}
+
+// AudiobookStructure represents the structure of an audiobook ZIP
+type AudiobookStructure struct {
+	Type  string           `json:"type"` // "book" or "collection"
+	Parts []AudiobookPart  `json:"parts,omitempty"`
+	Tracks []AudiobookTrack `json:"tracks,omitempty"`
+}
+
+// AudiobookPart represents a part/section of a collection
+type AudiobookPart struct {
+	Name     string           `json:"name"`
+	Duration int              `json:"duration"` // seconds
+	Tracks   []AudiobookTrack `json:"tracks"`
+}
+
+// AudiobookTrack represents a single audio track
+type AudiobookTrack struct {
+	Name     string `json:"name"`
+	Path     string `json:"path"`     // full path inside archive
+	Duration int    `json:"duration"` // seconds
+	Size     int64  `json:"size"`     // bytes
+}
+
+// processAudioZip processes a ZIP containing audio files as a single audiobook
+// Expected structure: TopFolder (Author - Title) / [SubFolders (parts)] / audio files
+func (s *Scanner) processAudioZip(ctx context.Context, path, relPath string, zr *zip.ReadCloser) {
+	// Check if this audiobook already exists
+	existingBook, err := s.svc.FindBook(ctx, filepath.Base(path), filepath.Dir(relPath))
+	if err == nil && existingBook != nil {
+		s.svc.UpdateBookAvail(ctx, existingBook.ID, database.AvailVerified)
+		atomic.AddInt64(&s.stats.BooksSkipped, 1)
+		atomic.AddInt64(&s.stats.ArchivesScanned, 1)
+		return
+	}
+
+	// Create catalog entry for the ZIP's parent directory
+	dir := filepath.Dir(relPath)
+	var catID int64
+	if dir != "." && dir != "" {
+		pathParts := strings.Split(dir, string(filepath.Separator))
+		catID, err = s.svc.GetOrCreateCatalogTree(ctx, pathParts, database.CatNormal)
+		if err != nil {
+			log.Printf("Failed to create catalog for audio ZIP %s: %v", path, err)
+		}
+	}
+
+	// First pass: find top-level folder and collect audio files
+	type trackInfo struct {
+		name     string
+		relPath  string // path relative to top-level folder (for structure)
+		fullPath string // full path inside archive (for download)
+		duration int
+		size     int64
+	}
+	var tracks []trackInfo
+	var totalSize int64
+	var totalDuration int
+	var topLevelFolder string
+
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if !s.audioExtSet[ext] {
+			continue
+		}
+
+		// Find top-level folder from first audio file
+		if topLevelFolder == "" {
+			parts := strings.Split(f.Name, "/")
+			if len(parts) > 1 {
+				topLevelFolder = parts[0]
+			}
+		}
+
+		// Estimate duration from file size
+		bitrate := 128
+		switch strings.TrimPrefix(ext, ".") {
+		case "m4b", "m4a", "aac":
+			bitrate = 64
+		case "flac":
+			bitrate = 800
+		case "ogg", "opus":
+			bitrate = 96
+		}
+		duration := int(float64(f.UncompressedSize64) * 8 / float64(bitrate*1000))
+
+		// Get path relative to top-level folder
+		relFilePath := f.Name
+		if topLevelFolder != "" && strings.HasPrefix(f.Name, topLevelFolder+"/") {
+			relFilePath = strings.TrimPrefix(f.Name, topLevelFolder+"/")
+		}
+
+		tracks = append(tracks, trackInfo{
+			name:     filepath.Base(f.Name),
+			relPath:  relFilePath,
+			fullPath: f.Name,
+			duration: duration,
+			size:     int64(f.UncompressedSize64),
+		})
+		totalSize += int64(f.UncompressedSize64)
+		totalDuration += duration
+	}
+
+	if len(tracks) == 0 {
+		atomic.AddInt64(&s.stats.ArchivesScanned, 1)
+		return
+	}
+
+	// Parse author and title from top-level folder name
+	var author database.Author
+	var title string
+	if topLevelFolder != "" {
+		author, title = parseAudioFolderName(topLevelFolder)
+	}
+	if title == "" {
+		// Fallback to ZIP filename
+		zipName := strings.TrimSuffix(filepath.Base(path), ".zip")
+		author, title = parseAudioFolderName(zipName)
+		if title == "" {
+			title = zipName
+		}
+	}
+
+	// Build audiobook structure
+	structure := AudiobookStructure{}
+
+	// Check if files are in subdirectories (under top-level folder) = collection
+	// or directly in top-level folder = simple book
+	hasSubdirs := false
+	for _, t := range tracks {
+		if strings.Contains(t.relPath, "/") {
+			hasSubdirs = true
+			break
+		}
+	}
+
+	if hasSubdirs {
+		// Collection: group by first subdirectory (part/chapter name)
+		structure.Type = "collection"
+		partMap := make(map[string]*AudiobookPart)
+		var partOrder []string
+
+		for _, t := range tracks {
+			// Get first directory component as part name
+			partName := filepath.Dir(t.relPath)
+			if idx := strings.Index(partName, "/"); idx > 0 {
+				partName = partName[:idx]
+			}
+
+			if _, exists := partMap[partName]; !exists {
+				partMap[partName] = &AudiobookPart{Name: partName}
+				partOrder = append(partOrder, partName)
+			}
+			part := partMap[partName]
+			part.Tracks = append(part.Tracks, AudiobookTrack{
+				Name:     t.name,
+				Path:     t.fullPath,
+				Duration: t.duration,
+				Size:     t.size,
+			})
+			part.Duration += t.duration
+		}
+
+		for _, name := range partOrder {
+			structure.Parts = append(structure.Parts, *partMap[name])
+		}
+	} else {
+		// Simple book: flat list of tracks
+		structure.Type = "book"
+		for _, t := range tracks {
+			structure.Tracks = append(structure.Tracks, AudiobookTrack{
+				Name:     t.name,
+				Path:     t.fullPath,
+				Duration: t.duration,
+				Size:     t.size,
+			})
+		}
+	}
+
+	// Serialize structure to JSON
+	chaptersJSON, err := json.Marshal(structure)
+	if err != nil {
+		log.Printf("Failed to marshal audiobook structure for %s: %v", path, err)
+		chaptersJSON = nil
+	}
+	chaptersStr := string(chaptersJSON)
+
+	// Create the audiobook entry
+	book := &database.Book{
+		Filename:        filepath.Base(path),
+		Path:            filepath.Dir(relPath),
+		Format:          "zip",
+		Filesize:        totalSize,
+		CatID:           catID,
+		CatType:         database.CatNormal,
+		Avail:           database.AvailVerified,
+		Title:           title,
+		IsAudiobook:     true,
+		DurationSeconds: totalDuration,
+		TrackCount:      len(tracks),
+		Chapters:        chaptersStr,
+	}
+
+	// Insert book
+	bookID, err := s.svc.AddBook(ctx, book)
+	if err != nil {
+		log.Printf("Failed to add audiobook %s: %v", path, err)
+		atomic.AddInt64(&s.stats.ArchivesScanned, 1)
+		return
+	}
+
+	// Link author
+	if author.FirstName != "" || author.LastName != "" {
+		a, err := s.svc.GetOrCreateAuthor(ctx, author.FirstName, author.LastName)
+		if err == nil && a != nil {
+			s.svc.AddBookAuthor(ctx, bookID, a.ID)
+		}
+	} else {
+		s.svc.AddBookAuthor(ctx, bookID, 1) // Unknown author
+	}
+
+	atomic.AddInt64(&s.stats.BooksAdded, 1)
 	atomic.AddInt64(&s.stats.ArchivesScanned, 1)
 }

@@ -327,6 +327,7 @@ func (feed *Feed) Render() ([]byte, error) {
 // MimeType returns the MIME type for a book format
 func MimeType(format string) string {
 	switch format {
+	// Ebook formats
 	case "fb2":
 		return "application/fb2+xml"
 	case "epub":
@@ -343,9 +344,36 @@ func MimeType(format string) string {
 		return "application/rtf"
 	case "doc":
 		return "application/msword"
+	// Audio formats
+	case "mp3":
+		return "audio/mpeg"
+	case "m4b", "m4a", "aac":
+		return "audio/mp4"
+	case "flac":
+		return "audio/flac"
+	case "ogg", "opus":
+		return "audio/ogg"
+	case "wav":
+		return "audio/wav"
 	default:
 		return "application/octet-stream"
 	}
+}
+
+// FormatDuration formats duration in seconds as "Xh Ym"
+func FormatDuration(seconds int) string {
+	if seconds <= 0 {
+		return ""
+	}
+	h := seconds / 3600
+	m := (seconds % 3600) / 60
+	if h > 0 {
+		if m > 0 {
+			return fmt.Sprintf("%dh %dm", h, m)
+		}
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dm", m)
 }
 
 func formatSize(bytes int64) string {
