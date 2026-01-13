@@ -3228,6 +3228,9 @@ function goToPage(page) {
                         <i class="fas fa-music"></i>
                         <span class="track-name">{{$track.Name}}</span>
                         <span class="track-duration">{{formatDuration $track.Duration}}</span>
+                        <button class="track-play" onclick="playTrack(this, '{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}')" title="Play">
+                            <i class="fas fa-play"></i>
+                        </button>
                         <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" class="track-download" title="Download">
                             <i class="fas fa-download"></i>
                         </a>
@@ -3248,6 +3251,9 @@ function goToPage(page) {
                 <i class="fas fa-music"></i>
                 <span class="track-name">{{$track.Name}}</span>
                 <span class="track-duration">{{formatDuration $track.Duration}}</span>
+                <button class="track-play" onclick="playTrack(this, '{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}')" title="Play">
+                    <i class="fas fa-play"></i>
+                </button>
                 <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" class="track-download" title="Download">
                     <i class="fas fa-download"></i>
                 </a>
@@ -3259,12 +3265,58 @@ function goToPage(page) {
     {{end}}
 </div>
 
+<audio id="audioPlayer" style="display:none;"></audio>
+
 <script>
 const bookId = {{.Book.ID}};
 const webPrefix = "{{.WebPrefix}}";
 const i18n = {
     downloadsel: "{{t "audio.downloadsel"}}"
 };
+
+let currentPlayBtn = null;
+const audioPlayer = document.getElementById('audioPlayer');
+
+function playTrack(btn, url) {
+    const icon = btn.querySelector('i');
+
+    // If clicking the same track that's playing, toggle pause/play
+    if (currentPlayBtn === btn) {
+        if (audioPlayer.paused) {
+            audioPlayer.play();
+            icon.classList.remove('fa-play');
+            icon.classList.add('fa-pause');
+        } else {
+            audioPlayer.pause();
+            icon.classList.remove('fa-pause');
+            icon.classList.add('fa-play');
+        }
+        return;
+    }
+
+    // Stop previous track
+    if (currentPlayBtn) {
+        const prevIcon = currentPlayBtn.querySelector('i');
+        prevIcon.classList.remove('fa-pause');
+        prevIcon.classList.add('fa-play');
+    }
+
+    // Play new track
+    currentPlayBtn = btn;
+    audioPlayer.src = url;
+    audioPlayer.play();
+    icon.classList.remove('fa-play');
+    icon.classList.add('fa-pause');
+}
+
+audioPlayer.addEventListener('ended', function() {
+    if (currentPlayBtn) {
+        const icon = currentPlayBtn.querySelector('i');
+        icon.classList.remove('fa-pause');
+        icon.classList.add('fa-play');
+        currentPlayBtn = null;
+    }
+});
 
 function updateSelection() {
     const checkboxes = document.querySelectorAll('.track-select:checked');
@@ -3500,6 +3552,19 @@ function downloadSelected() {
     height: 16px;
     cursor: pointer;
     flex-shrink: 0;
+}
+.track-play {
+    background: none;
+    border: none;
+    color: var(--success);
+    padding: 5px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.track-play:hover {
+    background: var(--success);
+    color: white;
 }
 .track-download {
     color: var(--primary);
