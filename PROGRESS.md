@@ -5,6 +5,18 @@
 
 ---
 
+### Revision 21 - 2026-01-10
+**Changes:**
+- Fixed audiobook filter showing all authors instead of only audiobook authors
+  - `GetFilterOptions` was missing `AudioOnly` filter application
+  - Added `query.Filters.WithAudioOnly()` when `opts.AudioOnly` is true
+  - Fixes Chrome crash on mobile when opening author filter dropdown
+
+**Files Modified:**
+- `internal/infrastructure/persistence/service.go` - Added AudioOnly filter to GetFilterOptions
+
+---
+
 ### Revision 20 - 2026-01-08
 **Changes:**
 - Implemented file logging from config with rolling support

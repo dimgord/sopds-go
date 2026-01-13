@@ -4,11 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Rules
 
-**IMPORTANT: Always document changes!**
+**CRITICAL: ALWAYS DOCUMENT CHANGES IMMEDIATELY!**
 - After ANY code changes, update PROGRESS.md with what was changed
 - Update CLAUDE.md if architecture or major features change
-- Do NOT wait for user to ask - document immediately after implementation
+- Do NOT wait for user to ask - document IMMEDIATELY after implementation
 - Include: files modified, new methods/functions, bug fixes, performance changes
+- NO EXCUSES - if you wrote code, document it in the same response
+- This is NON-NEGOTIABLE - user should NEVER have to remind you
 
 ---
 
