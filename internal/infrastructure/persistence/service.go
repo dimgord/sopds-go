@@ -293,6 +293,9 @@ func (s *Service) GetFilterOptions(ctx context.Context, opts SearchOptions) (*Fi
 	if opts.NewPeriod > 0 {
 		query.Filters.WithNewPeriod(opts.NewPeriod)
 	}
+	if opts.AudioOnly {
+		query.Filters.WithAudioOnly()
+	}
 
 	db := s.db.DB
 
