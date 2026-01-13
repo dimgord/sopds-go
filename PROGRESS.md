@@ -5,6 +5,20 @@
 
 ---
 
+### Revision 22 - 2026-01-10
+**Changes:**
+- Added play buttons for audio tracks in audiobook detail page
+  - Green play button next to each track's download button
+  - Click to play/pause, icon toggles between play/pause
+  - Hidden HTML5 audio element for streaming
+  - Auto-stops previous track when playing new one
+  - Resets icon when track ends
+
+**Files Modified:**
+- `internal/server/web.go` - Added track-play button, playTrack() JS function, audio element, CSS styles
+
+---
+
 ### Revision 21 - 2026-01-10
 **Changes:**
 - Fixed audiobook filter showing all authors instead of only audiobook authors
