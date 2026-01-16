@@ -286,16 +286,29 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 				}
 				msg += "\nDelete these archives and their books from the database?"
 
-				// Ask for confirmation if callback is set
-				if s.confirmCallback != nil {
+				// Check auto_clean config: ask (default), yes, no
+				autoClean := strings.ToLower(s.config.Scanner.AutoClean)
+				shouldDelete := true
+
+				if autoClean == "no" {
+					log.Printf("Skipping removal of %d archives (auto_clean=no)", len(removedCatIDs))
+					shouldDelete = false
+				} else if autoClean == "yes" {
+					log.Printf("Auto-cleaning %d missing archives (auto_clean=yes)", len(removedCatIDs))
+				} else if s.confirmCallback != nil {
+					// Default: ask for confirmation
 					if !s.confirmCallback(msg) {
 						log.Printf("Skipping removal of %d archives (user cancelled)", len(removedCatIDs))
-						// Restore the paths to knownZips so they are not re-scanned
-						for i, path := range removedPaths {
-							s.knownZips[path] = removedCatIDs[i]
-						}
-						removedCatIDs = nil
+						shouldDelete = false
 					}
+				}
+
+				if !shouldDelete {
+					// Restore the paths to knownZips so they are not re-scanned
+					for i, path := range removedPaths {
+						s.knownZips[path] = removedCatIDs[i]
+					}
+					removedCatIDs = nil
 				}
 
 				if len(removedCatIDs) > 0 {
