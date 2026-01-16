@@ -286,7 +286,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 func printProgress(info scanner.ProgressInfo) {
 	switch info.Phase {
 	case "counting":
-		fmt.Printf("\rCounting files...")
+		fmt.Printf("\rCounting files...                                                                ")
+	case "loading":
+		fmt.Printf("\rLoading catalogs from database...                                                ")
+	case "duplicates":
+		fmt.Printf("\rDetecting duplicates...                                                          ")
 	case "scanning":
 		pct := 0.0
 		if info.TotalFiles > 0 {
@@ -335,6 +339,7 @@ func printProgress(info scanner.ProgressInfo) {
 			bar, pct, info.ProcessedFiles, info.TotalFiles,
 			info.BooksAdded, info.BooksSkipped, formatDuration(info.Elapsed))
 	}
+	os.Stdout.Sync()
 }
 
 func formatDuration(d time.Duration) string {

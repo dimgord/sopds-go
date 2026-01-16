@@ -5,6 +5,25 @@
 
 ---
 
+### Revision 24 - 2026-01-10
+**Changes:**
+- Added more progress phases during scan
+  - "Loading catalogs from database..." - when loading ZIP catalog cache
+  - "Detecting duplicates..." - when running duplicate detection
+  - Previously these phases showed nothing, making scan appear stuck
+- Fixed progress not displaying due to buffering and throttling
+  - Added `os.Stdout.Sync()` to flush output immediately
+  - Only throttle "scanning" phase, always show phase changes
+- Skip duplicate detection if no new books added (major performance fix)
+  - Duplicate detection on 568K books was taking 3+ minutes
+  - Now skips entirely when BooksAdded == 0
+
+**Files Modified:**
+- `internal/scanner/scanner.go` - Added phase reports, fixed throttle, skip duplicates if no new books
+- `cmd/sopds/main.go` - Handle new phases in printProgress, add stdout sync
+
+---
+
 ### Revision 23 - 2026-01-10
 **Changes:**
 - Added `scanner.auto_clean` config option for missing archives
