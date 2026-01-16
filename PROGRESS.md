@@ -5,6 +5,25 @@
 
 ---
 
+### Revision 23 - 2026-01-10
+**Changes:**
+- Added `scanner.auto_clean` config option for missing archives
+  - `ask` (default) - prompt user for confirmation
+  - `yes` - auto-delete without asking
+  - `no` - skip check entirely, never delete
+- Fixed DeleteInCatalogs not deleting catalog entries
+  - Was only deleting books, leaving catalog entries in DB
+  - Now deletes both books AND catalog entries
+  - Fixes repeated prompts about missing archives on every scan
+
+**Files Modified:**
+- `internal/config/config.go` - Added AutoClean field to ScannerConfig
+- `internal/scanner/scanner.go` - Check auto_clean config before prompting
+- `internal/infrastructure/persistence/book_repository.go` - DeleteInCatalogs now also deletes catalogs
+- `config.yaml` - Added auto_clean: yes setting
+
+---
+
 ### Revision 22 - 2026-01-10
 **Changes:**
 - Added play buttons for audio tracks in audiobook detail page

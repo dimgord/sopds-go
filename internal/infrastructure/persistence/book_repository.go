@@ -505,20 +505,32 @@ func (r *BookRepository) DeleteUnavailable(ctx context.Context, physical bool) (
 	return result.RowsAffected, nil
 }
 
-// DeleteInCatalogs deletes all books in the specified catalogs
+// DeleteInCatalogs deletes all books in the specified catalogs and the catalogs themselves
 func (r *BookRepository) DeleteInCatalogs(ctx context.Context, catalogIDs []int64) (int64, error) {
 	if len(catalogIDs) == 0 {
 		return 0, nil
 	}
 
+	// Delete books in these catalogs
 	result := r.db.WithContext(ctx).
 		Where("cat_id IN ?", catalogIDs).
 		Delete(&BookModel{})
 
 	if result.Error != nil {
-		return 0, fmt.Errorf("delete in catalogs: %w", result.Error)
+		return 0, fmt.Errorf("delete books in catalogs: %w", result.Error)
 	}
-	return result.RowsAffected, nil
+	booksDeleted := result.RowsAffected
+
+	// Also delete the catalog entries themselves
+	catResult := r.db.WithContext(ctx).
+		Where("cat_id IN ?", catalogIDs).
+		Delete(&CatalogModel{})
+
+	if catResult.Error != nil {
+		return booksDeleted, fmt.Errorf("delete catalogs: %w", catResult.Error)
+	}
+
+	return booksDeleted, nil
 }
 
 // --- Duplicate Management ---

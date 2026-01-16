@@ -208,6 +208,7 @@ scanner:
   on_start: false             # Scan on server start
   schedule: ""                # Cron schedule (e.g., "0 2 * * *")
   duplicates: normal          # none, normal, strong, clear
+  auto_clean: ask             # Missing archives: ask, yes (auto-delete), no (skip)
 
 site:
   title: "SOPDS Library"

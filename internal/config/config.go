@@ -73,8 +73,9 @@ type ScannerConfig struct {
 	Workers    int    `yaml:"workers"`
 	Schedule   string `yaml:"schedule"`
 	OnStart    bool   `yaml:"on_start"`
-	Duplicates string `yaml:"duplicates"` // none, normal, strong, clear
+	Duplicates string `yaml:"duplicates"`  // none, normal, strong, clear
 	PIDFile    string `yaml:"pid_file"`
+	AutoClean  string `yaml:"auto_clean"`  // ask (default), yes, no - for missing archives
 }
 
 // SiteConfig holds site metadata
