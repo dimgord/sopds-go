@@ -124,8 +124,9 @@ func (s *Scanner) reportProgress(phase string) {
 	}
 
 	now := time.Now()
-	if now.Sub(s.lastProgress) < 500*time.Millisecond {
-		return // Rate limit progress updates
+	// Always report phase changes, only throttle "scanning" phase
+	if phase == "scanning" && now.Sub(s.lastProgress) < 500*time.Millisecond {
+		return // Rate limit scanning progress updates
 	}
 	s.lastProgress = now
 
@@ -243,6 +244,7 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 	log.Printf("Found %d files to process", totalFiles)
 
 	// Load all known ZIP catalogs into memory for fast lookup
+	s.reportProgress("loading")
 	s.knownZips = make(map[string]int64)
 	if !s.config.Library.RescanZip {
 		var err error
@@ -388,8 +390,8 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 		log.Printf("Scan walk error: %v", err)
 	}
 
-	// Mark duplicates
-	if s.config.Scanner.Duplicates != "none" {
+	// Mark duplicates (skip if no new books added)
+	if s.config.Scanner.Duplicates != "none" && atomic.LoadInt64(&s.stats.BooksAdded) > 0 {
 		mode := database.DupNormal
 		switch s.config.Scanner.Duplicates {
 		case "strong":
@@ -397,6 +399,7 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 		case "clear":
 			mode = database.DupClear
 		}
+		s.reportProgress("duplicates")
 		if err := s.svc.MarkDuplicates(ctx, mode); err != nil {
 			log.Printf("Failed to mark duplicates: %v", err)
 		}
