@@ -38,6 +38,7 @@ type Scanner struct {
 	svc              *persistence.Service
 	parser           *FB2Parser
 	audioParser      *AudioParser
+	audioGrouper     *AudiobookGrouper
 	cron             *cron.Cron
 	extSet           map[string]bool
 	audioExtSet      map[string]bool // Audio-specific extensions
@@ -101,13 +102,16 @@ func New(cfg *config.Config, svc *persistence.Service) *Scanner {
 		".flac": true, ".ogg": true, ".opus": true,
 	}
 
+	audioParser := NewAudioParser(cfg.Server.Port > 0)
+
 	return &Scanner{
-		config:      cfg,
-		svc:         svc,
-		parser:      NewFB2Parser(cfg.Server.Port > 0), // Read covers if server is enabled
-		audioParser: NewAudioParser(cfg.Server.Port > 0),
-		extSet:      extSet,
-		audioExtSet: audioExtSet,
+		config:       cfg,
+		svc:          svc,
+		parser:       NewFB2Parser(cfg.Server.Port > 0), // Read covers if server is enabled
+		audioParser:  audioParser,
+		audioGrouper: NewAudiobookGrouper(audioParser),
+		extSet:       extSet,
+		audioExtSet:  audioExtSet,
 	}
 }
 
@@ -361,7 +365,10 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 		}()
 	}
 
-	// Walk directory and send files to workers
+	// Collect audio files for grouping, send others to workers
+	var audioFiles []string
+	var audioFilesMu sync.Mutex
+
 	err = filepath.WalkDir(s.config.Library.Root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			log.Printf("Error accessing %s: %v", path, err)
@@ -374,14 +381,32 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 		default:
 		}
 
+		// Skip @eaDir directories
 		if d.IsDir() {
+			if d.Name() == "@eaDir" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 
 		ext := strings.ToLower(filepath.Ext(path))
+
+		// Archives go directly to workers
 		if (ext == ".zip" || ext == ".7z") && s.config.Library.ScanZip {
 			fileChan <- path
-		} else if s.extSet[ext] {
+			return nil
+		}
+
+		// Audio files are collected for grouping (except M4B which are single-file audiobooks)
+		if s.audioExtSet[ext] && ext != ".m4b" {
+			audioFilesMu.Lock()
+			audioFiles = append(audioFiles, path)
+			audioFilesMu.Unlock()
+			return nil
+		}
+
+		// Other files (including M4B, fb2, etc.) go to workers
+		if s.extSet[ext] {
 			fileChan <- path
 		}
 		return nil
@@ -389,6 +414,11 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 
 	close(fileChan)
 	wg.Wait()
+
+	// Process grouped audio folders
+	if len(audioFiles) > 0 {
+		s.processAudioFolders(ctx, audioFiles)
+	}
 
 	if err != nil {
 		log.Printf("Scan walk error: %v", err)
@@ -543,6 +573,195 @@ func (s *Scanner) logStats() {
 	log.Printf("Archives skipped: %d", s.stats.ArchivesSkipped)
 	log.Printf("Bad archives: %d", s.stats.BadArchives)
 	log.Printf("Books in archives: %d", s.stats.BooksInArchives)
+}
+
+// processAudioFolders groups audio files by folder and creates single audiobook entries
+func (s *Scanner) processAudioFolders(ctx context.Context, audioFiles []string) {
+	if len(audioFiles) == 0 {
+		return
+	}
+
+	log.Printf("Grouping %d audio files by folder...", len(audioFiles))
+
+	groups, singles := s.audioGrouper.GroupByFolder(audioFiles)
+
+	log.Printf("Found %d audiobook folders, %d single files", len(groups), len(singles))
+
+	// Process each audiobook group
+	for _, group := range groups {
+		s.processAudioGroup(ctx, &group)
+	}
+
+	// Process single files individually
+	for _, path := range singles {
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		s.processFile(ctx, path, info.Size(), database.CatNormal, 0)
+	}
+}
+
+// processAudioGroup creates a single audiobook entry for a folder of audio files
+func (s *Scanner) processAudioGroup(ctx context.Context, group *AudiobookGroup) {
+	if len(group.Tracks) == 0 {
+		return
+	}
+
+	// Get relative path from library root
+	relPath, err := filepath.Rel(s.config.Library.Root, group.FolderPath)
+	if err != nil {
+		relPath = group.FolderPath
+	}
+
+	// Use folder name as filename for the "virtual" audiobook
+	filename := group.FolderName
+
+	// Check if audiobook already exists
+	book, err := s.svc.FindBook(ctx, filename, relPath)
+	if err == nil && book != nil {
+		// Book exists, mark as verified
+		s.svc.UpdateBookAvail(ctx, book.ID, database.AvailVerified)
+		atomic.AddInt64(&s.stats.BooksSkipped, 1)
+		return
+	}
+
+	// Get or create catalog tree
+	var catID int64
+	if relPath != "." && relPath != "" {
+		pathParts := strings.Split(relPath, string(filepath.Separator))
+		catID, _ = s.svc.GetOrCreateCatalogTree(ctx, pathParts, database.CatNormal)
+	}
+
+	// Build tracks structure (similar to archive processing)
+	var tracks []AudiobookTrack
+	var totalDuration int
+	var totalSize int64
+
+	for _, t := range group.Tracks {
+		// Get duration from file
+		duration := int(t.Duration.Seconds())
+		if duration == 0 {
+			// Try to extract actual duration
+			if dur, err := GetAudioDuration(t.Path); err == nil && dur > 0 {
+				duration = int(dur.Seconds())
+			}
+		}
+
+		tracks = append(tracks, AudiobookTrack{
+			Name:     t.Filename,
+			Path:     t.Path, // Full path for playback
+			Duration: duration,
+			Size:     t.Size,
+		})
+		totalDuration += duration
+		totalSize += t.Size
+	}
+
+	// Create structure JSON
+	structure := AudiobookStructure{
+		Type:   "book",
+		Tracks: tracks,
+	}
+	chaptersJSON, _ := json.Marshal(structure)
+
+	// Create book record
+	newBook := &database.Book{
+		Filename:        filename,
+		Path:            relPath,
+		Format:          "folder", // Special format for folder-based audiobooks
+		Filesize:        totalSize,
+		CatID:           catID,
+		CatType:         database.CatNormal,
+		Avail:           database.AvailVerified,
+		Title:           group.Title,
+		IsAudiobook:     true,
+		DurationSeconds: totalDuration,
+		TrackCount:      len(tracks),
+		Chapters:        string(chaptersJSON),
+	}
+
+	// Set cover if available
+	if len(group.Cover) > 0 {
+		newBook.Cover = "embedded"
+		newBook.CoverType = group.CoverType
+	} else if hasFolderCover(group.FolderPath) {
+		newBook.Cover = "folder"
+		newBook.CoverType = "image/jpeg"
+	} else if hasEaDirCover(filepath.Join(group.FolderPath, group.Tracks[0].Filename)) {
+		newBook.Cover = "eadir"
+		newBook.CoverType = "image/jpeg"
+	}
+
+	// Insert book
+	bookID, err := s.svc.AddBook(ctx, newBook)
+	if err != nil {
+		log.Printf("Failed to add audiobook folder %s: %v", group.FolderPath, err)
+		return
+	}
+
+	// Track for duplicate detection
+	s.trackNewBook(bookID)
+
+	// Link authors - for folder audiobooks, ALWAYS prefer folder name parsing
+	// because metadata "artist" is often the narrator, not the author
+	author, _ := parseAudioFolderName(group.FolderName)
+	if author.FirstName != "" || author.LastName != "" {
+		a, err := s.svc.GetOrCreateAuthor(ctx, author.FirstName, author.LastName)
+		if err == nil && a != nil {
+			s.svc.AddBookAuthor(ctx, bookID, a.ID)
+		}
+		// Treat metadata authors as narrators (they're usually the voice actors)
+		for _, metaAuthor := range group.Authors {
+			// Don't add as narrator if same as author
+			if metaAuthor.FirstName == author.FirstName && metaAuthor.LastName == author.LastName {
+				continue
+			}
+			n, err := s.svc.GetOrCreateAuthor(ctx, metaAuthor.FirstName, metaAuthor.LastName)
+			if err == nil && n != nil {
+				s.svc.AddBookAuthorWithRole(ctx, bookID, n.ID, "narrator")
+			}
+		}
+	} else if len(group.Authors) > 0 {
+		// Fallback to metadata authors only if folder name parsing failed
+		for _, metaAuthor := range group.Authors {
+			a, err := s.svc.GetOrCreateAuthor(ctx, metaAuthor.FirstName, metaAuthor.LastName)
+			if err == nil && a != nil {
+				s.svc.AddBookAuthor(ctx, bookID, a.ID)
+			}
+		}
+	} else {
+		s.svc.AddBookAuthor(ctx, bookID, 1) // Unknown author
+	}
+
+	// Link additional narrators from metadata
+	for _, narrator := range group.Narrators {
+		n, err := s.svc.GetOrCreateAuthor(ctx, narrator.FirstName, narrator.LastName)
+		if err == nil && n != nil {
+			s.svc.AddBookAuthorWithRole(ctx, bookID, n.ID, "narrator")
+		}
+	}
+
+	// Link genre if available
+	if group.Genre != "" {
+		g, err := s.svc.GetOrCreateGenre(ctx, group.Genre, group.Genre, "")
+		if err == nil && g != nil {
+			s.svc.AddBookGenre(ctx, bookID, g.ID)
+		}
+	}
+
+	atomic.AddInt64(&s.stats.BooksAdded, 1)
+	log.Printf("Added audiobook folder: %s (%d tracks, %s)", group.Title, len(tracks), formatDurationSeconds(totalDuration))
+}
+
+// formatDurationSeconds formats seconds as "Xh Ym"
+func formatDurationSeconds(seconds int) string {
+	h := seconds / 3600
+	m := (seconds % 3600) / 60
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm", h, m)
+	}
+	return fmt.Sprintf("%dm", m)
 }
 
 func (s *Scanner) processPath(ctx context.Context, path string) {

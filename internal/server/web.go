@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -1571,8 +1572,11 @@ func (s *Server) handleAudioTrackDownload(w http.ResponseWriter, r *http.Request
 		s.serveTrackFromZip(w, archivePath, trackPath, trackFilename, mimeType)
 	} else if format == "7z" {
 		s.serveTrackFrom7z(w, archivePath, trackPath, trackFilename, mimeType)
+	} else if format == "folder" {
+		// For folder-based audiobooks, trackPath is the full filesystem path
+		s.serveTrackFromFolder(w, r, trackPath, trackFilename, mimeType)
 	} else {
-		http.Error(w, "Unsupported archive format", http.StatusBadRequest)
+		http.Error(w, "Unsupported audiobook format", http.StatusBadRequest)
 	}
 }
 
@@ -1630,6 +1634,38 @@ func (s *Server) serveTrackFrom7z(w http.ResponseWriter, archivePath, trackPath,
 	}
 
 	http.Error(w, "File not found in archive", http.StatusNotFound)
+}
+
+// serveTrackFromFolder serves audio files from folder-based audiobooks (regular files on disk)
+func (s *Server) serveTrackFromFolder(w http.ResponseWriter, r *http.Request, trackPath, filename, mimeType string) {
+	// Security check: ensure path is within library root
+	cleanPath := filepath.Clean(trackPath)
+	if !strings.HasPrefix(cleanPath, s.config.Library.Root) {
+		http.Error(w, "Invalid file path", http.StatusBadRequest)
+		return
+	}
+
+	// Check if file exists
+	stat, err := os.Stat(cleanPath)
+	if err != nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	// Open the file
+	f, err := os.Open(cleanPath)
+	if err != nil {
+		http.Error(w, "Failed to open file", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	// Set headers
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Accept-Ranges", "bytes")
+
+	// Use http.ServeContent which handles range requests properly
+	http.ServeContent(w, r, filename, stat.ModTime(), f)
 }
 
 // handleAudioTrackCover serves cover art from a specific audio file inside an archive

@@ -5,6 +5,87 @@
 
 ---
 
+### Revision 31 - 2026-01-25
+**Folder-Based Audiobook Grouping:**
+- Audio files in same folder now grouped as single audiobook entry
+  - Uses existing `AudiobookGrouper` for grouping logic
+  - Creates "folder" format audiobooks (similar to archive-based)
+  - Track structure stored in `chapters` JSONB field
+  - Properly links authors, narrators, and genres from metadata
+- @eaDir directories skipped during scan (Synology metadata folders)
+- M4B files processed individually (single-file audiobooks with chapters)
+
+**Cyrillic Encoding Fix:**
+- Fixed Windows-1251 text incorrectly read as Latin-1 in ID3 tags
+  - Added `fixCyrillicEncoding()` to detect and convert mojibake
+  - Uses `golang.org/x/text/encoding/charmap` for Windows-1251 decoding
+- Fixed UTF-16 metadata misread as UTF-8 (common in OGG Vorbis comments)
+  - Detects "Б . А к у н и н" pattern (null bytes appearing as spaces)
+  - Strips null bytes and removes alternating space pattern
+  - Prevents PostgreSQL "invalid byte sequence for encoding UTF8: 0x00" error
+
+**OGG Duration Fix:**
+- Fixed Vorbis sample rate detection (was reading wrong offset)
+  - After 8-byte codec header, skip 4 bytes (remaining version + channels)
+  - Previously skipped 5 bytes, reading sample rate from wrong position
+  - Fixed duration calculation: 163M granules / 44100 Hz = 3697s (was calculating 947881s)
+
+**Folder Audiobook Playback Fix:**
+- Added track endpoint support for "folder" format audiobooks
+  - `handleAudioTrackDownload` now handles "folder" format (was only zip/7z)
+  - New `serveTrackFromFolder()` function serves files directly from disk
+  - Uses `http.ServeContent()` for proper HTTP range request support (seeking)
+  - Security check ensures file path is within library root
+
+**Folder Audiobook Author/Title Parsing:**
+- Always parse author and title from folder name (format: "Author - Title")
+  - Metadata "artist" field often contains narrator, not author
+  - Metadata artists now treated as narrators for folder audiobooks
+  - `parseTitleFromFolderName()` extracts title after separator
+  - Handles " - ", " – " (en-dash), and "_-_" separators
+  - Removes year suffixes like "(2020)" or "[2020]"
+
+**Folder Audiobook Cover Fix:**
+- Fixed cover detection for folder-based audiobooks
+  - `serveAudioCover` now handles "folder" format correctly
+  - Uses first track path from chapters JSON for @eaDir lookup
+  - Added `getFolderCoverInDir()` helper for folder cover detection
+- Added SYNOAUDIO patterns to @eaDir cover lookup
+  - `SYNOAUDIO_01APIC_03.jpg` (Audio Station album art)
+  - `SYNOAUDIO_01APIC_00/01/02.jpg` variants
+
+**Files Modified:**
+- `internal/scanner/duration.go`:
+  - Fixed OGG Vorbis sample rate offset (skip 4 bytes, not 5)
+- `internal/scanner/scanner.go`:
+  - Added `audioGrouper` to Scanner struct
+  - Modified walk to collect audio files separately, skip @eaDir
+  - Added `processAudioFolders()` to group and process collected audio files
+  - Added `processAudioGroup()` to create single audiobook entry from folder
+  - Author linking now always parses folder name first, treats metadata as narrators
+- `internal/scanner/audioparser.go`:
+  - Added `fixCyrillicEncoding()` for Windows-1251 detection and fix
+  - Added `looksLikeMojibake()`, `hasCyrillic()` helper functions
+  - Added `looksLikeUTF16AsUTF8()`, `fixUTF16AsUTF8()` for UTF-16 fix
+  - All metadata fields now passed through encoding fix
+- `internal/scanner/audiobookgrouper.go`:
+  - `createGroup()` now parses title from folder name
+  - Added `parseTitleFromFolderName()` function
+  - Added `removeYearSuffix()` and `isDigits()` helpers
+  - Metadata authors treated as narrators
+- `internal/server/handlers.go`:
+  - Added SYNOAUDIO patterns to `getEaDirCover()`
+  - `serveAudioCover()` now handles "folder" format
+  - Added `getFolderCoverInDir()` helper function
+  - Added `encoding/json` import
+- `internal/server/web.go`:
+  - Added `serveTrackFromFolder()` for folder audiobook playback
+
+**New Dependencies:**
+- `golang.org/x/text/encoding/charmap` - Character set conversion
+
+---
+
 ### Revision 30 - 2026-01-25
 **@eaDir and Folder Cover Support:**
 - Added Synology @eaDir thumbnail support for audiobook covers

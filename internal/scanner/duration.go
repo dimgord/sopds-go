@@ -383,9 +383,15 @@ func getOggDuration(r io.ReadSeeker, fileSize int64) (time.Duration, error) {
 	var sampleRate uint32
 
 	if codecHeader[0] == 0x01 && string(codecHeader[1:7]) == "vorbis" {
-		// Vorbis: sample rate at offset 12 in identification header
-		r.Seek(4, io.SeekCurrent) // Skip vorbis version
-		r.Seek(1, io.SeekCurrent) // Skip channels
+		// Vorbis identification header layout:
+		// - byte 0: packet_type (0x01)
+		// - bytes 1-6: "vorbis"
+		// - bytes 7-10: version (4 bytes)
+		// - byte 11: channels (1 byte)
+		// - bytes 12-15: sample_rate (4 bytes)
+		// We've read 8 bytes (codecHeader), so we're at offset 8
+		// Need to skip 3 more bytes of version + 1 byte channels = 4 bytes
+		r.Seek(4, io.SeekCurrent) // Skip remaining version (3 bytes) + channels (1 byte)
 		srBytes := make([]byte, 4)
 		if _, err := io.ReadFull(r, srBytes); err != nil {
 			return 0, err
