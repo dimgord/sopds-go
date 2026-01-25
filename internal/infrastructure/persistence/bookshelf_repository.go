@@ -108,6 +108,25 @@ func (r *BookshelfRepository) Count(ctx context.Context, username string) (int64
 	return count, nil
 }
 
+// GetBookIDs returns all book IDs on user's bookshelf as a set for efficient lookup
+func (r *BookshelfRepository) GetBookIDs(ctx context.Context, username string) (map[int64]bool, error) {
+	var ids []int64
+	err := r.db.WithContext(ctx).
+		Model(&BookshelfModel{}).
+		Where("user_name = ?", username).
+		Pluck("book_id", &ids).Error
+
+	if err != nil {
+		return nil, fmt.Errorf("get bookshelf ids: %w", err)
+	}
+
+	result := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		result[id] = true
+	}
+	return result, nil
+}
+
 // --- Bulk Operations ---
 
 // Clear removes all books from user's bookshelf

@@ -125,6 +125,11 @@ type BookRepository interface {
 	// MarkDuplicates runs duplicate detection and marks duplicates
 	MarkDuplicates(ctx context.Context, mode DuplicateMode) error
 
+	// MarkDuplicatesIncremental marks duplicates only for newly added books
+	// This is much faster than full MarkDuplicates for incremental scans
+	// progressFn is called with (processed, total) counts for progress reporting
+	MarkDuplicatesIncremental(ctx context.Context, mode DuplicateMode, newBookIDs []int64, progressFn func(processed, total int)) error
+
 	// FindDuplicates returns all books that are duplicates of the given book
 	// (or the original if the given book is itself a duplicate)
 	FindDuplicates(ctx context.Context, bookID book.ID, pagination *Pagination) ([]*book.Book, error)

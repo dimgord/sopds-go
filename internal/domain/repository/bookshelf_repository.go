@@ -28,6 +28,9 @@ type BookshelfRepository interface {
 	// Count returns the number of books in user's bookshelf
 	Count(ctx context.Context, username string) (int64, error)
 
+	// GetBookIDs returns all book IDs on user's bookshelf as a set for efficient lookup
+	GetBookIDs(ctx context.Context, username string) (map[int64]bool, error)
+
 	// --- Bulk Operations ---
 
 	// Clear removes all books from user's bookshelf

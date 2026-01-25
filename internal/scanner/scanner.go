@@ -2,9 +2,11 @@ package scanner
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -46,6 +48,8 @@ type Scanner struct {
 	confirmCallback  ConfirmCallback
 	lastProgress     time.Time
 	knownZips        map[string]int64 // path -> cat_id cache
+	newBookIDs       []int64          // IDs of books added in current scan (for incremental duplicate detection)
+	newBookIDsMu     sync.Mutex       // Protects newBookIDs
 }
 
 // ConfirmCallback is called to confirm destructive operations.
@@ -390,6 +394,9 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 		log.Printf("Scan walk error: %v", err)
 	}
 
+	// Check for missing regular files (cat_type=0)
+	s.checkMissingRegularFiles(ctx)
+
 	// Mark duplicates (skip if no new books added)
 	if s.config.Scanner.Duplicates != "none" && atomic.LoadInt64(&s.stats.BooksAdded) > 0 {
 		mode := database.DupNormal
@@ -400,8 +407,24 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 			mode = database.DupClear
 		}
 		s.reportProgress("duplicates")
-		if err := s.svc.MarkDuplicates(ctx, mode); err != nil {
-			log.Printf("Failed to mark duplicates: %v", err)
+
+		// Use incremental duplicate detection for new books
+		s.newBookIDsMu.Lock()
+		newIDs := s.newBookIDs
+		s.newBookIDsMu.Unlock()
+
+		if len(newIDs) > 0 {
+			log.Printf("Checking %d new books for duplicates...", len(newIDs))
+			progressFn := func(processed, total int) {
+				if total > 0 && processed%500 == 0 {
+					log.Printf("Duplicate check progress: %d/%d (%.1f%%)", processed, total, float64(processed)/float64(total)*100)
+				}
+			}
+			if err := s.svc.MarkDuplicatesIncremental(ctx, mode, newIDs, progressFn); err != nil {
+				log.Printf("Failed to mark duplicates: %v", err)
+			}
+		} else {
+			log.Println("No new books to check for duplicates")
 		}
 	}
 
@@ -421,6 +444,90 @@ func (s *Scanner) resetStats() {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
 	s.stats = ScanStats{}
+
+	s.newBookIDsMu.Lock()
+	s.newBookIDs = nil
+	s.newBookIDsMu.Unlock()
+}
+
+// trackNewBook records a newly added book ID for incremental duplicate detection
+func (s *Scanner) trackNewBook(id int64) {
+	s.newBookIDsMu.Lock()
+	s.newBookIDs = append(s.newBookIDs, id)
+	s.newBookIDsMu.Unlock()
+}
+
+// checkMissingRegularFiles finds regular files (cat_type=0) that no longer exist and marks them unavailable
+func (s *Scanner) checkMissingRegularFiles(ctx context.Context) {
+	files, err := s.svc.GetRegularFileBooks(ctx)
+	if err != nil {
+		log.Printf("Failed to get regular files for cleanup: %v", err)
+		return
+	}
+
+	if len(files) == 0 {
+		return
+	}
+
+	// Check which files are missing
+	var missingIDs []int64
+	var missingPaths []string
+	for _, f := range files {
+		fullPath := filepath.Join(s.config.Library.Root, f.Path, f.Filename)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			missingIDs = append(missingIDs, f.ID)
+			missingPaths = append(missingPaths, filepath.Join(f.Path, f.Filename))
+		}
+	}
+
+	if len(missingIDs) == 0 {
+		return
+	}
+
+	// Build confirmation message
+	msg := fmt.Sprintf(
+		"Found %d regular files in the database that no longer exist on disk.\n"+
+			"Library root: %s\n\n"+
+			"Examples of missing files:\n",
+		len(missingIDs), s.config.Library.Root)
+
+	examples := missingPaths
+	if len(examples) > 5 {
+		examples = examples[:5]
+	}
+	for _, p := range examples {
+		msg += fmt.Sprintf("  - %s\n", p)
+	}
+	if len(missingPaths) > 5 {
+		msg += fmt.Sprintf("  ... and %d more\n", len(missingPaths)-5)
+	}
+	msg += "\nMark these files as unavailable in the database?"
+
+	// Check auto_clean config
+	autoClean := strings.ToLower(s.config.Scanner.AutoClean)
+	shouldMark := true
+
+	if autoClean == "no" {
+		log.Printf("Skipping marking %d missing files (auto_clean=no)", len(missingIDs))
+		shouldMark = false
+	} else if autoClean == "yes" {
+		log.Printf("Auto-marking %d missing files as unavailable (auto_clean=yes)", len(missingIDs))
+	} else if s.confirmCallback != nil {
+		if !s.confirmCallback(msg) {
+			log.Printf("Skipping marking %d missing files (user cancelled)", len(missingIDs))
+			shouldMark = false
+		}
+	}
+
+	if shouldMark {
+		count, err := s.svc.MarkBooksUnavailable(ctx, missingIDs)
+		if err != nil {
+			log.Printf("Failed to mark missing files as unavailable: %v", err)
+		} else {
+			atomic.AddInt64(&s.stats.BooksDeleted, count)
+			log.Printf("Marked %d missing files as unavailable", count)
+		}
+	}
 }
 
 func (s *Scanner) logStats() {
@@ -565,6 +672,7 @@ func (s *Scanner) processFile(ctx context.Context, path string, size int64, catT
 	}
 
 	atomic.AddInt64(&s.stats.BooksAdded, 1)
+	s.trackNewBook(bookID)
 }
 
 // parseFB2MetadataFull parses FB2 file and returns full metadata including authors/genres/series
@@ -835,6 +943,7 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 	// Execute all database operations in a single transaction for performance
 	// (reduces fsync overhead from N operations to 1)
 	var addedCount int64
+	var addedIDs []int64 // Track IDs for incremental duplicate detection
 	if len(booksToAdd) > 0 || len(booksToVerify) > 0 {
 		// Extract books for batch insert
 		books := make([]*database.Book, len(booksToAdd))
@@ -849,6 +958,7 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 				if err != nil {
 					return err
 				}
+				addedIDs = bookIDs // Capture for tracking outside transaction
 
 				// Link authors, genres, series for each book
 				for i, id := range bookIDs {
@@ -933,10 +1043,17 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 				}
 				atomic.AddInt64(&s.stats.BooksAdded, 1)
 				atomic.AddInt64(&s.stats.BooksInArchives, 1)
+				s.trackNewBook(bookID)
 			}
 		} else {
 			atomic.AddInt64(&s.stats.BooksAdded, addedCount)
 			atomic.AddInt64(&s.stats.BooksInArchives, addedCount)
+			// Track all added IDs from successful batch
+			for _, id := range addedIDs {
+				if id > 0 {
+					s.trackNewBook(id)
+				}
+			}
 		}
 	}
 
@@ -1069,6 +1186,7 @@ func (s *Scanner) process7z(ctx context.Context, path string) {
 
 	// Execute all database operations in a single transaction
 	var addedCount int64
+	var addedIDs []int64 // Track IDs for incremental duplicate detection
 	if len(booksToAdd) > 0 || len(booksToVerify) > 0 {
 		books := make([]*database.Book, len(booksToAdd))
 		for i := range booksToAdd {
@@ -1081,6 +1199,7 @@ func (s *Scanner) process7z(ctx context.Context, path string) {
 				if err != nil {
 					return fmt.Errorf("batch insert: %w", err)
 				}
+				addedIDs = bookIDs // Capture for tracking outside transaction
 
 				// Link authors, genres, series
 				for i, bwm := range booksToAdd {
@@ -1138,6 +1257,12 @@ func (s *Scanner) process7z(ctx context.Context, path string) {
 		} else {
 			atomic.AddInt64(&s.stats.BooksAdded, addedCount)
 			atomic.AddInt64(&s.stats.BooksInArchives, addedCount)
+			// Track all added IDs for incremental duplicate detection
+			for _, id := range addedIDs {
+				if id > 0 {
+					s.trackNewBook(id)
+				}
+			}
 		}
 	}
 
@@ -1212,22 +1337,41 @@ func (s *Scanner) processAudio7z(ctx context.Context, path, relPath string, szr 
 			}
 		}
 
-		// Estimate duration from file size
-		bitrate := 128
-		switch strings.TrimPrefix(ext, ".") {
-		case "m4b", "m4a", "aac":
-			bitrate = 64
-		case "flac":
-			bitrate = 800
-		case "ogg", "opus":
-			bitrate = 96
-		}
-		duration := int(float64(f.UncompressedSize) * 8 / float64(bitrate*1000))
-
 		// Get path relative to top-level folder
 		relFilePath := f.Name
 		if topLevelFolder != "" && strings.HasPrefix(f.Name, topLevelFolder+"/") {
 			relFilePath = strings.TrimPrefix(f.Name, topLevelFolder+"/")
+		}
+
+		// Extract actual duration from audio file
+		format := strings.TrimPrefix(ext, ".")
+		duration := 0
+
+		rc, err := f.Open()
+		if err == nil {
+			// Read file into memory for duration extraction
+			data, err := io.ReadAll(rc)
+			rc.Close()
+			if err == nil {
+				r := bytes.NewReader(data)
+				if dur, err := GetAudioDurationFromReader(r, int64(len(data)), format); err == nil && dur > 0 {
+					duration = int(dur.Seconds())
+				}
+			}
+		}
+
+		// Fallback to estimation if extraction failed
+		if duration == 0 {
+			bitrate := 128
+			switch format {
+			case "m4b", "m4a", "aac":
+				bitrate = 64
+			case "flac":
+				bitrate = 800
+			case "ogg", "opus":
+				bitrate = 96
+			}
+			duration = int(float64(f.UncompressedSize) * 8 / float64(bitrate*1000))
 		}
 
 		tracks = append(tracks, trackInfo{
@@ -1356,6 +1500,7 @@ func (s *Scanner) processAudio7z(ctx context.Context, path, relPath string, szr 
 
 	atomic.AddInt64(&s.stats.BooksAdded, 1)
 	atomic.AddInt64(&s.stats.ArchivesScanned, 1)
+	s.trackNewBook(bookID)
 }
 
 // AudiobookStructure represents the structure of an audiobook ZIP
@@ -1434,22 +1579,41 @@ func (s *Scanner) processAudioZip(ctx context.Context, path, relPath string, zr 
 			}
 		}
 
-		// Estimate duration from file size
-		bitrate := 128
-		switch strings.TrimPrefix(ext, ".") {
-		case "m4b", "m4a", "aac":
-			bitrate = 64
-		case "flac":
-			bitrate = 800
-		case "ogg", "opus":
-			bitrate = 96
-		}
-		duration := int(float64(f.UncompressedSize64) * 8 / float64(bitrate*1000))
-
 		// Get path relative to top-level folder
 		relFilePath := f.Name
 		if topLevelFolder != "" && strings.HasPrefix(f.Name, topLevelFolder+"/") {
 			relFilePath = strings.TrimPrefix(f.Name, topLevelFolder+"/")
+		}
+
+		// Extract actual duration from audio file
+		format := strings.TrimPrefix(ext, ".")
+		duration := 0
+
+		rc, err := f.Open()
+		if err == nil {
+			// Read file into memory for duration extraction
+			data, err := io.ReadAll(rc)
+			rc.Close()
+			if err == nil {
+				r := bytes.NewReader(data)
+				if dur, err := GetAudioDurationFromReader(r, int64(len(data)), format); err == nil && dur > 0 {
+					duration = int(dur.Seconds())
+				}
+			}
+		}
+
+		// Fallback to estimation if extraction failed
+		if duration == 0 {
+			bitrate := 128
+			switch format {
+			case "m4b", "m4a", "aac":
+				bitrate = 64
+			case "flac":
+				bitrate = 800
+			case "ogg", "opus":
+				bitrate = 96
+			}
+			duration = int(float64(f.UncompressedSize64) * 8 / float64(bitrate*1000))
 		}
 
 		tracks = append(tracks, trackInfo{
@@ -1583,4 +1747,5 @@ func (s *Scanner) processAudioZip(ctx context.Context, path, relPath string, zr 
 
 	atomic.AddInt64(&s.stats.BooksAdded, 1)
 	atomic.AddInt64(&s.stats.ArchivesScanned, 1)
+	s.trackNewBook(bookID)
 }

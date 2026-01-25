@@ -88,10 +88,18 @@ func (p *AudioParser) Parse(r io.ReadSeeker, filesize int64, format string) (*Au
 		}
 	}
 
-	// Estimate bitrate from file size
-	// Note: dhowden/tag doesn't provide duration directly
-	// We estimate based on common audiobook bitrates
-	meta.Bitrate = p.estimateBitrate(format, filesize)
+	// Get actual duration from audio data
+	r.Seek(0, io.SeekStart)
+	if duration, err := GetAudioDurationFromReader(r, filesize, format); err == nil && duration > 0 {
+		meta.Duration = duration
+		// Calculate actual bitrate from duration
+		if duration.Seconds() > 0 {
+			meta.Bitrate = int(float64(filesize*8) / duration.Seconds() / 1000)
+		}
+	} else {
+		// Fallback: estimate bitrate from file format
+		meta.Bitrate = p.estimateBitrate(format, filesize)
+	}
 
 	return meta, nil
 }

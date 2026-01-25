@@ -14,7 +14,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/dhowden/tag"
 	"github.com/go-chi/chi/v5"
+	go7z "github.com/saracen/go7z"
 	"github.com/sopds/sopds-go/internal/database"
 	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
 	"github.com/sopds/sopds-go/internal/opds"
@@ -654,8 +656,16 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	format := strings.ToLower(book.Format)
+
+	// Check if it's an audiobook (including archives containing audio)
+	if book.IsAudiobook || isAudioFormat(format) {
+		s.serveAudioCover(w, r, book)
+		return
+	}
+
 	// Only FB2 files have embedded covers
-	if strings.ToLower(book.Format) != "fb2" {
+	if format != "fb2" {
 		s.writeError(w, http.StatusNotFound, "Cover not available for this format")
 		return
 	}
@@ -760,6 +770,190 @@ func extractFB2Cover(data []byte) ([]byte, string, error) {
 	}
 
 	return nil, "", fmt.Errorf("cover binary not found")
+}
+
+// isAudioFormat checks if the format is an audio format
+func isAudioFormat(format string) bool {
+	switch strings.ToLower(format) {
+	case "mp3", "m4b", "m4a", "flac", "ogg", "opus", "aac":
+		return true
+	}
+	return false
+}
+
+// serveAudioCover extracts and serves cover from audio file or archive
+func (s *Server) serveAudioCover(w http.ResponseWriter, r *http.Request, book *database.Book) {
+	audioPath := filepath.Join(s.config.Library.Root, book.Path, book.Filename)
+	ext := strings.ToLower(filepath.Ext(book.Filename))
+
+	// Check if file is an archive (7z or zip containing audio)
+	if ext == ".7z" || ext == ".zip" || book.CatType != database.CatNormal {
+		coverData, coverType, err := s.extractAudioCoverFromArchive(book)
+		if err != nil || len(coverData) == 0 {
+			s.writeError(w, http.StatusNotFound, "Cover not found in audiobook")
+			return
+		}
+		w.Header().Set("Content-Type", coverType)
+		w.Header().Set("Content-Length", strconv.Itoa(len(coverData)))
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(coverData)
+		return
+	}
+
+	// Open the audio file and extract cover directly
+	f, err := os.Open(audioPath)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, "Audio file not found")
+		return
+	}
+	defer f.Close()
+
+	m, err := tag.ReadFrom(f)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, "Failed to read audio tags")
+		return
+	}
+
+	pic := m.Picture()
+	if pic == nil || len(pic.Data) == 0 {
+		s.writeError(w, http.StatusNotFound, "Cover not found in audio file")
+		return
+	}
+
+	contentType := pic.MIMEType
+	if contentType == "" {
+		contentType = "image/jpeg"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(pic.Data)))
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write(pic.Data)
+}
+
+// extractAudioCoverFromArchive extracts cover from first audio file in archive
+func (s *Server) extractAudioCoverFromArchive(book *database.Book) ([]byte, string, error) {
+	// For standalone archives, the filename is the archive itself
+	// For books inside archives, the path contains the archive
+	var archivePath string
+	ext := strings.ToLower(filepath.Ext(book.Filename))
+	if ext == ".7z" || ext == ".zip" {
+		// Standalone archive file
+		archivePath = filepath.Join(s.config.Library.Root, book.Path, book.Filename)
+	} else {
+		// Book inside an archive - path contains the archive
+		archivePath = filepath.Join(s.config.Library.Root, book.Path)
+	}
+
+	// Try ZIP first
+	if strings.HasSuffix(strings.ToLower(archivePath), ".zip") {
+		return s.extractAudioCoverFromZip(archivePath)
+	}
+
+	// Try 7z
+	if strings.HasSuffix(strings.ToLower(archivePath), ".7z") {
+		return s.extractAudioCoverFrom7z(archivePath)
+	}
+
+	return nil, "", fmt.Errorf("unsupported archive format")
+}
+
+// extractAudioCoverFromZip extracts cover from first audio file in ZIP
+func (s *Server) extractAudioCoverFromZip(zipPath string) ([]byte, string, error) {
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer zr.Close()
+
+	// Find first audio file
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(f.Name))
+		if !isAudioFormat(strings.TrimPrefix(ext, ".")) {
+			continue
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+
+		// Buffer the data for ReadSeeker
+		var buf bytes.Buffer
+		_, err = io.Copy(&buf, rc)
+		rc.Close()
+		if err != nil {
+			continue
+		}
+
+		m, err := tag.ReadFrom(bytes.NewReader(buf.Bytes()))
+		if err != nil {
+			continue
+		}
+
+		pic := m.Picture()
+		if pic != nil && len(pic.Data) > 0 {
+			contentType := pic.MIMEType
+			if contentType == "" {
+				contentType = "image/jpeg"
+			}
+			return pic.Data, contentType, nil
+		}
+	}
+
+	return nil, "", fmt.Errorf("no cover found in archive")
+}
+
+// extractAudioCoverFrom7z extracts cover from first audio file in 7z
+func (s *Server) extractAudioCoverFrom7z(szPath string) ([]byte, string, error) {
+	sz, err := go7z.OpenReader(szPath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer sz.Close()
+
+	for {
+		hdr, err := sz.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		if hdr.IsEmptyStream {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(hdr.Name))
+		if !isAudioFormat(strings.TrimPrefix(ext, ".")) {
+			continue
+		}
+
+		// Read file to temp buffer
+		var buf bytes.Buffer
+		if _, err := io.Copy(&buf, sz); err != nil {
+			continue
+		}
+
+		m, err := tag.ReadFrom(bytes.NewReader(buf.Bytes()))
+		if err != nil {
+			continue
+		}
+
+		pic := m.Picture()
+		if pic != nil && len(pic.Data) > 0 {
+			contentType := pic.MIMEType
+			if contentType == "" {
+				contentType = "image/jpeg"
+			}
+			return pic.Data, contentType, nil
+		}
+	}
+
+	return nil, "", fmt.Errorf("no cover found in 7z archive")
 }
 
 // handleConvertEPUB converts book to EPUB

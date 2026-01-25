@@ -2,6 +2,7 @@ package server
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/bodgit/sevenzip"
+	"github.com/dhowden/tag"
 	"github.com/go-chi/chi/v5"
 	"github.com/sopds/sopds-go/internal/database"
 	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
@@ -368,6 +370,7 @@ type BookView struct {
 	CanMOBI        bool
 	DuplicateOf    int64 // ID of original book if this is a duplicate
 	DuplicateCount int   // Number of duplicates this book has
+	OnBookshelf    bool  // Whether the book is on user's bookshelf
 	// Audiobook fields
 	IsAudiobook     bool
 	Duration        string // formatted "3h 45m"
@@ -551,8 +554,9 @@ func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Convert books to view
-	bookViews := s.booksToView(ctx, books)
+	// Convert books to view with bookshelf status
+	user := s.getWebUser(r)
+	bookViews := s.booksToViewForUser(ctx, books, user)
 
 	// Get filter options for the SCOPE (search query without filters)
 	scopeOpts := persistence.SearchOptions{
@@ -580,7 +584,7 @@ func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	hasMore := pageSize > 0 && len(books) >= pageSize
+	hasMore := pageSize > 0 && pagination.TotalCount > int64(pagination.Offset()+len(books))
 
 	// Build search description for title
 	var searchParts []string
@@ -786,8 +790,9 @@ func (s *Server) handleWebAuthor(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	hasMore := pageSize > 0 && len(books) >= pageSize
-	bookViews := s.booksToView(ctx, books)
+	hasMore := pageSize > 0 && pagination.TotalCount > int64(pagination.Offset()+len(books))
+	user := s.getWebUser(r)
+	bookViews := s.booksToViewForUser(ctx, books, user)
 
 	// Get filter options for the SCOPE (author only, without filters)
 	scopeOpts := persistence.SearchOptions{AuthorID: authorID}
@@ -952,8 +957,9 @@ func (s *Server) handleWebGenre(w http.ResponseWriter, r *http.Request) {
 	scopeOpts := persistence.SearchOptions{GenreID: genreID}
 	filterOpts, _ := s.svc.GetFilterOptions(ctx, scopeOpts)
 
-	hasMore := pageSize > 0 && len(books) >= pageSize
-	bookViews := s.booksToView(ctx, books)
+	hasMore := pageSize > 0 && pagination.TotalCount > int64(pagination.Offset()+len(books))
+	user := s.getWebUser(r)
+	bookViews := s.booksToViewForUser(ctx, books, user)
 
 	// Convert language codes to LangOption with names
 	var langOptions []LangOption
@@ -1124,8 +1130,9 @@ func (s *Server) handleWebSeriesBooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hasMore := pageSize > 0 && len(books) >= pageSize
-	bookViews := s.booksToView(ctx, books)
+	hasMore := pageSize > 0 && pagination.TotalCount > int64(pagination.Offset()+len(books))
+	user := s.getWebUser(r)
+	bookViews := s.booksToViewForUser(ctx, books, user)
 
 	// Get filter options for the SCOPE (series only, without filters)
 	scopeOpts := persistence.SearchOptions{SeriesID: seriesID}
@@ -1227,8 +1234,9 @@ func (s *Server) handleWebNew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hasMore := pageSize > 0 && len(books) >= pageSize
-	bookViews := s.booksToView(ctx, books)
+	hasMore := pageSize > 0 && pagination.TotalCount > int64(pagination.Offset()+len(books))
+	user := s.getWebUser(r)
+	bookViews := s.booksToViewForUser(ctx, books, user)
 
 	// Get filter options for the SCOPE (new period only, without filters)
 	scopeOpts := persistence.SearchOptions{NewPeriod: 7}
@@ -1328,8 +1336,9 @@ func (s *Server) handleWebAudio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hasMore := pageSize > 0 && len(books) >= pageSize
-	bookViews := s.booksToView(ctx, books)
+	hasMore := pageSize > 0 && pagination.TotalCount > int64(pagination.Offset()+len(books))
+	user := s.getWebUser(r)
+	bookViews := s.booksToViewForUser(ctx, books, user)
 
 	// Get filter options for the SCOPE (audiobooks only, without filters)
 	scopeOpts := persistence.SearchOptions{AudioOnly: true}
@@ -1431,7 +1440,7 @@ func (s *Server) handleWebAudioDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	book, err := s.svc.GetBook(ctx, id)
-	if err != nil {
+	if err != nil || book == nil {
 		s.renderError(w, "Audiobook not found", err)
 		return
 	}
@@ -1465,6 +1474,11 @@ func (s *Server) handleWebAudioDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Check bookshelf status
+	user := s.getWebUser(r)
+	bookshelfIDs, _ := s.svc.GetBookShelfIDs(ctx, user)
+	onBookshelf := bookshelfIDs != nil && bookshelfIDs[book.ID]
+
 	// Build book view
 	bookView := BookView{
 		ID:              book.ID,
@@ -1475,6 +1489,8 @@ func (s *Server) handleWebAudioDetail(w http.ResponseWriter, r *http.Request) {
 		Format:          strings.ToUpper(book.Format),
 		Size:            formatSize(book.Filesize),
 		Annotation:      book.Annotation,
+		HasCover:        true, // Try to load cover from audio file, template has onerror fallback
+		OnBookshelf:     onBookshelf,
 		IsAudiobook:     book.IsAudiobook,
 		Duration:        formatDuration(book.DurationSeconds),
 		DurationSeconds: book.DurationSeconds,
@@ -1616,6 +1632,134 @@ func (s *Server) serveTrackFrom7z(w http.ResponseWriter, archivePath, trackPath,
 	http.Error(w, "File not found in archive", http.StatusNotFound)
 }
 
+// handleAudioTrackCover serves cover art from a specific audio file inside an archive
+func (s *Server) handleAudioTrackCover(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid audiobook ID", http.StatusBadRequest)
+		return
+	}
+
+	trackPath := r.URL.Query().Get("file")
+	if trackPath == "" {
+		http.Error(w, "Missing file parameter", http.StatusBadRequest)
+		return
+	}
+
+	book, err := s.svc.GetBook(ctx, id)
+	if err != nil {
+		http.Error(w, "Audiobook not found", http.StatusNotFound)
+		return
+	}
+
+	if !book.IsAudiobook {
+		http.Error(w, "Not an audiobook", http.StatusBadRequest)
+		return
+	}
+
+	archivePath := filepath.Join(s.config.Library.Root, book.Path, book.Filename)
+	format := strings.ToLower(book.Format)
+
+	var coverData []byte
+	var coverType string
+
+	if format == "zip" {
+		coverData, coverType = s.extractTrackCoverFromZip(archivePath, trackPath)
+	} else if format == "7z" {
+		coverData, coverType = s.extractTrackCoverFrom7z(archivePath, trackPath)
+	}
+
+	if coverData == nil {
+		http.Error(w, "Cover not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", coverType)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write(coverData)
+}
+
+func (s *Server) extractTrackCoverFromZip(archivePath, trackPath string) ([]byte, string) {
+	zr, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return nil, ""
+	}
+	defer zr.Close()
+
+	for _, f := range zr.File {
+		if f.Name == trackPath || strings.HasSuffix(f.Name, "/"+trackPath) {
+			rc, err := f.Open()
+			if err != nil {
+				return nil, ""
+			}
+			defer rc.Close()
+
+			// Read into memory for tag parsing
+			data, err := io.ReadAll(rc)
+			if err != nil {
+				return nil, ""
+			}
+
+			return s.extractCoverFromAudioData(data)
+		}
+	}
+	return nil, ""
+}
+
+func (s *Server) extractTrackCoverFrom7z(archivePath, trackPath string) ([]byte, string) {
+	szr, err := sevenzip.OpenReader(archivePath)
+	if err != nil {
+		return nil, ""
+	}
+	defer szr.Close()
+
+	for _, f := range szr.File {
+		if f.Name == trackPath || strings.HasSuffix(f.Name, "/"+trackPath) {
+			rc, err := f.Open()
+			if err != nil {
+				return nil, ""
+			}
+			defer rc.Close()
+
+			// Read into memory for tag parsing
+			data, err := io.ReadAll(rc)
+			if err != nil {
+				return nil, ""
+			}
+
+			return s.extractCoverFromAudioData(data)
+		}
+	}
+	return nil, ""
+}
+
+func (s *Server) extractCoverFromAudioData(data []byte) ([]byte, string) {
+	r := bytes.NewReader(data)
+	m, err := tag.ReadFrom(r)
+	if err != nil {
+		return nil, ""
+	}
+
+	if pic := m.Picture(); pic != nil && len(pic.Data) > 0 {
+		mimeType := pic.MIMEType
+		if mimeType == "" {
+			// Detect from data
+			if len(pic.Data) > 2 && pic.Data[0] == 0xFF && pic.Data[1] == 0xD8 {
+				mimeType = "image/jpeg"
+			} else if len(pic.Data) > 8 && pic.Data[0] == 0x89 && pic.Data[1] == 0x50 && pic.Data[2] == 0x4E && pic.Data[3] == 0x47 {
+				mimeType = "image/png"
+			} else {
+				mimeType = "image/jpeg"
+			}
+		}
+		return pic.Data, mimeType
+	}
+	return nil, ""
+}
+
 func (s *Server) handleWebBookshelf(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	setLangCookie(w, r)
@@ -1657,7 +1801,7 @@ func (s *Server) handleWebBookshelf(w http.ResponseWriter, r *http.Request) {
 	s.addI18n(&pd, r)
 	data := BooksData{
 		PageData:   pd,
-		Books:      s.booksToView(ctx, books),
+		Books:      s.booksToViewForUser(ctx, books, user),
 		TotalCount: int(count),
 	}
 
@@ -1805,8 +1949,10 @@ func (s *Server) handleWebLanguage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hasMore := pageSize > 0 && len(books) >= pageSize
-	bookViews, filterOpts := s.booksToViewWithFilters(ctx, books)
+	hasMore := pageSize > 0 && pagination.TotalCount > int64(pagination.Offset()+len(books))
+	user := s.getWebUser(r)
+	bookshelfIDs, _ := s.svc.GetBookShelfIDs(ctx, user)
+	bookViews, filterOpts := s.booksToViewWithFilters(ctx, books, bookshelfIDs)
 
 	// Get filter genre name
 	filterGenreName := ""
@@ -1963,7 +2109,7 @@ func (s *Server) handleWebDuplicates(w http.ResponseWriter, r *http.Request) {
 		title = fmt.Sprintf("%s: %s", T(lang, "books.duplicates"), books[0].Title)
 	}
 
-	hasMore := pageSize > 0 && len(books) >= pageSize
+	hasMore := pageSize > 0 && pagination.TotalCount > int64(pagination.Offset()+len(books))
 
 	pd := PageData{
 		Title:       title,
@@ -1980,9 +2126,10 @@ func (s *Server) handleWebDuplicates(w http.ResponseWriter, r *http.Request) {
 		HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
 	}
 	s.addI18n(&pd, r)
+	user := s.getWebUser(r)
 	data := BooksData{
 		PageData:   pd,
-		Books:      s.booksToView(ctx, books),
+		Books:      s.booksToViewForUser(ctx, books, user),
 		TotalCount: int(pagination.TotalCount),
 	}
 
@@ -2048,11 +2195,17 @@ type SearchFilterOptions struct {
 }
 
 func (s *Server) booksToView(ctx context.Context, books []database.Book) []BookView {
-	views, _ := s.booksToViewWithFilters(ctx, books)
+	views, _ := s.booksToViewWithFilters(ctx, books, nil)
 	return views
 }
 
-func (s *Server) booksToViewWithFilters(ctx context.Context, books []database.Book) ([]BookView, SearchFilterOptions) {
+func (s *Server) booksToViewForUser(ctx context.Context, books []database.Book, username string) []BookView {
+	bookshelfIDs, _ := s.svc.GetBookShelfIDs(ctx, username)
+	views, _ := s.booksToViewWithFilters(ctx, books, bookshelfIDs)
+	return views
+}
+
+func (s *Server) booksToViewWithFilters(ctx context.Context, books []database.Book, bookshelfIDs map[int64]bool) ([]BookView, SearchFilterOptions) {
 	var views []BookView
 
 	// Maps to collect unique values
@@ -2145,6 +2298,7 @@ func (s *Server) booksToViewWithFilters(ctx context.Context, books []database.Bo
 			CanMOBI:         isFB2,
 			DuplicateOf:     duplicateOf,
 			DuplicateCount:  dupCount,
+			OnBookshelf:     bookshelfIDs != nil && bookshelfIDs[b.ID],
 			IsAudiobook:     b.IsAudiobook,
 			Duration:        durationStr,
 			DurationSeconds: b.DurationSeconds,
@@ -3141,7 +3295,7 @@ function goToPage(page) {
             <a href="{{$.OPDSPrefix}}/book/{{.ID}}/download" class="btn btn-primary"><i class="fas fa-download"></i> {{.Format}}</a>
             {{if and $.HasEPUB .CanEPUB}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/epub" class="btn btn-success"><i class="fas fa-file-arrow-down"></i> EPUB</a>{{end}}
             {{if and $.HasMOBI .CanMOBI}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/mobi" class="btn btn-warning"><i class="fas fa-file-arrow-down"></i> MOBI</a>{{end}}
-            <a href="#" onclick="return bookshelfAction(this, '{{$.WebPrefix}}/bookshelf/add/{{.ID}}')" class="btn btn-secondary"><i class="fas fa-bookmark"></i> {{t "books.addshelf"}}</a>
+            {{if .OnBookshelf}}<span class="btn btn-secondary disabled"><i class="fas fa-check"></i> Added</span>{{else}}<a href="#" onclick="return bookshelfAction(this, '{{$.WebPrefix}}/bookshelf/add/{{.ID}}')" class="btn btn-secondary"><i class="fas fa-bookmark"></i> {{t "books.addshelf"}}</a>{{end}}
             {{if or (gt .DuplicateCount 0) (gt .DuplicateOf 0)}}<a href="{{$.WebPrefix}}/duplicates/{{.ID}}" class="btn btn-secondary"><i class="fas fa-copy"></i> {{t "books.duplicates"}}{{if gt .DuplicateCount 0}} ({{.DuplicateCount}}){{end}}</a>{{end}}
         </div>
     </div>
@@ -3160,7 +3314,8 @@ function goToPage(page) {
 
 	"audiodetail": `{{define "content"}}
 <div class="audio-detail">
-    <div class="audio-header">
+    <div class="audio-header" id="audioHeader">
+        {{if .Book.HasCover}}<img src="{{.OPDSPrefix}}/book/{{.Book.ID}}/cover" class="audio-cover" alt="Cover" onerror="this.style.display='none'">{{end}}
         <div class="audio-info">
             <h1><i class="fas fa-headphones"></i> {{.Book.Title}}</h1>
             {{if .Authors}}
@@ -3189,11 +3344,10 @@ function goToPage(page) {
             <button onclick="downloadSelected()" class="btn btn-success btn-lg" id="downloadSelectedBtn" disabled>
                 <i class="fas fa-download"></i> <span id="downloadSelectedText">{{t "audio.downloadsel"}}</span>
             </button>
-            <a href="{{.WebPrefix}}/bookshelf/add/{{.Book.ID}}" class="btn btn-secondary">
-                <i class="fas fa-bookmark"></i> {{t "books.addshelf"}}
-            </a>
+            {{if .Book.OnBookshelf}}<span class="btn btn-secondary disabled"><i class="fas fa-check"></i> Added</span>{{else}}<a href="#" onclick="return bookshelfAction(this, '{{.WebPrefix}}/bookshelf/add/{{.Book.ID}}')" class="btn btn-secondary"><i class="fas fa-bookmark"></i> {{t "books.addshelf"}}</a>{{end}}
         </div>
     </div>
+    <div class="audio-header-spacer" id="audioHeaderSpacer"></div>
 
     {{if .Structure}}
     <div class="audio-structure">
@@ -3221,17 +3375,17 @@ function goToPage(page) {
                 </summary>
                 <ul class="track-list" data-part="{{$i}}">
                     {{range $j, $track := $part.Tracks}}
-                    <li data-url="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" data-name="{{$track.Name}}" data-duration="{{$track.Duration}}">
-                        <label class="track-checkbox">
+                    <li data-url="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" data-name="{{$track.Name}}" data-duration="{{$track.Duration}}" data-path="{{$track.Path}}" onclick="player.onTrackClick(this, event)">
+                        <label class="track-checkbox" onclick="event.stopPropagation()">
                             <input type="checkbox" class="track-select" data-part="{{$i}}" data-path="{{$track.Path}}" onchange="updateSelection()">
                         </label>
                         <i class="fas fa-music track-icon"></i>
                         <span class="track-name">{{$track.Name}}</span>
                         <span class="track-duration">{{formatDuration $track.Duration}}</span>
-                        <button class="track-play" onclick="player.playTrack(this.closest('li'))" title="Play">
+                        <button class="track-play" onclick="event.stopPropagation(); player.playTrack(this.closest('li'))" title="Play">
                             <i class="fas fa-play"></i>
                         </button>
-                        <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" class="track-download" title="Download">
+                        <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" class="track-download" title="Download" onclick="event.stopPropagation()">
                             <i class="fas fa-download"></i>
                         </a>
                     </li>
@@ -3244,17 +3398,17 @@ function goToPage(page) {
         <h2><i class="fas fa-list-ol"></i> {{t "audio.tracks"}} ({{len .Structure.Tracks}})</h2>
         <ul class="track-list flat">
             {{range $i, $track := .Structure.Tracks}}
-            <li data-url="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" data-name="{{$track.Name}}" data-duration="{{$track.Duration}}">
-                <label class="track-checkbox">
+            <li data-url="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" data-name="{{$track.Name}}" data-duration="{{$track.Duration}}" data-path="{{$track.Path}}" onclick="player.onTrackClick(this, event)">
+                <label class="track-checkbox" onclick="event.stopPropagation()">
                     <input type="checkbox" class="track-select" data-path="{{$track.Path}}" onchange="updateSelection()">
                 </label>
                 <i class="fas fa-music track-icon"></i>
                 <span class="track-name">{{$track.Name}}</span>
                 <span class="track-duration">{{formatDuration $track.Duration}}</span>
-                <button class="track-play" onclick="player.playTrack(this.closest('li'))" title="Play">
+                <button class="track-play" onclick="event.stopPropagation(); player.playTrack(this.closest('li'))" title="Play">
                     <i class="fas fa-play"></i>
                 </button>
-                <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" class="track-download" title="Download">
+                <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" class="track-download" title="Download" onclick="event.stopPropagation()">
                     <i class="fas fa-download"></i>
                 </a>
             </li>
@@ -3349,6 +3503,8 @@ class AudioPlayer {
         this.speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
         this.speedIndex = 2; // Default 1x
         this.isSeeking = false;
+        this.trackPositions = {}; // Per-track position storage
+        this.coverImg = document.querySelector('.audio-cover');
 
         this.init();
     }
@@ -3433,15 +3589,36 @@ class AudioPlayer {
             return;
         }
 
+        // Save current track position before switching
+        this.saveCurrentTrackPosition();
+
         this.currentTrackIndex = idx;
         this.loadTrack(idx);
         this.audio.play().catch(err => console.error('Playback failed:', err));
+    }
+
+    onTrackClick(li, event) {
+        // Don't trigger if clicking on controls (checkbox, buttons, links)
+        if (event.target.closest('.track-checkbox, .track-play, .track-download')) {
+            return;
+        }
+        this.playTrack(li);
+    }
+
+    saveCurrentTrackPosition() {
+        if (this.currentTrackIndex >= 0 && this.audio.currentTime > 0) {
+            const trackPath = this.tracks[this.currentTrackIndex].el.dataset.path;
+            if (trackPath) {
+                this.trackPositions[trackPath] = this.audio.currentTime;
+            }
+        }
     }
 
     loadTrack(idx) {
         if (idx < 0 || idx >= this.tracks.length) return;
 
         const track = this.tracks[idx];
+        const trackPath = track.el.dataset.path;
 
         // Update highlight
         if (this.currentTrackLi) {
@@ -3477,10 +3654,29 @@ class AudioPlayer {
         this.trackNameEl.textContent = track.name;
         this.playerBar.classList.remove('hidden');
 
-        // Apply saved position if same track
-        const savedState = this.getSavedState();
-        if (savedState && savedState.trackIndex === idx && savedState.position > 0) {
-            this.audio.currentTime = savedState.position;
+        // Update cover image for track-specific cover (if available)
+        if (this.coverImg && trackPath) {
+            const trackCoverUrl = webPrefix + '/audio/' + bookId + '/cover?file=' + encodeURIComponent(trackPath);
+            // Try to load track-specific cover, fallback to book cover on error
+            const testImg = new Image();
+            testImg.onload = () => {
+                this.coverImg.src = trackCoverUrl;
+            };
+            testImg.onerror = () => {
+                // Keep current cover
+            };
+            testImg.src = trackCoverUrl;
+        }
+
+        // Restore saved position for this specific track
+        if (trackPath && this.trackPositions[trackPath] > 0) {
+            this.audio.currentTime = this.trackPositions[trackPath];
+        } else {
+            // Check saved state for backwards compatibility
+            const savedState = this.getSavedState();
+            if (savedState && savedState.trackIndex === idx && savedState.position > 0) {
+                this.audio.currentTime = savedState.position;
+            }
         }
     }
 
@@ -3666,10 +3862,14 @@ class AudioPlayer {
     }
 
     saveState() {
+        // Save current track position to trackPositions map
+        this.saveCurrentTrackPosition();
+
         const state = {
             bookId: bookId,
             trackIndex: this.currentTrackIndex,
             position: this.audio.currentTime,
+            trackPositions: this.trackPositions,
             timestamp: Date.now()
         };
         setCookie('audioState_' + bookId, JSON.stringify(state), 30);
@@ -3689,18 +3889,58 @@ class AudioPlayer {
 
     loadState() {
         const state = this.getSavedState();
-        if (state && state.bookId === bookId && state.trackIndex >= 0 && state.trackIndex < this.tracks.length) {
-            // Show player bar and highlight track
-            this.currentTrackIndex = state.trackIndex;
-            this.loadTrack(state.trackIndex);
-            // Don't auto-play, just set position
-            this.audio.currentTime = state.position || 0;
+        if (state && state.bookId === bookId) {
+            // Restore per-track positions
+            if (state.trackPositions) {
+                this.trackPositions = state.trackPositions;
+            }
+
+            if (state.trackIndex >= 0 && state.trackIndex < this.tracks.length) {
+                // Show player bar and highlight track
+                this.currentTrackIndex = state.trackIndex;
+                this.loadTrack(state.trackIndex);
+                // Don't auto-play, just set position
+                this.audio.currentTime = state.position || 0;
+            }
         }
     }
 }
 
 // Initialize player
 const player = new AudioPlayer();
+
+// Fixed header on scroll
+(function() {
+    const header = document.getElementById('audioHeader');
+    const spacer = document.getElementById('audioHeaderSpacer');
+    if (!header || !spacer) return;
+
+    let headerTop = header.offsetTop;
+    let headerHeight = header.offsetHeight;
+
+    function updateFixedHeader() {
+        if (window.scrollY > headerTop - 10) {
+            if (!header.classList.contains('fixed')) {
+                header.classList.add('fixed');
+                spacer.style.height = headerHeight + 'px';
+                spacer.classList.add('visible');
+            }
+        } else {
+            if (header.classList.contains('fixed')) {
+                header.classList.remove('fixed');
+                spacer.classList.remove('visible');
+            }
+        }
+    }
+
+    window.addEventListener('scroll', updateFixedHeader);
+    window.addEventListener('resize', function() {
+        if (!header.classList.contains('fixed')) {
+            headerTop = header.offsetTop;
+            headerHeight = header.offsetHeight;
+        }
+    });
+})();
 
 // Selection functions (unchanged)
 function updateSelection() {
@@ -3779,7 +4019,7 @@ function downloadSelected() {
 }
 .audio-header {
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-start;
     align-items: flex-start;
     gap: 20px;
     margin-bottom: 30px;
@@ -3787,6 +4027,36 @@ function downloadSelected() {
     background: var(--card-bg);
     border-radius: 12px;
     flex-wrap: wrap;
+    z-index: 100;
+    transition: box-shadow 0.2s;
+}
+.audio-header.fixed {
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 940px;
+    width: calc(100% - 60px);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    margin-bottom: 0;
+}
+.audio-header-spacer {
+    display: none;
+}
+.audio-header-spacer.visible {
+    display: block;
+}
+.audio-cover {
+    width: 150px;
+    height: 150px;
+    object-fit: cover;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    flex-shrink: 0;
+}
+.audio-info {
+    flex: 1;
+    min-width: 200px;
 }
 .audio-info h1 {
     margin: 0 0 10px 0;
@@ -3888,6 +4158,10 @@ function downloadSelected() {
     padding: 8px 15px 8px 35px;
     border-bottom: 1px solid var(--border);
     transition: background 0.2s;
+    cursor: pointer;
+}
+.track-list li:hover {
+    background: rgba(255,255,255,0.05);
 }
 .track-list li:last-child {
     border-bottom: none;
