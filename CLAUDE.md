@@ -66,9 +66,11 @@ sopds-go/
 
 ### Build & Run
 
+**IMPORTANT: The executable name is `sopds`, NOT `sopdsgo`!**
+
 ```bash
 cd sopds-go
-go build -o sopds ./cmd/sopds
+go build -o sopds ./cmd/sopds   # Always use -o sopds
 
 # Server management (systemd service - production)
 sudo systemctl start sopds.service

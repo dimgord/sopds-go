@@ -1,7 +1,130 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 0.40
+## Current Version: 0.44
+
+---
+
+### Revision 29 - 2026-01-25
+**Audiobook Player Enhancements:**
+- Extracted real audio duration from files during scan
+  - New `duration.go` with native Go parsers for MP4, MP3, FLAC, OGG duration extraction
+  - MP4: Parse mvhd atom for timescale and duration
+  - MP3: Parse Xing/Info header for frame count, fallback to bitrate estimation
+  - FLAC: Parse STREAMINFO block for sample rate and total samples
+  - OGG: Read last granule position from end of file
+  - Tested accuracy: MP3 within 0.01s, M4B exact match with ffprobe
+- Made track rows clickable to switch playback
+  - Added `onclick="player.onTrackClick(this, event)"` to track `<li>` elements
+  - Added `event.stopPropagation()` on checkbox, play button, download link to prevent row click
+  - Added cursor:pointer and hover effect to track list items
+- Implemented per-track position persistence
+  - `trackPositions` map stores position for each track by path
+  - `saveCurrentTrackPosition()` saves position before switching tracks
+  - `saveState()` now includes `trackPositions` in cookie
+  - `loadState()` restores per-track positions from cookie
+  - `loadTrack()` restores position for specific track being loaded
+- Made header with cover sticky (always visible)
+  - Added `position: sticky; top: 0; z-index: 100;` to `.audio-header`
+  - Header stays visible while scrolling through track list
+- Added track-specific cover images support
+  - New endpoint `/web/audio/{id}/cover?file={trackPath}` for per-track covers
+  - `handleAudioTrackCover()` extracts cover from specific audio file in archive
+  - `extractTrackCoverFromZip()` and `extractTrackCoverFrom7z()` helpers
+  - `extractCoverFromAudioData()` uses dhowden/tag to extract embedded cover
+  - Player attempts to load track-specific cover when switching tracks
+  - Falls back to book cover if track has no embedded cover
+
+**Files Created:**
+- `internal/scanner/duration.go` - Audio duration extraction for MP4, MP3, FLAC, OGG
+
+**Files Modified:**
+- `internal/scanner/audioparser.go` - Uses `GetAudioDurationFromReader()` for real duration
+- `internal/server/web.go` - Audiodetail template changes:
+  - Track rows clickable with onclick handler
+  - Per-track position storage in AudioPlayer JS class
+  - Sticky header CSS
+  - Track cover update on switch
+  - New `handleAudioTrackCover()` handler
+- `internal/server/server.go` - Added `/audio/{id}/cover` route
+
+---
+
+### Revision 28 - 2026-01-25
+**Bug Fixes:**
+- Fixed bookshelf "Added" state not persisting after navigation
+  - Added `OnBookshelf` field to `BookView` struct
+  - Load user's bookshelf IDs and check when building book views
+  - Template now shows "Added" button if book is already on shelf
+- Fixed bookshelf button not working on mobile/audiodetail page
+  - Changed audiodetail bookshelf link from `<a href>` to JavaScript `onclick`
+  - Now uses same `bookshelfAction()` function as regular book list
+- Fixed pagination showing "Next" when books count equals page size
+  - Changed `hasMore` calculation from `len(books) >= pageSize` to use `pagination.TotalCount`
+  - Now correctly shows "Next" only when more pages exist
+- Fixed audio cover not displaying for 7z audiobooks
+  - Check `book.IsAudiobook` flag, not just audio format extension
+  - Handle standalone 7z/zip archive files as archives (not audio files)
+  - Correctly build archive path from book.Path + book.Filename
+
+**Files Modified:**
+- `internal/server/web.go` - Added OnBookshelf to BookView, updated handlers
+- `internal/server/handlers.go` - Fixed audio cover extraction for 7z archives
+- `internal/domain/repository/bookshelf_repository.go` - Added GetBookIDs interface
+- `internal/infrastructure/persistence/bookshelf_repository.go` - Implemented GetBookIDs
+- `internal/infrastructure/persistence/service.go` - Added GetBookShelfIDs service method
+
+---
+
+### Revision 27 - 2026-01-25
+**Changes:**
+- Added missing file detection for regular files (cat_type=0)
+  - Scanner now detects when standalone files (e.g., 7z audiobooks) are deleted/renamed
+  - Prompts for confirmation before marking as unavailable (respects `auto_clean` config)
+  - Similar to existing ZIP archive cleanup logic
+- Added audio cover display for audiobook detail pages
+  - Set `HasCover: true` for audiobooks in handleWebAudioDetail
+  - Cover extraction from audio files (MP3, M4B, M4A, FLAC, OGG, OPUS)
+  - Supports covers embedded in files inside ZIP and 7z archives
+  - Template has onerror fallback to hide image if no cover found
+- Fixed ZIP cover extraction to buffer data for tag.ReadFrom (requires io.ReadSeeker)
+- Fixed duplicate detection to separate audiobooks from text books
+  - Audiobooks only match other audiobooks
+  - Non-audiobooks only match other non-audiobooks
+  - Prevents audiobook being marked as duplicate of FB2 with same title
+
+**Files Modified:**
+- `internal/scanner/scanner.go` - Added checkMissingRegularFiles() method
+- `internal/infrastructure/persistence/service.go` - Added GetRegularFileBooks(), MarkBooksUnavailable()
+- `internal/infrastructure/persistence/book_repository.go` - Added is_audiobook to duplicate detection queries
+- `internal/server/web.go` - Set HasCover for audiobooks in handleWebAudioDetail
+- `internal/server/handlers.go` - Fixed ZIP audio cover extraction buffering
+
+**New Dependencies:**
+- `github.com/saracen/go7z` - 7z archive reading for cover extraction
+
+---
+
+### Revision 26 - 2026-01-25
+**Changes:**
+- Optimized duplicate detection performance
+  - Added functional indexes on `LOWER(title)` for case-insensitive matching
+  - New index `idx_books_dup_strong` for strong mode (title + format + filesize)
+  - New index `idx_books_dup_normal` for normal mode (title)
+- Implemented incremental duplicate detection
+  - Only checks newly added books against existing ones
+  - O(n) for n new books instead of O(N log N) for N total books
+  - Tracks new book IDs during scan for targeted duplicate checking
+- Added progress reporting during duplicate detection
+  - Logs progress every 500 books processed
+  - Shows percentage completion
+
+**Files Modified:**
+- `internal/infrastructure/persistence/migrations/011_duplicate_detection_index.sql` - New indexes
+- `internal/domain/repository/book_repository.go` - Added MarkDuplicatesIncremental interface
+- `internal/infrastructure/persistence/book_repository.go` - Implemented incremental method
+- `internal/infrastructure/persistence/service.go` - Added service method
+- `internal/scanner/scanner.go` - Track new book IDs, use incremental detection
 
 ---
 

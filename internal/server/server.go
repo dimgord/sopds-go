@@ -108,6 +108,7 @@ func (s *Server) setupRouter() chi.Router {
 		r.Get("/audio", s.handleWebAudio)
 		r.Get("/audio/{id}", s.handleWebAudioDetail)
 		r.Get("/audio/{id}/track", s.handleAudioTrackDownload)
+		r.Get("/audio/{id}/cover", s.handleAudioTrackCover)
 		r.Get("/catalogs", s.handleWebCatalogs)
 		r.Get("/catalogs/{id}", s.handleWebCatalog)
 		r.Get("/bookshelf", s.handleWebBookshelf)

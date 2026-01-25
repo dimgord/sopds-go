@@ -604,6 +604,107 @@ func (r *BookRepository) MarkDuplicates(ctx context.Context, mode repository.Dup
 	return nil
 }
 
+// MarkDuplicatesIncremental marks duplicates only for newly added books
+// This is O(n) for n new books instead of O(N log N) for N total books
+func (r *BookRepository) MarkDuplicatesIncremental(ctx context.Context, mode repository.DuplicateMode, newBookIDs []int64, progressFn func(processed, total int)) error {
+	if mode == repository.DuplicateModeNone || mode == repository.DuplicateModeClear || len(newBookIDs) == 0 {
+		return nil
+	}
+
+	total := len(newBookIDs)
+	batchSize := 100
+	processed := 0
+
+	// Process in batches for progress reporting
+	for i := 0; i < total; i += batchSize {
+		end := i + batchSize
+		if end > total {
+			end = total
+		}
+		batch := newBookIDs[i:end]
+
+		var sql string
+		switch mode {
+		case repository.DuplicateModeNormal:
+			// For each new book, find existing book with same LOWER(title) and authors
+			// Only compute author strings for books with matching titles (much faster)
+			// Audiobooks only match audiobooks, non-audiobooks only match non-audiobooks
+			sql = `
+				WITH new_books AS (
+					SELECT book_id, LOWER(title) as ltitle, is_audiobook
+					FROM books WHERE book_id = ANY($1)
+				),
+				new_book_authors AS (
+					SELECT b.book_id, LOWER(b.title) as ltitle, b.is_audiobook,
+						STRING_AGG(COALESCE(a.last_name, ''), ',' ORDER BY a.author_id) as authors
+					FROM books b
+					LEFT JOIN bauthors ba ON b.book_id = ba.book_id
+					LEFT JOIN authors a ON ba.author_id = a.author_id
+					WHERE b.book_id = ANY($1)
+					GROUP BY b.book_id, b.title, b.is_audiobook
+				),
+				candidate_existing AS (
+					SELECT DISTINCT b.book_id, LOWER(b.title) as ltitle, b.is_audiobook
+					FROM books b
+					JOIN new_books n ON LOWER(b.title) = n.ltitle AND b.is_audiobook = n.is_audiobook
+					WHERE b.avail != 0 AND b.book_id != ALL($1)
+				),
+				existing_book_authors AS (
+					SELECT b.book_id, LOWER(b.title) as ltitle, b.is_audiobook,
+						STRING_AGG(COALESCE(a.last_name, ''), ',' ORDER BY a.author_id) as authors
+					FROM books b
+					LEFT JOIN bauthors ba ON b.book_id = ba.book_id
+					LEFT JOIN authors a ON ba.author_id = a.author_id
+					WHERE b.book_id IN (SELECT book_id FROM candidate_existing)
+					GROUP BY b.book_id, b.title, b.is_audiobook
+				)
+				UPDATE books
+				SET duplicate_of = e.book_id
+				FROM new_book_authors n
+				JOIN existing_book_authors e ON n.ltitle = e.ltitle AND n.authors = e.authors AND n.is_audiobook = e.is_audiobook
+				WHERE books.book_id = n.book_id
+				AND e.book_id < n.book_id`
+
+		case repository.DuplicateModeStrong:
+			// For each new book, find existing book with same title+format+filesize
+			// Audiobooks only match audiobooks, non-audiobooks only match non-audiobooks
+			sql = `
+				UPDATE books new
+				SET duplicate_of = (
+					SELECT MIN(existing.book_id)
+					FROM books existing
+					WHERE existing.avail != 0
+					AND existing.book_id < new.book_id
+					AND LOWER(existing.title) = LOWER(new.title)
+					AND existing.format = new.format
+					AND existing.filesize = new.filesize
+					AND existing.is_audiobook = new.is_audiobook
+				)
+				WHERE new.book_id = ANY($1)
+				AND EXISTS (
+					SELECT 1 FROM books existing
+					WHERE existing.avail != 0
+					AND existing.book_id < new.book_id
+					AND LOWER(existing.title) = LOWER(new.title)
+					AND existing.format = new.format
+					AND existing.filesize = new.filesize
+					AND existing.is_audiobook = new.is_audiobook
+				)`
+		}
+
+		if err := r.db.WithContext(ctx).Exec(sql, batch).Error; err != nil {
+			return fmt.Errorf("mark duplicates batch: %w", err)
+		}
+
+		processed = end
+		if progressFn != nil {
+			progressFn(processed, total)
+		}
+	}
+
+	return nil
+}
+
 // FindDuplicates returns all books that are duplicates of the given book
 func (r *BookRepository) FindDuplicates(ctx context.Context, bookID book.ID, pagination *repository.Pagination) ([]*book.Book, error) {
 	var models []BookModel

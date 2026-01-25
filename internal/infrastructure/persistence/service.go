@@ -616,6 +616,11 @@ func (s *Service) CountBookShelf(ctx context.Context, username string) (int64, e
 	return s.repos.Bookshelf.Count(ctx, username)
 }
 
+// GetBookShelfIDs returns all book IDs on user's bookshelf as a set
+func (s *Service) GetBookShelfIDs(ctx context.Context, username string) (map[int64]bool, error) {
+	return s.repos.Bookshelf.GetBookIDs(ctx, username)
+}
+
 // --- Statistics Operations ---
 
 // GetDBInfo returns database statistics
@@ -685,6 +690,11 @@ func (s *Service) GetBooksForLanguage(ctx context.Context, lang string, paginati
 // MarkDuplicates runs duplicate detection
 func (s *Service) MarkDuplicates(ctx context.Context, mode database.DuplicateMode) error {
 	return s.repos.Books.MarkDuplicates(ctx, repository.DuplicateMode(mode))
+}
+
+// MarkDuplicatesIncremental runs duplicate detection only for newly added books
+func (s *Service) MarkDuplicatesIncremental(ctx context.Context, mode database.DuplicateMode, newBookIDs []int64, progressFn func(processed, total int)) error {
+	return s.repos.Books.MarkDuplicatesIncremental(ctx, repository.DuplicateMode(mode), newBookIDs, progressFn)
 }
 
 // GetBookDuplicates returns all duplicates of a book
@@ -968,6 +978,36 @@ func (s *Service) GetAllZipCatalogs(ctx context.Context) (map[string]int64, erro
 // DeleteBooksInCatalogs deletes all books in the specified catalogs
 func (s *Service) DeleteBooksInCatalogs(ctx context.Context, catalogIDs []int64) (int64, error) {
 	return s.repos.Books.DeleteInCatalogs(ctx, catalogIDs)
+}
+
+// RegularFileInfo contains basic info for regular file existence check
+type RegularFileInfo struct {
+	ID       int64
+	Path     string
+	Filename string
+}
+
+// GetRegularFileBooks returns all available regular files (cat_type=0) for existence check
+func (s *Service) GetRegularFileBooks(ctx context.Context) ([]RegularFileInfo, error) {
+	var results []RegularFileInfo
+	err := s.db.DB.WithContext(ctx).
+		Model(&BookModel{}).
+		Select("book_id, path, filename").
+		Where("cat_type = ? AND avail != ?", 0, 0).
+		Find(&results).Error
+	return results, err
+}
+
+// MarkBooksUnavailable marks the specified books as unavailable (avail=0)
+func (s *Service) MarkBooksUnavailable(ctx context.Context, bookIDs []int64) (int64, error) {
+	if len(bookIDs) == 0 {
+		return 0, nil
+	}
+	result := s.db.DB.WithContext(ctx).
+		Model(&BookModel{}).
+		Where("book_id IN ?", bookIDs).
+		Update("avail", 0)
+	return result.RowsAffected, result.Error
 }
 
 // GetOrCreateAuthor finds an existing author or creates a new one
