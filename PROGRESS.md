@@ -1,7 +1,44 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 0.39
+## Current Version: 0.40
+
+---
+
+### Revision 25 - 2026-01-25
+**Changes:**
+- Implemented full-featured audiobook player UI
+  - Sticky player bar at bottom of page with gradient design
+  - Progress bar with seek functionality (click or drag to seek)
+  - Time display: current time / total duration
+  - Playback controls: prev, -15s, play/pause, +15s, next
+  - Speed control: 0.5x, 0.75x, 1x, 1.25x, 1.5x, 1.75x, 2x (saved in cookie)
+  - Volume toggle (mute/unmute)
+  - Buffering indicator on progress bar
+  - Auto-play next track when current ends
+- Track list enhancements:
+  - Now-playing highlight with pulsing icon animation
+  - Auto-scroll to current track
+  - Auto-expand collapsed folder when track plays
+  - Track icon changes from music note to speaker when playing
+- Cookie-based progress persistence:
+  - Saves current track index and position per book (30 days)
+  - Restores position when returning to audiobook page
+  - Playback speed saved globally (365 days)
+- Keyboard shortcuts:
+  - Space: play/pause
+  - Left/Right arrows: seek -5s/+5s (Shift: -30s/+30s)
+  - Up/Down arrows: volume +/-10%
+  - M: toggle mute
+  - N: next track
+  - P: previous track (or restart if >3s played)
+- Mobile responsive design:
+  - Simplified controls on small screens
+  - Touch-friendly seek bar
+- Player bar positioned below track list (sticky, not fixed at viewport bottom)
+
+**Files Modified:**
+- `internal/server/web.go` - Complete rewrite of audiodetail template with AudioPlayer class
 
 ---
 
