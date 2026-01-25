@@ -1,7 +1,45 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 0.44
+## Current Version: 0.45
+
+---
+
+### Revision 30 - 2026-01-25
+**@eaDir and Folder Cover Support:**
+- Added Synology @eaDir thumbnail support for audiobook covers
+  - `getEaDirCover()` checks for SYNOPHOTO_THUMB_*.jpg patterns
+  - Looks in `@eaDir/{filename}/` and `@eaDir/` directories
+  - Fast cover serving without parsing audio files
+- Added folder cover support (cover.jpg, folder.jpg)
+  - `getFolderCover()` checks for common cover image names
+  - Supports both .jpg and .png formats
+  - Scanner detects folder covers during scan
+- Cover priority: @eaDir → folder cover → embedded in audio → archive extraction
+
+**Duration Extraction Improvements:**
+- Fixed memory issues with large M4B files in archives
+  - Only read first 10MB for M4B/M4A (moov atom often at beginning)
+  - Prevents memory exhaustion for 700MB+ files
+- Improved fallback estimation bitrate (96kbps for AAC, more accurate)
+- Disabled track-specific cover loading (caused 502 errors for large files)
+
+**Bug Fixes:**
+- Fixed nil pointer panic when accessing deleted audiobook
+- Added null check for book in handleWebAudioDetail
+
+**Files Modified:**
+- `internal/server/handlers.go`:
+  - `getEaDirCover()` - Synology thumbnail lookup
+  - `getFolderCover()` - Folder cover lookup
+  - Updated `serveAudioCover()` to check @eaDir and folder covers first
+- `internal/scanner/scanner.go`:
+  - `hasEaDirCover()` - Check @eaDir during scan
+  - `hasFolderCover()` - Check folder covers during scan
+  - Limited archive file reading to 10MB for M4B duration extraction
+- `internal/server/web.go`:
+  - Disabled track-specific cover fetching
+  - Added nil check for book
 
 ---
 
