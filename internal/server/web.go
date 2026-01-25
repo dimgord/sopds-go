@@ -3219,16 +3219,16 @@ function goToPage(page) {
                         <span class="part-duration">{{formatDuration $part.Duration}}</span>
                     </span>
                 </summary>
-                <ul class="track-list">
+                <ul class="track-list" data-part="{{$i}}">
                     {{range $j, $track := $part.Tracks}}
-                    <li>
+                    <li data-url="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" data-name="{{$track.Name}}" data-duration="{{$track.Duration}}">
                         <label class="track-checkbox">
                             <input type="checkbox" class="track-select" data-part="{{$i}}" data-path="{{$track.Path}}" onchange="updateSelection()">
                         </label>
-                        <i class="fas fa-music"></i>
+                        <i class="fas fa-music track-icon"></i>
                         <span class="track-name">{{$track.Name}}</span>
                         <span class="track-duration">{{formatDuration $track.Duration}}</span>
-                        <button class="track-play" onclick="playTrack(this, '{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}')" title="Play">
+                        <button class="track-play" onclick="player.playTrack(this.closest('li'))" title="Play">
                             <i class="fas fa-play"></i>
                         </button>
                         <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" class="track-download" title="Download">
@@ -3244,14 +3244,14 @@ function goToPage(page) {
         <h2><i class="fas fa-list-ol"></i> {{t "audio.tracks"}} ({{len .Structure.Tracks}})</h2>
         <ul class="track-list flat">
             {{range $i, $track := .Structure.Tracks}}
-            <li>
+            <li data-url="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" data-name="{{$track.Name}}" data-duration="{{$track.Duration}}">
                 <label class="track-checkbox">
                     <input type="checkbox" class="track-select" data-path="{{$track.Path}}" onchange="updateSelection()">
                 </label>
-                <i class="fas fa-music"></i>
+                <i class="fas fa-music track-icon"></i>
                 <span class="track-name">{{$track.Name}}</span>
                 <span class="track-duration">{{formatDuration $track.Duration}}</span>
-                <button class="track-play" onclick="playTrack(this, '{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}')" title="Play">
+                <button class="track-play" onclick="player.playTrack(this.closest('li'))" title="Play">
                     <i class="fas fa-play"></i>
                 </button>
                 <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" class="track-download" title="Download">
@@ -3265,7 +3265,50 @@ function goToPage(page) {
     {{end}}
 </div>
 
-<audio id="audioPlayer" style="display:none;"></audio>
+<!-- Audio Player Bar -->
+<div id="playerBar" class="player-bar hidden">
+    <div class="player-progress-container" id="progressContainer">
+        <div class="player-progress-bar" id="progressBar"></div>
+        <div class="player-progress-buffered" id="bufferedBar"></div>
+    </div>
+    <div class="player-content">
+        <div class="player-track-info">
+            <span class="player-track-name" id="playerTrackName">--</span>
+            <span class="player-track-time">
+                <span id="playerCurrentTime">0:00</span> / <span id="playerDuration">0:00</span>
+            </span>
+        </div>
+        <div class="player-controls">
+            <button class="player-btn" id="btnPrev" title="Previous track">
+                <i class="fas fa-step-backward"></i>
+            </button>
+            <button class="player-btn" id="btnRewind" title="Rewind 15s">
+                <i class="fas fa-undo"></i>
+                <span class="btn-label">15</span>
+            </button>
+            <button class="player-btn player-btn-main" id="btnPlayPause" title="Play/Pause">
+                <i class="fas fa-play"></i>
+            </button>
+            <button class="player-btn" id="btnForward" title="Forward 15s">
+                <i class="fas fa-redo"></i>
+                <span class="btn-label">15</span>
+            </button>
+            <button class="player-btn" id="btnNext" title="Next track">
+                <i class="fas fa-step-forward"></i>
+            </button>
+        </div>
+        <div class="player-extras">
+            <div class="speed-control">
+                <button class="player-btn speed-btn" id="btnSpeed">1x</button>
+            </div>
+            <button class="player-btn" id="btnVolume" title="Volume">
+                <i class="fas fa-volume-up"></i>
+            </button>
+        </div>
+    </div>
+</div>
+
+<audio id="audioPlayer"></audio>
 
 <script>
 const bookId = {{.Book.ID}};
@@ -3274,50 +3317,392 @@ const i18n = {
     downloadsel: "{{t "audio.downloadsel"}}"
 };
 
-let currentPlayBtn = null;
-const audioPlayer = document.getElementById('audioPlayer');
+// Cookie helpers
+function setCookie(name, value, days) {
+    const expires = new Date(Date.now() + days * 864e5).toUTCString();
+    document.cookie = name + '=' + encodeURIComponent(value) + '; expires=' + expires + '; path=/';
+}
+function getCookie(name) {
+    return document.cookie.split('; ').reduce((r, v) => {
+        const parts = v.split('=');
+        return parts[0] === name ? decodeURIComponent(parts[1]) : r;
+    }, '');
+}
 
-function playTrack(btn, url) {
-    const icon = btn.querySelector('i');
+// Audio Player Class
+class AudioPlayer {
+    constructor() {
+        this.audio = document.getElementById('audioPlayer');
+        this.playerBar = document.getElementById('playerBar');
+        this.progressContainer = document.getElementById('progressContainer');
+        this.progressBar = document.getElementById('progressBar');
+        this.bufferedBar = document.getElementById('bufferedBar');
+        this.trackNameEl = document.getElementById('playerTrackName');
+        this.currentTimeEl = document.getElementById('playerCurrentTime');
+        this.durationEl = document.getElementById('playerDuration');
+        this.playPauseBtn = document.getElementById('btnPlayPause');
+        this.speedBtn = document.getElementById('btnSpeed');
 
-    // If clicking the same track that's playing, toggle pause/play
-    if (currentPlayBtn === btn) {
-        if (audioPlayer.paused) {
-            audioPlayer.play();
-            icon.classList.remove('fa-play');
-            icon.classList.add('fa-pause');
+        this.tracks = [];
+        this.currentTrackIndex = -1;
+        this.currentTrackLi = null;
+        this.speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+        this.speedIndex = 2; // Default 1x
+        this.isSeeking = false;
+
+        this.init();
+    }
+
+    init() {
+        // Collect all tracks
+        document.querySelectorAll('.track-list li[data-url]').forEach((li, idx) => {
+            this.tracks.push({
+                el: li,
+                url: li.dataset.url,
+                name: li.dataset.name,
+                duration: parseInt(li.dataset.duration) || 0
+            });
+        });
+
+        // Event listeners
+        this.audio.addEventListener('timeupdate', () => this.onTimeUpdate());
+        this.audio.addEventListener('loadedmetadata', () => this.onLoadedMetadata());
+        this.audio.addEventListener('ended', () => this.onEnded());
+        this.audio.addEventListener('play', () => this.onPlay());
+        this.audio.addEventListener('pause', () => this.onPause());
+        this.audio.addEventListener('progress', () => this.onProgress());
+        this.audio.addEventListener('waiting', () => this.onWaiting());
+        this.audio.addEventListener('canplay', () => this.onCanPlay());
+
+        // Control buttons
+        document.getElementById('btnPlayPause').addEventListener('click', () => this.togglePlay());
+        document.getElementById('btnPrev').addEventListener('click', () => this.prevTrack());
+        document.getElementById('btnNext').addEventListener('click', () => this.nextTrack());
+        document.getElementById('btnRewind').addEventListener('click', () => this.seek(-15));
+        document.getElementById('btnForward').addEventListener('click', () => this.seek(15));
+        document.getElementById('btnSpeed').addEventListener('click', () => this.cycleSpeed());
+        document.getElementById('btnVolume').addEventListener('click', () => this.toggleMute());
+
+        // Progress bar seeking
+        this.progressContainer.addEventListener('click', (e) => this.seekTo(e));
+        this.progressContainer.addEventListener('mousedown', (e) => this.startSeek(e));
+        document.addEventListener('mousemove', (e) => this.doSeek(e));
+        document.addEventListener('mouseup', () => this.endSeek());
+
+        // Touch support for mobile
+        this.progressContainer.addEventListener('touchstart', (e) => this.startSeek(e.touches[0]));
+        document.addEventListener('touchmove', (e) => { if (this.isSeeking) this.doSeek(e.touches[0]); });
+        document.addEventListener('touchend', () => this.endSeek());
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => this.onKeyDown(e));
+
+        // Load saved state
+        this.loadState();
+
+        // Load saved speed
+        const savedSpeed = getCookie('audioSpeed');
+        if (savedSpeed) {
+            const idx = this.speeds.indexOf(parseFloat(savedSpeed));
+            if (idx !== -1) {
+                this.speedIndex = idx;
+                this.audio.playbackRate = this.speeds[this.speedIndex];
+                this.speedBtn.textContent = this.speeds[this.speedIndex] + 'x';
+            }
+        }
+    }
+
+    formatTime(seconds) {
+        if (isNaN(seconds) || seconds < 0) return '0:00';
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
+        if (h > 0) {
+            return h + ':' + m.toString().padStart(2, '0') + ':' + s.toString().padStart(2, '0');
+        }
+        return m + ':' + s.toString().padStart(2, '0');
+    }
+
+    playTrack(li) {
+        const idx = this.tracks.findIndex(t => t.el === li);
+        if (idx === -1) return;
+
+        // If same track, toggle play/pause
+        if (idx === this.currentTrackIndex && this.audio.src) {
+            this.togglePlay();
+            return;
+        }
+
+        this.currentTrackIndex = idx;
+        this.loadTrack(idx);
+        this.audio.play().catch(err => console.error('Playback failed:', err));
+    }
+
+    loadTrack(idx) {
+        if (idx < 0 || idx >= this.tracks.length) return;
+
+        const track = this.tracks[idx];
+
+        // Update highlight
+        if (this.currentTrackLi) {
+            this.currentTrackLi.classList.remove('playing');
+            const icon = this.currentTrackLi.querySelector('.track-icon');
+            if (icon) {
+                icon.classList.remove('fa-volume-up');
+                icon.classList.add('fa-music');
+            }
+        }
+        this.currentTrackLi = track.el;
+        this.currentTrackLi.classList.add('playing');
+        const icon = this.currentTrackLi.querySelector('.track-icon');
+        if (icon) {
+            icon.classList.remove('fa-music');
+            icon.classList.add('fa-volume-up');
+        }
+
+        // Scroll into view if needed
+        this.currentTrackLi.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+        // Open parent details if collapsed
+        const details = this.currentTrackLi.closest('details');
+        if (details && !details.open) {
+            details.open = true;
+        }
+
+        // Load audio
+        this.audio.src = track.url;
+        this.audio.load();
+
+        // Update UI
+        this.trackNameEl.textContent = track.name;
+        this.playerBar.classList.remove('hidden');
+
+        // Apply saved position if same track
+        const savedState = this.getSavedState();
+        if (savedState && savedState.trackIndex === idx && savedState.position > 0) {
+            this.audio.currentTime = savedState.position;
+        }
+    }
+
+    togglePlay() {
+        if (this.audio.paused) {
+            this.audio.play();
         } else {
-            audioPlayer.pause();
+            this.audio.pause();
+        }
+    }
+
+    prevTrack() {
+        if (this.audio.currentTime > 3) {
+            this.audio.currentTime = 0;
+        } else if (this.currentTrackIndex > 0) {
+            this.currentTrackIndex--;
+            this.loadTrack(this.currentTrackIndex);
+            this.audio.play();
+        }
+    }
+
+    nextTrack() {
+        if (this.currentTrackIndex < this.tracks.length - 1) {
+            this.currentTrackIndex++;
+            this.loadTrack(this.currentTrackIndex);
+            this.audio.play();
+        }
+    }
+
+    seek(seconds) {
+        this.audio.currentTime = Math.max(0, Math.min(this.audio.duration, this.audio.currentTime + seconds));
+    }
+
+    seekTo(e) {
+        const rect = this.progressContainer.getBoundingClientRect();
+        const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        this.audio.currentTime = percent * this.audio.duration;
+    }
+
+    startSeek(e) {
+        this.isSeeking = true;
+        this.progressContainer.classList.add('seeking');
+    }
+
+    doSeek(e) {
+        if (!this.isSeeking) return;
+        const rect = this.progressContainer.getBoundingClientRect();
+        const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        this.progressBar.style.width = (percent * 100) + '%';
+    }
+
+    endSeek() {
+        if (!this.isSeeking) return;
+        this.isSeeking = false;
+        this.progressContainer.classList.remove('seeking');
+        const percent = parseFloat(this.progressBar.style.width) / 100;
+        if (!isNaN(percent) && this.audio.duration) {
+            this.audio.currentTime = percent * this.audio.duration;
+        }
+    }
+
+    cycleSpeed() {
+        this.speedIndex = (this.speedIndex + 1) % this.speeds.length;
+        this.audio.playbackRate = this.speeds[this.speedIndex];
+        this.speedBtn.textContent = this.speeds[this.speedIndex] + 'x';
+        setCookie('audioSpeed', this.speeds[this.speedIndex], 365);
+    }
+
+    toggleMute() {
+        this.audio.muted = !this.audio.muted;
+        const icon = document.querySelector('#btnVolume i');
+        if (this.audio.muted) {
+            icon.classList.remove('fa-volume-up');
+            icon.classList.add('fa-volume-mute');
+        } else {
+            icon.classList.remove('fa-volume-mute');
+            icon.classList.add('fa-volume-up');
+        }
+    }
+
+    onTimeUpdate() {
+        if (this.isSeeking) return;
+        const percent = (this.audio.currentTime / this.audio.duration) * 100;
+        this.progressBar.style.width = percent + '%';
+        this.currentTimeEl.textContent = this.formatTime(this.audio.currentTime);
+
+        // Save state periodically (every 5 seconds)
+        if (Math.floor(this.audio.currentTime) % 5 === 0) {
+            this.saveState();
+        }
+    }
+
+    onLoadedMetadata() {
+        this.durationEl.textContent = this.formatTime(this.audio.duration);
+    }
+
+    onEnded() {
+        this.saveState();
+        // Auto-play next track
+        if (this.currentTrackIndex < this.tracks.length - 1) {
+            this.nextTrack();
+        } else {
+            // End of playlist
+            const icon = this.playPauseBtn.querySelector('i');
             icon.classList.remove('fa-pause');
             icon.classList.add('fa-play');
         }
-        return;
     }
 
-    // Stop previous track
-    if (currentPlayBtn) {
-        const prevIcon = currentPlayBtn.querySelector('i');
-        prevIcon.classList.remove('fa-pause');
-        prevIcon.classList.add('fa-play');
+    onPlay() {
+        const icon = this.playPauseBtn.querySelector('i');
+        icon.classList.remove('fa-play');
+        icon.classList.add('fa-pause');
+
+        // Update track icon
+        if (this.currentTrackLi) {
+            const trackIcon = this.currentTrackLi.querySelector('.track-icon');
+            if (trackIcon) {
+                trackIcon.classList.remove('fa-music');
+                trackIcon.classList.add('fa-volume-up');
+            }
+        }
     }
 
-    // Play new track
-    currentPlayBtn = btn;
-    audioPlayer.src = url;
-    audioPlayer.play();
-    icon.classList.remove('fa-play');
-    icon.classList.add('fa-pause');
-}
-
-audioPlayer.addEventListener('ended', function() {
-    if (currentPlayBtn) {
-        const icon = currentPlayBtn.querySelector('i');
+    onPause() {
+        const icon = this.playPauseBtn.querySelector('i');
         icon.classList.remove('fa-pause');
         icon.classList.add('fa-play');
-        currentPlayBtn = null;
+        this.saveState();
     }
-});
 
+    onProgress() {
+        if (this.audio.buffered.length > 0) {
+            const bufferedEnd = this.audio.buffered.end(this.audio.buffered.length - 1);
+            const percent = (bufferedEnd / this.audio.duration) * 100;
+            this.bufferedBar.style.width = percent + '%';
+        }
+    }
+
+    onWaiting() {
+        this.playPauseBtn.classList.add('loading');
+    }
+
+    onCanPlay() {
+        this.playPauseBtn.classList.remove('loading');
+    }
+
+    onKeyDown(e) {
+        // Don't trigger if typing in input
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+        switch(e.code) {
+            case 'Space':
+                e.preventDefault();
+                this.togglePlay();
+                break;
+            case 'ArrowLeft':
+                e.preventDefault();
+                this.seek(e.shiftKey ? -30 : -5);
+                break;
+            case 'ArrowRight':
+                e.preventDefault();
+                this.seek(e.shiftKey ? 30 : 5);
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                this.audio.volume = Math.min(1, this.audio.volume + 0.1);
+                break;
+            case 'ArrowDown':
+                e.preventDefault();
+                this.audio.volume = Math.max(0, this.audio.volume - 0.1);
+                break;
+            case 'KeyM':
+                this.toggleMute();
+                break;
+            case 'KeyN':
+                this.nextTrack();
+                break;
+            case 'KeyP':
+                this.prevTrack();
+                break;
+        }
+    }
+
+    saveState() {
+        const state = {
+            bookId: bookId,
+            trackIndex: this.currentTrackIndex,
+            position: this.audio.currentTime,
+            timestamp: Date.now()
+        };
+        setCookie('audioState_' + bookId, JSON.stringify(state), 30);
+    }
+
+    getSavedState() {
+        const saved = getCookie('audioState_' + bookId);
+        if (saved) {
+            try {
+                return JSON.parse(saved);
+            } catch (e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    loadState() {
+        const state = this.getSavedState();
+        if (state && state.bookId === bookId && state.trackIndex >= 0 && state.trackIndex < this.tracks.length) {
+            // Show player bar and highlight track
+            this.currentTrackIndex = state.trackIndex;
+            this.loadTrack(state.trackIndex);
+            // Don't auto-play, just set position
+            this.audio.currentTime = state.position || 0;
+        }
+    }
+}
+
+// Initialize player
+const player = new AudioPlayer();
+
+// Selection functions (unchanged)
 function updateSelection() {
     const checkboxes = document.querySelectorAll('.track-select:checked');
     const btn = document.getElementById('downloadSelectedBtn');
@@ -3325,7 +3710,6 @@ function updateSelection() {
     btn.disabled = checkboxes.length === 0;
     text.textContent = checkboxes.length > 0 ? i18n.downloadsel + ' (' + checkboxes.length + ')' : i18n.downloadsel;
 
-    // Update select all checkbox state
     const allCheckboxes = document.querySelectorAll('.track-select');
     const selectAll = document.getElementById('selectAll');
     if (checkboxes.length === 0) {
@@ -3339,7 +3723,6 @@ function updateSelection() {
         selectAll.indeterminate = true;
     }
 
-    // Update part checkboxes
     document.querySelectorAll('.part-select').forEach(function(partCb) {
         const partIdx = partCb.dataset.part;
         const partTracks = document.querySelectorAll('.track-select[data-part="' + partIdx + '"]');
@@ -3504,9 +3887,21 @@ function downloadSelected() {
     gap: 10px;
     padding: 8px 15px 8px 35px;
     border-bottom: 1px solid var(--border);
+    transition: background 0.2s;
 }
 .track-list li:last-child {
     border-bottom: none;
+}
+.track-list li.playing {
+    background: rgba(102, 126, 234, 0.15);
+}
+.track-list li.playing .track-icon {
+    color: var(--primary);
+    animation: pulse 1.5s ease-in-out infinite;
+}
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
 }
 .track-list li i {
     color: var(--gray);
@@ -3581,6 +3976,158 @@ function downloadSelected() {
     align-items: center;
     gap: 8px;
     cursor: pointer;
+}
+
+/* Player Bar */
+.player-bar {
+    position: sticky;
+    bottom: 0;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 12px;
+    margin-top: 20px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    overflow: hidden;
+}
+.player-bar.hidden {
+    display: none;
+}
+.player-progress-container {
+    height: 6px;
+    background: rgba(255,255,255,0.1);
+    cursor: pointer;
+    position: relative;
+}
+.player-progress-container:hover {
+    height: 10px;
+}
+.player-progress-container.seeking {
+    height: 10px;
+}
+.player-progress-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    width: 0%;
+    z-index: 2;
+    transition: width 0.1s linear;
+}
+.player-progress-buffered {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: rgba(255,255,255,0.2);
+    width: 0%;
+    z-index: 1;
+}
+.player-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px;
+    gap: 20px;
+}
+.player-track-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.player-track-name {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #fff;
+}
+.player-track-time {
+    font-size: 0.85rem;
+    color: var(--gray);
+}
+.player-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.player-btn {
+    background: none;
+    border: none;
+    color: #fff;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    position: relative;
+}
+.player-btn:hover {
+    background: rgba(255,255,255,0.1);
+    transform: scale(1.1);
+}
+.player-btn-main {
+    width: 50px;
+    height: 50px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    font-size: 1.2rem;
+}
+.player-btn-main:hover {
+    background: linear-gradient(135deg, #7b8eee 0%, #8a5eb5 100%);
+}
+.player-btn-main.loading {
+    animation: spin 1s linear infinite;
+}
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+.player-btn .btn-label {
+    position: absolute;
+    font-size: 0.6rem;
+    bottom: 5px;
+    font-weight: bold;
+}
+.player-extras {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.speed-btn {
+    width: auto !important;
+    padding: 0 12px;
+    font-weight: bold;
+    font-size: 0.9rem;
+    border-radius: 20px !important;
+}
+
+/* Mobile responsive */
+@media (max-width: 600px) {
+    .player-content {
+        padding: 8px 12px;
+        gap: 10px;
+    }
+    .player-track-info {
+        max-width: 100px;
+    }
+    .player-btn {
+        width: 36px;
+        height: 36px;
+    }
+    .player-btn-main {
+        width: 44px;
+        height: 44px;
+    }
+    #btnRewind, #btnForward {
+        display: none;
+    }
+    .player-extras {
+        display: none;
+    }
 }
 </style>
 {{end}}`,
