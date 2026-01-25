@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dhowden/tag"
+	"golang.org/x/text/encoding/charmap"
 
 	"github.com/sopds/sopds-go/internal/database"
 )
@@ -60,12 +62,12 @@ func (p *AudioParser) Parse(r io.ReadSeeker, filesize int64, format string) (*Au
 	}
 
 	meta := &AudioMetadata{
-		Title:       strings.TrimSpace(m.Title()),
-		Artist:      strings.TrimSpace(m.Artist()),
-		Album:       strings.TrimSpace(m.Album()),
-		AlbumArtist: strings.TrimSpace(m.AlbumArtist()),
-		Composer:    strings.TrimSpace(m.Composer()),
-		Genre:       strings.TrimSpace(m.Genre()),
+		Title:       fixCyrillicEncoding(strings.TrimSpace(m.Title())),
+		Artist:      fixCyrillicEncoding(strings.TrimSpace(m.Artist())),
+		Album:       fixCyrillicEncoding(strings.TrimSpace(m.Album())),
+		AlbumArtist: fixCyrillicEncoding(strings.TrimSpace(m.AlbumArtist())),
+		Composer:    fixCyrillicEncoding(strings.TrimSpace(m.Composer())),
+		Genre:       fixCyrillicEncoding(strings.TrimSpace(m.Genre())),
 		Year:        m.Year(),
 		Filesize:    filesize,
 		Format:      format,
@@ -267,4 +269,149 @@ func AudioFormatMIME(format string) string {
 	default:
 		return "audio/mpeg"
 	}
+}
+
+// fixCyrillicEncoding detects and fixes encoding issues in audio metadata
+// - Removes null bytes (from UTF-16 misread as UTF-8)
+// - Fixes Windows-1251 text incorrectly read as Latin-1
+func fixCyrillicEncoding(s string) string {
+	if s == "" {
+		return s
+	}
+
+	// First, remove null bytes (common issue with UTF-16 misread as UTF-8)
+	// UTF-16 chars like "А" are stored as 0x10 0x04, which when read as UTF-8 stream
+	// can appear as character + null alternating
+	if strings.ContainsRune(s, 0) {
+		cleaned := strings.Map(func(r rune) rune {
+			if r == 0 {
+				return -1 // Remove null bytes
+			}
+			return r
+		}, s)
+		if cleaned != "" {
+			s = cleaned
+		}
+	}
+
+	// Check for UTF-16 pattern (alternating char + space/null pattern)
+	// This manifests as "А б в г" instead of "Абвг"
+	if looksLikeUTF16AsUTF8(s) {
+		s = fixUTF16AsUTF8(s)
+	}
+
+	// If string is valid UTF-8 and doesn't look like mojibake, keep it
+	if utf8.ValidString(s) && !looksLikeMojibake(s) {
+		return s
+	}
+
+	// Try to decode as Windows-1251 (Latin-1 bytes -> Windows-1251)
+	// Convert string to bytes (Latin-1 codepoints map directly to byte values)
+	bytes := make([]byte, 0, len(s))
+	for _, r := range s {
+		if r < 256 {
+			bytes = append(bytes, byte(r))
+		} else {
+			// Non-Latin-1 character, probably already UTF-8
+			return s
+		}
+	}
+
+	// Decode as Windows-1251
+	decoded, err := charmap.Windows1251.NewDecoder().Bytes(bytes)
+	if err != nil {
+		return s
+	}
+
+	result := string(decoded)
+	// Verify the result looks better (contains Cyrillic)
+	if hasCyrillic(result) {
+		return result
+	}
+
+	return s
+}
+
+// looksLikeUTF16AsUTF8 detects UTF-16 data misread as UTF-8
+// Pattern: characters separated by spaces (the null high bytes in UTF-16 LE)
+func looksLikeUTF16AsUTF8(s string) bool {
+	// Check if string has alternating pattern: char, space, char, space
+	runes := []rune(s)
+	if len(runes) < 4 {
+		return false
+	}
+
+	// Count how many odd positions are spaces
+	spaceCount := 0
+	charCount := 0
+	for i, r := range runes {
+		if i%2 == 1 && r == ' ' {
+			spaceCount++
+		}
+		if i%2 == 0 && r != ' ' {
+			charCount++
+		}
+	}
+
+	// If more than 60% of odd positions are spaces, likely UTF-16 issue
+	total := len(runes) / 2
+	return total > 2 && float64(spaceCount)/float64(total) > 0.6
+}
+
+// fixUTF16AsUTF8 removes the extra spaces from UTF-16 misread as UTF-8
+func fixUTF16AsUTF8(s string) string {
+	runes := []rune(s)
+	result := make([]rune, 0, len(runes)/2)
+
+	for i, r := range runes {
+		// Keep only even-position characters (the actual content)
+		// Skip odd-position spaces (the null bytes from UTF-16)
+		if i%2 == 0 {
+			result = append(result, r)
+		} else if r != ' ' && r != 0 {
+			// If odd position is not space/null, keep it (not UTF-16 pattern)
+			result = append(result, r)
+		}
+	}
+
+	return strings.TrimSpace(string(result))
+}
+
+// looksLikeMojibake checks if a string looks like mojibake (Windows-1251 read as Latin-1)
+// Common mojibake patterns: high-Latin characters (0x80-0xFF) that form Cyrillic ranges
+func looksLikeMojibake(s string) bool {
+	if s == "" {
+		return false
+	}
+
+	// Count high-Latin characters (potential mojibake)
+	highLatinCount := 0
+	totalChars := 0
+
+	for _, r := range s {
+		totalChars++
+		// Windows-1251 Cyrillic (А-я) maps to 0xC0-0xFF in Latin-1
+		// Also check for common high-Latin characters
+		if r >= 0x80 && r <= 0xFF {
+			highLatinCount++
+		}
+	}
+
+	// If more than 30% high-Latin, likely mojibake
+	if totalChars > 0 && float64(highLatinCount)/float64(totalChars) > 0.3 {
+		return true
+	}
+
+	return false
+}
+
+// hasCyrillic checks if string contains Cyrillic characters
+func hasCyrillic(s string) bool {
+	for _, r := range s {
+		// Cyrillic range: U+0400 to U+04FF
+		if r >= 0x0400 && r <= 0x04FF {
+			return true
+		}
+	}
+	return false
 }

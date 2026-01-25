@@ -86,10 +86,15 @@ func (g *AudiobookGrouper) createGroup(folder string, files []string) *Audiobook
 		return nil
 	}
 
+	folderName := filepath.Base(folder)
 	group := &AudiobookGroup{
 		FolderPath: folder,
-		FolderName: filepath.Base(folder),
+		FolderName: folderName,
 	}
+
+	// Parse title from folder name first (format: "Author - Title")
+	// This is more reliable than metadata for folder-based audiobooks
+	group.Title = parseTitleFromFolderName(folderName)
 
 	// Track format counts to determine primary format
 	formatCounts := make(map[string]int)
@@ -116,16 +121,15 @@ func (g *AudiobookGrouper) createGroup(folder string, files []string) *Audiobook
 		group.TotalSize += track.Size
 		formatCounts[meta.Format]++
 
-		// Use first file with good metadata for group info
-		if group.Title == "" && meta.GetAlbumTitle() != "" {
-			group.Title = meta.GetAlbumTitle()
-		}
-		if len(group.Authors) == 0 {
-			group.Authors = meta.GetAuthors()
-		}
+		// For folder audiobooks, treat metadata "artist" as narrator, not author
+		// Authors should come from folder name parsing in processAudioGroup
 		if len(group.Narrators) == 0 {
+			// First check explicit narrator field
 			if narrator := meta.GetNarrator(); narrator != nil {
 				group.Narrators = []database.Author{*narrator}
+			} else {
+				// Use artist from metadata as narrator (voice actor)
+				group.Authors = meta.GetAuthors()
 			}
 		}
 		if group.Year == 0 && meta.Year > 0 {
@@ -161,34 +165,75 @@ func (g *AudiobookGrouper) createGroup(folder string, files []string) *Audiobook
 		}
 	}
 
-	// Fallback title to folder name if no metadata
-	if group.Title == "" {
-		group.Title = cleanFolderName(group.FolderName)
-	}
-
 	return group
 }
 
-// cleanFolderName cleans up a folder name to use as title
-func cleanFolderName(name string) string {
-	// Remove common prefixes/suffixes
+// parseTitleFromFolderName extracts title from "Author - Title" format
+func parseTitleFromFolderName(name string) string {
 	name = strings.TrimSpace(name)
 
-	// Remove year patterns like "(2020)" or "[2020]"
-	// Keep the core title
-	for _, sep := range []string{" - ", " – ", "_"} {
+	// Try different separators
+	for _, sep := range []string{" - ", " – ", "_-_"} {
 		if idx := strings.Index(name, sep); idx > 0 {
-			// Take the longer part
-			parts := strings.SplitN(name, sep, 2)
-			if len(parts[0]) > len(parts[1]) {
-				name = parts[0]
-			} else {
-				name = parts[1]
+			// Return the part after separator as title
+			title := strings.TrimSpace(name[idx+len(sep):])
+			// Clean up year patterns like "(2020)" or "[2020]"
+			title = strings.TrimSpace(removeYearSuffix(title))
+			if title != "" {
+				return title
 			}
 		}
 	}
 
-	return strings.TrimSpace(name)
+	// No separator found, return cleaned folder name
+	return strings.TrimSpace(removeYearSuffix(name))
+}
+
+// removeYearSuffix removes year patterns like "(2020)" or "[2020]" from end of string
+func removeYearSuffix(s string) string {
+	// Simple pattern matching for [YYYY] or (YYYY) at end
+	s = strings.TrimSpace(s)
+	if len(s) < 6 {
+		return s
+	}
+
+	// Check for [YYYY] pattern
+	if s[len(s)-1] == ']' {
+		for i := len(s) - 2; i >= 0; i-- {
+			if s[i] == '[' {
+				// Check if content is a year (4 digits)
+				content := s[i+1 : len(s)-1]
+				if len(content) == 4 && isDigits(content) {
+					return strings.TrimSpace(s[:i])
+				}
+				break
+			}
+		}
+	}
+
+	// Check for (YYYY) pattern
+	if s[len(s)-1] == ')' {
+		for i := len(s) - 2; i >= 0; i-- {
+			if s[i] == '(' {
+				content := s[i+1 : len(s)-1]
+				if len(content) == 4 && isDigits(content) {
+					return strings.TrimSpace(s[:i])
+				}
+				break
+			}
+		}
+	}
+
+	return s
+}
+
+func isDigits(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // IsSingleFileAudiobook returns true if the file is a single-file audiobook format
