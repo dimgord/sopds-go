@@ -3654,19 +3654,8 @@ class AudioPlayer {
         this.trackNameEl.textContent = track.name;
         this.playerBar.classList.remove('hidden');
 
-        // Update cover image for track-specific cover (if available)
-        if (this.coverImg && trackPath) {
-            const trackCoverUrl = webPrefix + '/audio/' + bookId + '/cover?file=' + encodeURIComponent(trackPath);
-            // Try to load track-specific cover, fallback to book cover on error
-            const testImg = new Image();
-            testImg.onload = () => {
-                this.coverImg.src = trackCoverUrl;
-            };
-            testImg.onerror = () => {
-                // Keep current cover
-            };
-            testImg.src = trackCoverUrl;
-        }
+        // Track-specific covers disabled - reading large files from archives is too slow
+        // All tracks share the book's cover image
 
         // Restore saved position for this specific track
         if (trackPath && this.trackPositions[trackPath] > 0) {

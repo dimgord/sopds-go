@@ -786,6 +786,24 @@ func (s *Server) serveAudioCover(w http.ResponseWriter, r *http.Request, book *d
 	audioPath := filepath.Join(s.config.Library.Root, book.Path, book.Filename)
 	ext := strings.ToLower(filepath.Ext(book.Filename))
 
+	// First, try @eaDir (Synology NAS pre-generated thumbnails)
+	if coverData, coverType := s.getEaDirCover(audioPath); len(coverData) > 0 {
+		w.Header().Set("Content-Type", coverType)
+		w.Header().Set("Content-Length", strconv.Itoa(len(coverData)))
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(coverData)
+		return
+	}
+
+	// Try folder cover (cover.jpg, folder.jpg in same directory)
+	if coverData, coverType := s.getFolderCover(audioPath); len(coverData) > 0 {
+		w.Header().Set("Content-Type", coverType)
+		w.Header().Set("Content-Length", strconv.Itoa(len(coverData)))
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(coverData)
+		return
+	}
+
 	// Check if file is an archive (7z or zip containing audio)
 	if ext == ".7z" || ext == ".zip" || book.CatType != database.CatNormal {
 		coverData, coverType, err := s.extractAudioCoverFromArchive(book)
@@ -829,6 +847,80 @@ func (s *Server) serveAudioCover(w http.ResponseWriter, r *http.Request, book *d
 	w.Header().Set("Content-Length", strconv.Itoa(len(pic.Data)))
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Write(pic.Data)
+}
+
+// getEaDirCover looks for Synology @eaDir pre-generated thumbnails
+func (s *Server) getEaDirCover(audioPath string) ([]byte, string) {
+	dir := filepath.Dir(audioPath)
+	filename := filepath.Base(audioPath)
+	eaDir := filepath.Join(dir, "@eaDir")
+
+	// Check if @eaDir exists
+	if _, err := os.Stat(eaDir); os.IsNotExist(err) {
+		return nil, ""
+	}
+
+	// Try various Synology thumbnail patterns
+	patterns := []string{
+		// Synology Audio Station thumbnails
+		filepath.Join(eaDir, filename, "SYNOPHOTO_THUMB_XL.jpg"),
+		filepath.Join(eaDir, filename, "SYNOPHOTO_THUMB_L.jpg"),
+		filepath.Join(eaDir, filename, "SYNOPHOTO_THUMB_M.jpg"),
+		filepath.Join(eaDir, filename, "SYNOPHOTO_THUMB_SM.jpg"),
+		// Alternative patterns
+		filepath.Join(eaDir, filename+".jpg"),
+		filepath.Join(eaDir, filename, "cover.jpg"),
+		filepath.Join(eaDir, filename, "folder.jpg"),
+	}
+
+	for _, pattern := range patterns {
+		if data, err := os.ReadFile(pattern); err == nil && len(data) > 0 {
+			return data, "image/jpeg"
+		}
+	}
+
+	// Also check for folder-level cover in @eaDir
+	folderPatterns := []string{
+		filepath.Join(eaDir, "folder.jpg"),
+		filepath.Join(eaDir, "cover.jpg"),
+		filepath.Join(eaDir, "SYNOPHOTO_THUMB_XL.jpg"),
+	}
+
+	for _, pattern := range folderPatterns {
+		if data, err := os.ReadFile(pattern); err == nil && len(data) > 0 {
+			return data, "image/jpeg"
+		}
+	}
+
+	return nil, ""
+}
+
+// getFolderCover looks for cover.jpg or folder.jpg in the audio file's directory
+func (s *Server) getFolderCover(audioPath string) ([]byte, string) {
+	dir := filepath.Dir(audioPath)
+
+	patterns := []string{
+		filepath.Join(dir, "cover.jpg"),
+		filepath.Join(dir, "Cover.jpg"),
+		filepath.Join(dir, "folder.jpg"),
+		filepath.Join(dir, "Folder.jpg"),
+		filepath.Join(dir, "cover.png"),
+		filepath.Join(dir, "Cover.png"),
+		filepath.Join(dir, "folder.png"),
+		filepath.Join(dir, "Folder.png"),
+	}
+
+	for _, pattern := range patterns {
+		if data, err := os.ReadFile(pattern); err == nil && len(data) > 0 {
+			mimeType := "image/jpeg"
+			if strings.HasSuffix(strings.ToLower(pattern), ".png") {
+				mimeType = "image/png"
+			}
+			return data, mimeType
+		}
+	}
+
+	return nil, ""
 }
 
 // extractAudioCoverFromArchive extracts cover from first audio file in archive

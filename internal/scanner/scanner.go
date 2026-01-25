@@ -763,13 +763,61 @@ func (s *Scanner) parseAudioMetadata(ctx context.Context, path string, book *dat
 	book.Bitrate = meta.Bitrate
 	book.TrackCount = 1 // Single file
 
-	// Set cover if available
+	// Set cover if available (check embedded first, then @eaDir, then folder)
 	if len(meta.Cover) > 0 {
 		book.Cover = "embedded"
 		book.CoverType = meta.CoverType
+	} else if hasEaDirCover(path) {
+		book.Cover = "eadir"
+		book.CoverType = "image/jpeg"
+	} else if hasFolderCover(filepath.Dir(path)) {
+		book.Cover = "folder"
+		book.CoverType = "image/jpeg"
 	}
 
 	return &AudioMeta{Author: author}
+}
+
+// hasEaDirCover checks if Synology @eaDir has a cover for this file
+func hasEaDirCover(audioPath string) bool {
+	dir := filepath.Dir(audioPath)
+	filename := filepath.Base(audioPath)
+	eaDir := filepath.Join(dir, "@eaDir")
+
+	patterns := []string{
+		filepath.Join(eaDir, filename, "SYNOPHOTO_THUMB_XL.jpg"),
+		filepath.Join(eaDir, filename, "SYNOPHOTO_THUMB_L.jpg"),
+		filepath.Join(eaDir, filename, "SYNOPHOTO_THUMB_M.jpg"),
+		filepath.Join(eaDir, filename+".jpg"),
+	}
+
+	for _, pattern := range patterns {
+		if _, err := os.Stat(pattern); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// hasFolderCover checks if the folder has a cover image file
+func hasFolderCover(dir string) bool {
+	patterns := []string{
+		filepath.Join(dir, "cover.jpg"),
+		filepath.Join(dir, "Cover.jpg"),
+		filepath.Join(dir, "folder.jpg"),
+		filepath.Join(dir, "Folder.jpg"),
+		filepath.Join(dir, "cover.png"),
+		filepath.Join(dir, "folder.png"),
+		filepath.Join(dir, "@eaDir", "cover.jpg"),
+		filepath.Join(dir, "@eaDir", "folder.jpg"),
+	}
+
+	for _, pattern := range patterns {
+		if _, err := os.Stat(pattern); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // parseAudioFolderName parses "Author - Title" or "Author_-_Title" format
@@ -1346,15 +1394,22 @@ func (s *Scanner) processAudio7z(ctx context.Context, path, relPath string, szr 
 		// Extract actual duration from audio file
 		format := strings.TrimPrefix(ext, ".")
 		duration := 0
+		fileSize := int64(f.UncompressedSize)
+
+		// For M4B/M4A, only read first 10MB to find moov atom (if faststart)
+		// For smaller files, read entire file
+		maxRead := fileSize
+		if (format == "m4b" || format == "m4a" || format == "aac" || format == "mp4") && fileSize > 10*1024*1024 {
+			maxRead = 10 * 1024 * 1024 // 10MB should be enough for moov at beginning
+		}
 
 		rc, err := f.Open()
 		if err == nil {
-			// Read file into memory for duration extraction
-			data, err := io.ReadAll(rc)
+			data, err := io.ReadAll(io.LimitReader(rc, maxRead))
 			rc.Close()
-			if err == nil {
+			if err == nil && len(data) > 0 {
 				r := bytes.NewReader(data)
-				if dur, err := GetAudioDurationFromReader(r, int64(len(data)), format); err == nil && dur > 0 {
+				if dur, err := GetAudioDurationFromReader(r, fileSize, format); err == nil && dur > 0 {
 					duration = int(dur.Seconds())
 				}
 			}
@@ -1362,16 +1417,17 @@ func (s *Scanner) processAudio7z(ctx context.Context, path, relPath string, szr 
 
 		// Fallback to estimation if extraction failed
 		if duration == 0 {
-			bitrate := 128
+			// Use realistic bitrates for estimation
+			bitrate := 128 // default for MP3
 			switch format {
-			case "m4b", "m4a", "aac":
-				bitrate = 64
+			case "m4b", "m4a", "aac", "mp4":
+				bitrate = 96 // AAC audiobooks typically 64-128kbps, use middle
 			case "flac":
 				bitrate = 800
 			case "ogg", "opus":
 				bitrate = 96
 			}
-			duration = int(float64(f.UncompressedSize) * 8 / float64(bitrate*1000))
+			duration = int(float64(fileSize) * 8 / float64(bitrate*1000))
 		}
 
 		tracks = append(tracks, trackInfo{
@@ -1588,15 +1644,22 @@ func (s *Scanner) processAudioZip(ctx context.Context, path, relPath string, zr 
 		// Extract actual duration from audio file
 		format := strings.TrimPrefix(ext, ".")
 		duration := 0
+		fileSize := int64(f.UncompressedSize64)
+
+		// For M4B/M4A, only read first 10MB to find moov atom (if faststart)
+		// For smaller files, read entire file
+		maxRead := fileSize
+		if (format == "m4b" || format == "m4a" || format == "aac" || format == "mp4") && fileSize > 10*1024*1024 {
+			maxRead = 10 * 1024 * 1024 // 10MB should be enough for moov at beginning
+		}
 
 		rc, err := f.Open()
 		if err == nil {
-			// Read file into memory for duration extraction
-			data, err := io.ReadAll(rc)
+			data, err := io.ReadAll(io.LimitReader(rc, maxRead))
 			rc.Close()
-			if err == nil {
+			if err == nil && len(data) > 0 {
 				r := bytes.NewReader(data)
-				if dur, err := GetAudioDurationFromReader(r, int64(len(data)), format); err == nil && dur > 0 {
+				if dur, err := GetAudioDurationFromReader(r, fileSize, format); err == nil && dur > 0 {
 					duration = int(dur.Seconds())
 				}
 			}
@@ -1604,16 +1667,17 @@ func (s *Scanner) processAudioZip(ctx context.Context, path, relPath string, zr 
 
 		// Fallback to estimation if extraction failed
 		if duration == 0 {
-			bitrate := 128
+			// Use realistic bitrates for estimation
+			bitrate := 128 // default for MP3
 			switch format {
-			case "m4b", "m4a", "aac":
-				bitrate = 64
+			case "m4b", "m4a", "aac", "mp4":
+				bitrate = 96 // AAC audiobooks typically 64-128kbps, use middle
 			case "flac":
 				bitrate = 800
 			case "ogg", "opus":
 				bitrate = 96
 			}
-			duration = int(float64(f.UncompressedSize64) * 8 / float64(bitrate*1000))
+			duration = int(float64(fileSize) * 8 / float64(bitrate*1000))
 		}
 
 		tracks = append(tracks, trackInfo{
@@ -1621,9 +1685,9 @@ func (s *Scanner) processAudioZip(ctx context.Context, path, relPath string, zr 
 			relPath:  relFilePath,
 			fullPath: f.Name,
 			duration: duration,
-			size:     int64(f.UncompressedSize64),
+			size:     fileSize,
 		})
-		totalSize += int64(f.UncompressedSize64)
+		totalSize += fileSize
 		totalDuration += duration
 	}
 
