@@ -72,10 +72,11 @@
 - Both password fields have eye icon toggle for show/hide
 - Real-time validation checks passwords match before enabling submit
 - When password changes, confirm field re-validates automatically
-- Translations added for both EN and UK:
+- Full i18n for all auth page strings (EN/UK):
   - Confirm Password / Підтвердіть пароль
   - Password requirements (8+ chars, lowercase, uppercase, digit)
   - "or" divider text
+  - JavaScript validation errors (passwords don't match, username/email not available)
 
 **Files Modified:**
 - `internal/server/auth_templates.go` - Added password confirmation field with toggle, CSS for `.password-wrapper` and `.password-toggle`, JavaScript `togglePassword()` and `validateConfirmPassword()` functions
