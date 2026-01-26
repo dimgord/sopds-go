@@ -285,11 +285,17 @@ Features:
 - User dropdown in navigation header
 
 **Internationalization (i18n):**
-- Switch language via URL param: `?lang=en` or `?lang=uk`
+- Supported languages: English (en), Ukrainian (uk), French (fr), Spanish (es), German (de)
 - Language preference saved in cookie (1 year)
-- To add a new language, edit `internal/server/web.go`:
-  1. Add to `supportedLanguages` slice
-  2. Add translations to `translations` map
+- Switch via language selector in UI header
+- Translations stored in YAML files: `internal/i18n/locales/*.yaml`
+
+**To add a new language:**
+1. Copy `internal/i18n/locales/en.yaml` to `internal/i18n/locales/XX.yaml`
+2. Translate all values in the new file
+3. Add language code to `supportedLanguages` in `internal/i18n/i18n.go`
+4. Add display name to `languageNames` map in same file
+5. Rebuild the application
 
 ### OPDS Interface
 

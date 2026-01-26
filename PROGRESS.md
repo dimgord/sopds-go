@@ -79,12 +79,15 @@
 - To add a new language: copy `en.yaml`, translate, add code to `supportedLanguages`
 - All translations consolidated from web.go and server.go into YAML files
 - Uses Go's `embed` to compile translations into binary
-- Full EN/UK support for all strings
+- **Supported languages (5):** English, Ukrainian, French, Spanish, German
 
 **Files Created:**
 - `internal/i18n/i18n.go` - i18n package with YAML loading
 - `internal/i18n/locales/en.yaml` - English translations
-- `internal/i18n/locales/uk.yaml` - Ukrainian translations
+- `internal/i18n/locales/uk.yaml` - Ukrainian translations (Українська)
+- `internal/i18n/locales/fr.yaml` - French translations (Français)
+- `internal/i18n/locales/es.yaml` - Spanish translations (Español)
+- `internal/i18n/locales/de.yaml` - German translations (Deutsch)
 
 **Files Modified:**
 - `internal/server/web.go` - Uses i18n package instead of inline translations
