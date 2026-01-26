@@ -67,6 +67,19 @@
 - Fix: Use `{{or $track.Path $track.Name}}` to fallback to filename
 - Applied to both collection tracks and flat track list templates
 
+**Feature: Password Confirmation with Show/Hide Toggle:**
+- Added password confirmation field to registration form
+- Both password fields have eye icon toggle for show/hide
+- Real-time validation checks passwords match before enabling submit
+- When password changes, confirm field re-validates automatically
+- Translations added for both EN and UK:
+  - Confirm Password / Підтвердіть пароль
+  - Password requirements (8+ chars, lowercase, uppercase, digit)
+  - "or" divider text
+
+**Files Modified:**
+- `internal/server/auth_templates.go` - Added password confirmation field with toggle, CSS for `.password-wrapper` and `.password-toggle`, JavaScript `togglePassword()` and `validateConfirmPassword()` functions
+
 **Files Created:**
 - `internal/server/favicon.go` - SVG favicon with book icon
 
