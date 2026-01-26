@@ -1,7 +1,7 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 0.51
+## Current Version: 1.0.0
 
 ---
 
