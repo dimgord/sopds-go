@@ -440,6 +440,11 @@ func getAuthTranslations(lang string) map[string]string {
 			"guest_warning":       "You are browsing as a guest. Your bookshelf and settings will not be saved.",
 			"welcome":             "Welcome to",
 			"library_description": "Your personal e-book library",
+			"or":                  "or",
+			"req_length":          "8+ chars",
+			"req_lower":           "lowercase",
+			"req_upper":           "uppercase",
+			"req_digit":           "digit",
 		},
 		"uk": {
 			"login":               "Увійти",
@@ -464,6 +469,11 @@ func getAuthTranslations(lang string) map[string]string {
 			"guest_warning":       "Ви переглядаєте як гість. Ваша полиця та налаштування не будуть збережені.",
 			"welcome":             "Ласкаво просимо до",
 			"library_description": "Ваша персональна бібліотека",
+			"or":                  "або",
+			"req_length":          "8+ символів",
+			"req_lower":           "мала літера",
+			"req_upper":           "велика літера",
+			"req_digit":           "цифра",
 		},
 	}
 

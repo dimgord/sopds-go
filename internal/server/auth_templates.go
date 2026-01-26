@@ -143,6 +143,27 @@ const authBaseTemplate = `<!DOCTYPE html>
         .password-requirements span i {
             font-size: 0.7rem;
         }
+        .password-wrapper {
+            position: relative;
+        }
+        .password-wrapper input {
+            padding-right: 45px;
+        }
+        .password-toggle {
+            position: absolute;
+            right: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: var(--gray);
+            cursor: pointer;
+            padding: 4px;
+            font-size: 1rem;
+        }
+        .password-toggle:hover {
+            color: var(--primary);
+        }
         .btn {
             width: 100%;
             padding: 14px 20px;
@@ -295,7 +316,7 @@ var authPageTemplates = map[string]string{
         <a href="{{.WebPrefix}}/register" class="btn btn-secondary">
             <i class="fas fa-user-plus"></i> {{.T.register}}
         </a>
-        <div class="divider"><span>or</span></div>
+        <div class="divider"><span>{{.T.or}}</span></div>
         <form action="{{.WebPrefix}}/guest" method="POST">
             <button type="submit" class="btn btn-secondary">
                 <i class="fas fa-user-secret"></i> {{.T.continue_as_guest}}
@@ -358,7 +379,7 @@ var authPageTemplates = map[string]string{
         <a href="{{.WebPrefix}}/forgot-password">{{.T.forgot_password}}</a>
     </div>
 
-    <div class="divider"><span>or</span></div>
+    <div class="divider"><span>{{.T.or}}</span></div>
 
     <div class="auth-links">
         {{.T.no_account}} <a href="{{.WebPrefix}}/register">{{.T.register}}</a>
@@ -398,13 +419,29 @@ var authPageTemplates = map[string]string{
 
         <div class="form-group">
             <label for="password">{{.T.password}}</label>
-            <input type="password" id="password" name="password" required minlength="8">
-            <div class="password-requirements">
-                <span id="reqLength"><i class="fas fa-circle"></i> 8+ chars</span>
-                <span id="reqLower"><i class="fas fa-circle"></i> lowercase</span>
-                <span id="reqUpper"><i class="fas fa-circle"></i> uppercase</span>
-                <span id="reqDigit"><i class="fas fa-circle"></i> digit</span>
+            <div class="password-wrapper">
+                <input type="password" id="password" name="password" required minlength="8">
+                <button type="button" class="password-toggle" onclick="togglePassword('password', this)">
+                    <i class="fas fa-eye"></i>
+                </button>
             </div>
+            <div class="password-requirements">
+                <span id="reqLength"><i class="fas fa-circle"></i> {{.T.req_length}}</span>
+                <span id="reqLower"><i class="fas fa-circle"></i> {{.T.req_lower}}</span>
+                <span id="reqUpper"><i class="fas fa-circle"></i> {{.T.req_upper}}</span>
+                <span id="reqDigit"><i class="fas fa-circle"></i> {{.T.req_digit}}</span>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="confirmPassword">{{.T.confirm_password}}</label>
+            <div class="password-wrapper">
+                <input type="password" id="confirmPassword" name="confirmPassword" required minlength="8">
+                <button type="button" class="password-toggle" onclick="togglePassword('confirmPassword', this)">
+                    <i class="fas fa-eye"></i>
+                </button>
+            </div>
+            <div class="error" id="confirmError"></div>
         </div>
 
         <button type="submit" class="btn btn-primary" id="submitBtn" disabled>
@@ -412,7 +449,7 @@ var authPageTemplates = map[string]string{
         </button>
     </form>
 
-    <div class="divider"><span>or</span></div>
+    <div class="divider"><span>{{.T.or}}</span></div>
 
     <div class="auth-links">
         {{.T.already_have_account}} <a href="{{.WebPrefix}}/login">{{.T.login}}</a>
@@ -424,10 +461,49 @@ const apiBase = '/api/auth';
 let usernameValid = false;
 let emailValid = false;
 let passwordValid = false;
+let confirmValid = false;
 let checkTimeout;
 
 function updateSubmitButton() {
-    document.getElementById('submitBtn').disabled = !(usernameValid && emailValid && passwordValid);
+    document.getElementById('submitBtn').disabled = !(usernameValid && emailValid && passwordValid && confirmValid);
+}
+
+function togglePassword(inputId, btn) {
+    const input = document.getElementById(inputId);
+    const icon = btn.querySelector('i');
+    if (input.type === 'password') {
+        input.type = 'text';
+        icon.classList.remove('fa-eye');
+        icon.classList.add('fa-eye-slash');
+    } else {
+        input.type = 'password';
+        icon.classList.remove('fa-eye-slash');
+        icon.classList.add('fa-eye');
+    }
+}
+
+function validateConfirmPassword() {
+    const password = document.getElementById('password').value;
+    const confirm = document.getElementById('confirmPassword').value;
+    const input = document.getElementById('confirmPassword');
+    const error = document.getElementById('confirmError');
+
+    if (confirm.length === 0) {
+        input.classList.remove('valid', 'invalid');
+        error.textContent = '';
+        confirmValid = false;
+    } else if (password === confirm) {
+        input.classList.remove('invalid');
+        input.classList.add('valid');
+        error.textContent = '';
+        confirmValid = true;
+    } else {
+        input.classList.remove('valid');
+        input.classList.add('invalid');
+        error.textContent = 'Passwords do not match';
+        confirmValid = false;
+    }
+    updateSubmitButton();
 }
 
 // Username validation
@@ -524,8 +600,12 @@ document.getElementById('password').addEventListener('input', function() {
         input.classList.remove('valid', 'invalid');
     }
 
+    validateConfirmPassword();
     updateSubmitButton();
 });
+
+// Confirm password validation
+document.getElementById('confirmPassword').addEventListener('input', validateConfirmPassword);
 </script>
 {{end}}
 `,
@@ -587,10 +667,10 @@ document.getElementById('password').addEventListener('input', function() {
             <label for="password">{{.T.password}}</label>
             <input type="password" id="password" name="password" required minlength="8">
             <div class="password-requirements">
-                <span id="reqLength"><i class="fas fa-circle"></i> 8+ chars</span>
-                <span id="reqLower"><i class="fas fa-circle"></i> lowercase</span>
-                <span id="reqUpper"><i class="fas fa-circle"></i> uppercase</span>
-                <span id="reqDigit"><i class="fas fa-circle"></i> digit</span>
+                <span id="reqLength"><i class="fas fa-circle"></i> {{.T.req_length}}</span>
+                <span id="reqLower"><i class="fas fa-circle"></i> {{.T.req_lower}}</span>
+                <span id="reqUpper"><i class="fas fa-circle"></i> {{.T.req_upper}}</span>
+                <span id="reqDigit"><i class="fas fa-circle"></i> {{.T.req_digit}}</span>
             </div>
         </div>
 
