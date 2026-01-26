@@ -160,3 +160,15 @@ auth:
   passwords_no_match: "Passwords do not match"
   username_not_available: "Username not available"
   email_not_available: "Email not available"
+
+# Reader
+reader:
+  read: "Read"
+  toc: "Table of Contents"
+  font_smaller: "Smaller Font"
+  font_larger: "Larger Font"
+  dark_mode: "Dark Mode"
+  close: "Close"
+  not_supported: "This format is not supported for reading"
+  conversion_failed: "Failed to convert book"
+  loading: "Loading..."

@@ -21,6 +21,7 @@ import (
 	"github.com/bodgit/sevenzip"
 	"github.com/dhowden/tag"
 	"github.com/go-chi/chi/v5"
+	"github.com/sopds/sopds-go/internal/converter"
 	"github.com/sopds/sopds-go/internal/database"
 	"github.com/sopds/sopds-go/internal/i18n"
 	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
@@ -2067,6 +2068,160 @@ func (s *Server) handleWebHelp(w http.ResponseWriter, r *http.Request) {
 	s.renderTemplate(w, "help", data)
 }
 
+// ReaderData contains data for the book reader page
+type ReaderData struct {
+	PageData
+	BookID    int64
+	BookTitle string
+	Authors   string
+	Content   string
+	TOC       []converter.TOCEntry
+	Cover     string
+	BackURL   string
+}
+
+func (s *Server) handleWebReader(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid book ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	book, err := s.svc.GetBook(ctx, id)
+	if err != nil || book == nil {
+		http.Error(w, "Book not found", http.StatusNotFound)
+		return
+	}
+
+	// Read book content
+	var bookData []byte
+	format := strings.ToLower(book.Format)
+
+	if strings.Contains(book.Path, ".zip") {
+		bookData, err = s.readFromZip(book)
+	} else if strings.Contains(book.Path, ".7z") {
+		bookData, err = s.readFrom7z(book)
+	} else {
+		filePath := filepath.Join(s.config.Library.Root, book.Path)
+		bookData, err = os.ReadFile(filePath)
+	}
+
+	if err != nil {
+		log.Printf("Failed to read book %d: %v", id, err)
+		http.Error(w, "Failed to read book", http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to FB2 if needed
+	if format != "fb2" {
+		if s.converter == nil || s.converter.EbookConvertPath == "" {
+			http.Error(w, i18n.T(getLang(r), "reader.not_supported"), http.StatusBadRequest)
+			return
+		}
+		bookData, err = s.converter.ConvertToFB2(bookData, format, s.config.Converters.TempDir)
+		if err != nil {
+			log.Printf("Failed to convert book %d to FB2: %v", id, err)
+			http.Error(w, i18n.T(getLang(r), "reader.conversion_failed"), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Convert FB2 to reader HTML
+	content, err := converter.FB2ToReaderHTML(bookData)
+	if err != nil {
+		log.Printf("Failed to parse FB2 for book %d: %v", id, err)
+		http.Error(w, "Failed to parse book", http.StatusInternalServerError)
+		return
+	}
+
+	pd := s.newPageData(r, content.Title)
+	data := ReaderData{
+		PageData:  pd,
+		BookID:    id,
+		BookTitle: content.Title,
+		Authors:   content.Authors,
+		Content:   content.HTML,
+		TOC:       content.TOC,
+		Cover:     content.Cover,
+		BackURL:   fmt.Sprintf("%s/", s.config.Server.WebPrefix),
+	}
+
+	s.renderReaderTemplate(w, data)
+}
+
+// readFrom7z reads a book file from a 7z archive
+func (s *Server) readFrom7z(book *database.Book) ([]byte, error) {
+	parts := strings.Split(book.Path, string(filepath.Separator))
+
+	// Find where the .7z extension is in the path
+	idx := -1
+	for i, part := range parts {
+		if strings.HasSuffix(strings.ToLower(part), ".7z") {
+			idx = i
+			break
+		}
+	}
+
+	if idx < 0 {
+		if strings.HasSuffix(strings.ToLower(book.Path), ".7z") {
+			idx = len(parts) - 1
+		} else {
+			return nil, fmt.Errorf("book not in 7z")
+		}
+	}
+
+	szFilePath := filepath.Join(s.config.Library.Root, filepath.Join(parts[:idx+1]...))
+	var internalPath string
+	if idx+1 < len(parts) {
+		internalPath = filepath.Join(append(parts[idx+1:], book.Filename)...)
+	} else {
+		internalPath = book.Filename
+	}
+
+	sz, err := sevenzip.OpenReader(szFilePath)
+	if err != nil {
+		return nil, err
+	}
+	defer sz.Close()
+
+	for _, f := range sz.File {
+		if f.Name == internalPath || f.Name == book.Filename {
+			rc, err := f.Open()
+			if err != nil {
+				return nil, err
+			}
+			defer rc.Close()
+			return io.ReadAll(rc)
+		}
+	}
+
+	return nil, fmt.Errorf("file not found in 7z")
+}
+
+func (s *Server) renderReaderTemplate(w http.ResponseWriter, data ReaderData) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	tmpl, err := template.New("reader").Funcs(template.FuncMap{
+		"t": func(key string) string {
+			return i18n.T(data.Lang, key)
+		},
+		"safeHTML": func(s string) template.HTML {
+			return template.HTML(s)
+		},
+	}).Parse(readerTemplate)
+	if err != nil {
+		log.Printf("Reader template parse error: %v", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tmpl.Execute(w, data); err != nil {
+		log.Printf("Reader template execute error: %v", err)
+	}
+}
+
 // Helper functions for prefix-based navigation
 
 func (s *Server) getAuthorPrefixes(ctx context.Context, prefix string, length int) []string {
@@ -2748,6 +2903,13 @@ const baseTemplate = `<!DOCTYPE html>
         .btn-success:hover {
             box-shadow: 0 4px 12px rgba(34, 197, 94, 0.4);
         }
+        .btn-info {
+            background: linear-gradient(135deg, #06b6d4, #0891b2);
+            color: white;
+        }
+        .btn-info:hover {
+            box-shadow: 0 4px 12px rgba(6, 182, 212, 0.4);
+        }
         .btn-warning {
             background: linear-gradient(135deg, var(--warning), #d97706);
             color: white;
@@ -3246,6 +3408,7 @@ function goToPage(page) {
         </div>
         <div class="book-actions">
             {{if eq .Format "FOLDER"}}<a href="{{$.WebPrefix}}/audio/{{.ID}}" class="btn btn-primary"><i class="fas fa-headphones"></i> {{.TrackCount}} {{t "audio.tracks"}}</a>{{else}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/download" class="btn btn-primary"><i class="fas fa-download"></i> {{.Format}}</a>{{end}}
+            {{if or (eq .Format "FB2") (eq .Format "EPUB") (eq .Format "MOBI")}}<a href="{{$.WebPrefix}}/read/{{.ID}}" class="btn btn-info"><i class="fas fa-book-open"></i> {{t "reader.read"}}</a>{{end}}
             {{if and $.HasEPUB .CanEPUB}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/epub" class="btn btn-success"><i class="fas fa-file-arrow-down"></i> EPUB</a>{{end}}
             {{if and $.HasMOBI .CanMOBI}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/mobi" class="btn btn-warning"><i class="fas fa-file-arrow-down"></i> MOBI</a>{{end}}
             {{if .OnBookshelf}}<span class="btn btn-secondary disabled"><i class="fas fa-check"></i> Added</span>{{else}}<a href="#" onclick="return bookshelfAction(this, '{{$.WebPrefix}}/bookshelf/add/{{.ID}}')" class="btn btn-secondary"><i class="fas fa-bookmark"></i> {{t "books.addshelf"}}</a>{{end}}
@@ -4384,6 +4547,7 @@ function downloadSelected() {
         </div>
         <div class="book-actions">
             {{if eq .Format "FOLDER"}}<a href="{{$.WebPrefix}}/audio/{{.ID}}" class="btn btn-primary"><i class="fas fa-headphones"></i> {{.TrackCount}} {{t "audio.tracks"}}</a>{{else}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/download" class="btn btn-primary"><i class="fas fa-download"></i> {{.Format}}</a>{{end}}
+            {{if or (eq .Format "FB2") (eq .Format "EPUB") (eq .Format "MOBI")}}<a href="{{$.WebPrefix}}/read/{{.ID}}" class="btn btn-info"><i class="fas fa-book-open"></i> {{t "reader.read"}}</a>{{end}}
             {{if and $.HasEPUB .CanEPUB}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/epub" class="btn btn-success"><i class="fas fa-file-arrow-down"></i> EPUB</a>{{end}}
             {{if and $.HasMOBI .CanMOBI}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/mobi" class="btn btn-warning"><i class="fas fa-file-arrow-down"></i> MOBI</a>{{end}}
             {{if or (gt .DuplicateCount 0) (gt .DuplicateOf 0)}}<a href="{{$.WebPrefix}}/duplicates/{{.ID}}" class="btn btn-secondary"><i class="fas fa-copy"></i> {{t "books.duplicates"}}{{if gt .DuplicateCount 0}} ({{.DuplicateCount}}){{end}}</a>{{end}}
@@ -4618,3 +4782,348 @@ function downloadSelected() {
 </style>
 {{end}}`,
 }
+
+// Reader template - standalone page for reading books
+const readerTemplate = `<!DOCTYPE html>
+<html lang="{{.Lang}}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{.BookTitle}} - {{.SiteTitle}}</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        :root {
+            --font-size: 18px;
+            --line-height: 1.8;
+            --bg: #fefefe;
+            --text: #1a1a1a;
+            --header-bg: #ffffff;
+            --toc-bg: #f8f9fa;
+            --toc-hover: #e9ecef;
+            --border: #dee2e6;
+            --primary: #6366f1;
+            --shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .dark-mode {
+            --bg: #1a1a1a;
+            --text: #e0e0e0;
+            --header-bg: #2d2d2d;
+            --toc-bg: #252525;
+            --toc-hover: #333333;
+            --border: #404040;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: var(--font-size);
+            line-height: var(--line-height);
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .reader-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 50px;
+            background: var(--header-bg);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            padding: 0 15px;
+            gap: 15px;
+            z-index: 1000;
+            box-shadow: var(--shadow);
+        }
+        .toc-toggle {
+            background: none;
+            border: none;
+            font-size: 1.2rem;
+            cursor: pointer;
+            color: var(--text);
+            padding: 8px;
+            border-radius: 6px;
+        }
+        .toc-toggle:hover { background: var(--toc-hover); }
+        .book-info {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .book-title-header {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        .book-authors {
+            font-size: 0.85rem;
+            color: #666;
+        }
+        .dark-mode .book-authors { color: #999; }
+        .reader-controls {
+            display: flex;
+            gap: 8px;
+        }
+        .reader-controls button, .reader-controls a {
+            background: none;
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: var(--text);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .reader-controls button:hover, .reader-controls a:hover {
+            background: var(--toc-hover);
+        }
+        .close-btn { color: #dc3545 !important; }
+
+        /* TOC Sidebar */
+        .reader-toc {
+            position: fixed;
+            top: 50px;
+            left: 0;
+            width: 300px;
+            height: calc(100vh - 50px);
+            background: var(--toc-bg);
+            border-right: 1px solid var(--border);
+            overflow-y: auto;
+            transform: translateX(-100%);
+            transition: transform 0.3s ease;
+            z-index: 999;
+        }
+        .reader-toc.open { transform: translateX(0); }
+        .toc-header {
+            padding: 15px;
+            font-weight: 600;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            background: var(--toc-bg);
+        }
+        .toc-list {
+            padding: 10px 0;
+        }
+        .toc-item {
+            display: block;
+            padding: 10px 15px;
+            color: var(--text);
+            text-decoration: none;
+            border-left: 3px solid transparent;
+            transition: all 0.2s;
+        }
+        .toc-item:hover {
+            background: var(--toc-hover);
+            border-left-color: var(--primary);
+        }
+        .toc-item.level-2 { padding-left: 25px; font-size: 0.95em; }
+        .toc-item.level-3 { padding-left: 35px; font-size: 0.9em; }
+        .toc-item.level-4 { padding-left: 45px; font-size: 0.85em; }
+
+        /* Overlay for mobile */
+        .toc-overlay {
+            display: none;
+            position: fixed;
+            top: 50px;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 998;
+        }
+        .toc-overlay.open { display: block; }
+
+        /* Content */
+        .reader-content {
+            max-width: 750px;
+            margin: 0 auto;
+            padding: 70px 20px 50px;
+        }
+
+        /* Typography */
+        .reader-content h1, .reader-content h2, .reader-content h3,
+        .reader-content h4, .reader-content h5, .reader-content h6 {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 1.5em 0 0.5em;
+            line-height: 1.3;
+        }
+        .reader-content h1 { font-size: 1.8em; text-align: center; margin-top: 2em; }
+        .reader-content h2 { font-size: 1.5em; }
+        .reader-content h3 { font-size: 1.3em; }
+        .reader-content h4 { font-size: 1.1em; }
+
+        .reader-content p {
+            margin: 0.8em 0;
+            text-indent: 1.5em;
+            text-align: justify;
+        }
+        .reader-content p:first-child { text-indent: 0; }
+
+        .reader-content .section {
+            margin-bottom: 1.5em;
+        }
+
+        .reader-content .epigraph {
+            margin: 2em 0 2em 20%;
+            font-style: italic;
+            font-size: 0.95em;
+        }
+        .reader-content .epigraph p { text-indent: 0; text-align: right; }
+        .reader-content .text-author {
+            text-align: right;
+            font-style: normal;
+            margin-top: 0.5em;
+        }
+
+        .reader-content .poem {
+            margin: 1.5em 0;
+            padding-left: 2em;
+        }
+        .reader-content .stanza {
+            margin-bottom: 1em;
+        }
+        .reader-content .verse {
+            text-indent: 0;
+            text-align: left;
+            margin: 0.2em 0;
+        }
+
+        .reader-content blockquote {
+            margin: 1.5em 2em;
+            padding-left: 1em;
+            border-left: 3px solid var(--border);
+            font-style: italic;
+        }
+
+        .reader-content .subtitle {
+            text-align: center;
+            font-style: italic;
+            margin: 1em 0;
+        }
+
+        .reader-content .book-image {
+            display: block;
+            max-width: 100%;
+            height: auto;
+            margin: 1.5em auto;
+            border-radius: 4px;
+        }
+
+        .reader-content em { font-style: italic; }
+        .reader-content strong { font-weight: bold; }
+        .reader-content a { color: var(--primary); }
+
+        .empty-line { display: block; height: 1em; }
+
+        /* Mobile */
+        @media (max-width: 768px) {
+            .reader-toc { width: 280px; }
+            .reader-content { padding: 60px 15px 40px; }
+            .book-info { display: none; }
+            .reader-controls button span { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header class="reader-header">
+        <button class="toc-toggle" onclick="toggleTOC()" title="{{t "reader.toc"}}">
+            <i class="fas fa-bars"></i>
+        </button>
+        <div class="book-info">
+            <div class="book-title-header">{{.BookTitle}}</div>
+            <div class="book-authors">{{.Authors}}</div>
+        </div>
+        <div class="reader-controls">
+            <button onclick="decreaseFontSize()" title="{{t "reader.font_smaller"}}">
+                <i class="fas fa-minus"></i> <span>A</span>
+            </button>
+            <button onclick="increaseFontSize()" title="{{t "reader.font_larger"}}">
+                <i class="fas fa-plus"></i> <span>A</span>
+            </button>
+            <button onclick="toggleDarkMode()" title="{{t "reader.dark_mode"}}">
+                <i class="fas fa-moon"></i>
+            </button>
+            <a href="{{.BackURL}}" class="close-btn" title="{{t "reader.close"}}">
+                <i class="fas fa-times"></i>
+            </a>
+        </div>
+    </header>
+
+    <div class="toc-overlay" onclick="toggleTOC()"></div>
+
+    <aside class="reader-toc">
+        <div class="toc-header">{{t "reader.toc"}}</div>
+        <nav class="toc-list">
+            {{range .TOC}}
+            <a href="#{{.Anchor}}" class="toc-item level-{{.Level}}" onclick="closeTOCMobile()">{{.Title}}</a>
+            {{end}}
+        </nav>
+    </aside>
+
+    <main class="reader-content">
+        {{safeHTML .Content}}
+    </main>
+
+    <script>
+    // Font size
+    let fontSize = parseInt(localStorage.getItem('readerFontSize')) || 18;
+    document.documentElement.style.setProperty('--font-size', fontSize + 'px');
+
+    function increaseFontSize() {
+        if (fontSize < 28) {
+            fontSize += 2;
+            document.documentElement.style.setProperty('--font-size', fontSize + 'px');
+            localStorage.setItem('readerFontSize', fontSize);
+        }
+    }
+
+    function decreaseFontSize() {
+        if (fontSize > 12) {
+            fontSize -= 2;
+            document.documentElement.style.setProperty('--font-size', fontSize + 'px');
+            localStorage.setItem('readerFontSize', fontSize);
+        }
+    }
+
+    // Dark mode
+    if (localStorage.getItem('readerDarkMode') === 'true') {
+        document.body.classList.add('dark-mode');
+    }
+
+    function toggleDarkMode() {
+        document.body.classList.toggle('dark-mode');
+        localStorage.setItem('readerDarkMode', document.body.classList.contains('dark-mode'));
+    }
+
+    // TOC
+    function toggleTOC() {
+        document.querySelector('.reader-toc').classList.toggle('open');
+        document.querySelector('.toc-overlay').classList.toggle('open');
+    }
+
+    function closeTOCMobile() {
+        if (window.innerWidth <= 768) {
+            document.querySelector('.reader-toc').classList.remove('open');
+            document.querySelector('.toc-overlay').classList.remove('open');
+        }
+    }
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            document.querySelector('.reader-toc').classList.remove('open');
+            document.querySelector('.toc-overlay').classList.remove('open');
+        }
+    });
+    </script>
+</body>
+</html>`

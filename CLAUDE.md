@@ -456,6 +456,7 @@ Supports audio formats: MP3, M4B, M4A, FLAC, OGG, OPUS
 - `GET /web/bookshelf` - User's bookshelf
 - `POST /web/bookshelf/add/{id}` - Add book to bookshelf
 - `POST /web/bookshelf/remove/{id}` - Remove book from bookshelf
+- `GET /web/read/{id}` - Web-based reader for FB2/EPUB/MOBI books
 - `GET /web/help` - Help page (supports `?lang=en|uk`)
 
 ### Requirements

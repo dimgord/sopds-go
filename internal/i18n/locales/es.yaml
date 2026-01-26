@@ -160,3 +160,15 @@ auth:
   passwords_no_match: "Las contraseñas no coinciden"
   username_not_available: "Nombre de usuario no disponible"
   email_not_available: "Email ya en uso"
+
+# Reader
+reader:
+  read: "Leer"
+  toc: "Índice"
+  font_smaller: "Fuente más pequeña"
+  font_larger: "Fuente más grande"
+  dark_mode: "Modo oscuro"
+  close: "Cerrar"
+  not_supported: "Este formato no es compatible para lectura"
+  conversion_failed: "Error al convertir el libro"
+  loading: "Cargando..."

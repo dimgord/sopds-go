@@ -161,6 +161,7 @@ func (s *Server) setupRouter() chi.Router {
 		r.Post("/bookshelf/remove/{id}", s.handleBookshelfRemove)
 		r.Get("/duplicates/{id}", s.handleWebDuplicates)
 		r.Get("/help", s.handleWebHelp)
+		r.Get("/read/{id}", s.handleWebReader)
 	})
 
 		// Health check (inside auth group)
