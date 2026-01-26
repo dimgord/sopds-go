@@ -12,6 +12,7 @@ import (
 	"github.com/sopds/sopds-go/internal/config"
 	"github.com/sopds/sopds-go/internal/converter"
 	"github.com/sopds/sopds-go/internal/domain/repository"
+	"github.com/sopds/sopds-go/internal/i18n"
 	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
 	"github.com/sopds/sopds-go/internal/opds"
 )
@@ -414,77 +415,32 @@ func (s *Server) renderAuthTemplate(w http.ResponseWriter, r *http.Request, temp
 	}
 }
 
-// getAuthTranslations returns translations for auth pages
+// getAuthTranslations returns translations for auth pages from i18n package
+// Auth templates use flat keys like {{.T.login}}, so we extract "auth.*" keys
+// and return them without the "auth." prefix
 func getAuthTranslations(lang string) map[string]string {
-	translations := map[string]map[string]string{
-		"en": {
-			"login":               "Login",
-			"register":            "Register",
-			"logout":              "Logout",
-			"email":               "Email",
-			"username":            "Username",
-			"password":            "Password",
-			"confirm_password":    "Confirm Password",
-			"forgot_password":     "Forgot Password?",
-			"reset_password":      "Reset Password",
-			"send_reset_link":     "Send Reset Link",
-			"login_or_username":   "Email or Username",
-			"continue_as_guest":   "Continue as Guest",
-			"already_have_account": "Already have an account?",
-			"no_account":          "Don't have an account?",
-			"register_success":    "Registration successful! Please check your email to verify your account.",
-			"verify_success":      "Email verified successfully! You can now log in.",
-			"reset_success":       "Password reset successfully! You can now log in.",
-			"password_requirements": "Password must be at least 8 characters with 1 lowercase, 1 uppercase, and 1 digit",
-			"username_requirements": "Username: 3-30 characters, alphanumeric and underscore only",
-			"guest_warning":       "You are browsing as a guest. Your bookshelf and settings will not be saved.",
-			"welcome":             "Welcome to",
-			"library_description": "Your personal e-book library",
-			"or":                       "or",
-			"req_length":               "8+ chars",
-			"req_lower":                "lowercase",
-			"req_upper":                "uppercase",
-			"req_digit":                "digit",
-			"passwords_no_match":       "Passwords do not match",
-			"username_not_available":   "Username not available",
-			"email_not_available":      "Email not available",
-		},
-		"uk": {
-			"login":               "Увійти",
-			"register":            "Реєстрація",
-			"logout":              "Вийти",
-			"email":               "Email",
-			"username":            "Ім'я користувача",
-			"password":            "Пароль",
-			"confirm_password":    "Підтвердіть пароль",
-			"forgot_password":     "Забули пароль?",
-			"reset_password":      "Скинути пароль",
-			"send_reset_link":     "Надіслати посилання",
-			"login_or_username":   "Email або ім'я користувача",
-			"continue_as_guest":   "Продовжити як гість",
-			"already_have_account": "Вже є акаунт?",
-			"no_account":          "Немає акаунту?",
-			"register_success":    "Реєстрація успішна! Перевірте пошту для підтвердження.",
-			"verify_success":      "Email підтверджено! Тепер ви можете увійти.",
-			"reset_success":       "Пароль змінено! Тепер ви можете увійти.",
-			"password_requirements": "Пароль: мінімум 8 символів, 1 мала літера, 1 велика літера, 1 цифра",
-			"username_requirements": "Ім'я: 3-30 символів, літери, цифри та підкреслення",
-			"guest_warning":       "Ви переглядаєте як гість. Ваша полиця та налаштування не будуть збережені.",
-			"welcome":             "Ласкаво просимо до",
-			"library_description": "Ваша персональна бібліотека",
-			"or":                       "або",
-			"req_length":               "8+ символів",
-			"req_lower":                "мала літера",
-			"req_upper":                "велика літера",
-			"req_digit":                "цифра",
-			"passwords_no_match":       "Паролі не співпадають",
-			"username_not_available":   "Ім'я користувача зайнято",
-			"email_not_available":      "Email вже використовується",
-		},
+	allTranslations := i18n.GetTranslations(lang)
+	result := make(map[string]string)
+
+	// Auth-specific keys (stored under "auth." prefix in YAML)
+	authKeys := []string{
+		"login", "logout", "register", "guest", "guest_warning",
+		"email", "username", "password", "confirm_password",
+		"forgot_password", "reset_password", "send_reset_link",
+		"login_or_username", "continue_as_guest",
+		"already_have_account", "no_account",
+		"register_success", "verify_success", "reset_success",
+		"password_requirements", "username_requirements",
+		"welcome", "library_description",
+		"or", "req_length", "req_lower", "req_upper", "req_digit",
+		"passwords_no_match", "username_not_available", "email_not_available",
 	}
 
-	if t, ok := translations[lang]; ok {
-		return t
+	for _, key := range authKeys {
+		if val, ok := allTranslations["auth."+key]; ok {
+			result[key] = val
+		}
 	}
-	return translations["en"]
+
+	return result
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/dhowden/tag"
 	"github.com/go-chi/chi/v5"
 	"github.com/sopds/sopds-go/internal/database"
+	"github.com/sopds/sopds-go/internal/i18n"
 	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
 )
 
@@ -47,192 +48,18 @@ func checkEbookConvert(configPath string) bool {
 }
 
 // --- Internationalization (i18n) ---
+// Translations are now in internal/i18n/locales/*.yaml
 // To add a new language:
-// 1. Add language code and name to supportedLanguages
-// 2. Add translations for all keys in the translations map
+// 1. Copy locales/en.yaml to locales/XX.yaml
+// 2. Translate all values
+// 3. Add the code to supportedLanguages in i18n/i18n.go
 
-// Language represents a UI language
-type Language struct {
-	Code string // e.g., "en", "uk", "de"
-	Name string // e.g., "English", "Українська", "Deutsch"
-}
-
-// supportedLanguages - add new languages here
-var supportedLanguages = []Language{
-	{Code: "en", Name: "English"},
-	{Code: "uk", Name: "Українська"},
-	// Add more: {Code: "de", Name: "Deutsch"},
-}
-
-// defaultLang is the fallback language
-const defaultLang = "en"
-
-// isValidLang checks if language code is supported
-func isValidLang(code string) bool {
-	for _, l := range supportedLanguages {
-		if l.Code == code {
-			return true
-		}
-	}
-	return false
-}
-
-// getLang extracts language preference from request (cookie or query param)
+// getLang extracts language preference from request (cookie only for UI)
 func getLang(r *http.Request) string {
-	// Check query parameter first
-	if lang := r.URL.Query().Get("lang"); isValidLang(lang) {
-		return lang
-	}
-	// Check cookie
-	if cookie, err := r.Cookie("lang"); err == nil && isValidLang(cookie.Value) {
+	if cookie, err := r.Cookie("lang"); err == nil && i18n.IsValidLang(cookie.Value) {
 		return cookie.Value
 	}
-	return defaultLang
-}
-
-// T returns translated string for the given key and language
-func T(lang, key string) string {
-	if trans, ok := translations[key]; ok {
-		if str, ok := trans[lang]; ok {
-			return str
-		}
-		// Fallback to default language
-		if str, ok := trans[defaultLang]; ok {
-			return str
-		}
-	}
-	return key // Return key if not found
-}
-
-// translations holds all UI strings
-// Format: "key": {"lang_code": "translated string", ...}
-var translations = map[string]map[string]string{
-	// Navigation
-	"nav.home":       {"en": "Home", "uk": "Головна"},
-	"nav.catalogs":   {"en": "Catalogs", "uk": "Каталоги"},
-	"nav.authors":    {"en": "Authors", "uk": "Автори"},
-	"nav.genres":     {"en": "Genres", "uk": "Жанри"},
-	"nav.series":     {"en": "Series", "uk": "Серії"},
-	"nav.languages":  {"en": "Languages", "uk": "Мови"},
-	"nav.new":        {"en": "New", "uk": "Новинки"},
-	"nav.audio":      {"en": "Audio", "uk": "Аудіо"},
-	"nav.bookshelf":  {"en": "Bookshelf", "uk": "Полиця"},
-	"nav.help":       {"en": "Help", "uk": "Довідка"},
-
-	// Main page
-	"main.stats":    {"en": "Library Statistics", "uk": "Статистика бібліотеки"},
-	"main.books":    {"en": "Books", "uk": "Книги"},
-	"main.authors":  {"en": "Authors", "uk": "Автори"},
-	"main.genres":   {"en": "Genres", "uk": "Жанри"},
-	"main.series":   {"en": "Series", "uk": "Серії"},
-	"main.new7d":    {"en": "New (7d)", "uk": "Нові (7д)"},
-	"main.browse":   {"en": "Browse Library", "uk": "Перегляд бібліотеки"},
-	"main.newbooks":   {"en": "New Books", "uk": "Нові книги"},
-	"main.audiobooks": {"en": "Audiobooks", "uk": "Аудіокниги"},
-	"main.search":     {"en": "Search", "uk": "Пошук"},
-
-	// Search
-	"search.title":  {"en": "Search by title", "uk": "Пошук за назвою"},
-	"search.author": {"en": "Author name...", "uk": "Ім'я автора..."},
-	"search.indesc": {"en": "+desc", "uk": "+опис"},
-	"search.books":  {"en": "Search Books", "uk": "Пошук книг"},
-	"search.hint":   {"en": "Use the search box above to find books by title or author name.", "uk": "Використовуйте поле пошуку вище, щоб знайти книги за назвою або автором."},
-	"search.in":     {"en": "in", "uk": "у"},
-
-	// Books
-	"books.show":       {"en": "Show:", "uk": "Показати:"},
-	"books.all":        {"en": "All", "uk": "Всі"},
-	"books.filters":    {"en": "Filters:", "uk": "Фільтри:"},
-	"books.alllang":    {"en": "All Languages", "uk": "Всі мови"},
-	"books.download":   {"en": "Download", "uk": "Завантажити"},
-	"books.addshelf":   {"en": "Add to Shelf", "uk": "На полицю"},
-	"books.duplicates": {"en": "Duplicates", "uk": "Дублікати"},
-	"books.prev":       {"en": "Previous", "uk": "Попередня"},
-	"books.next":       {"en": "Next", "uk": "Наступна"},
-	"books.nobooks":    {"en": "No books found.", "uk": "Книг не знайдено."},
-
-	// Authors
-	"authors.title": {"en": "Authors", "uk": "Автори"},
-	"authors.none":  {"en": "No authors found.", "uk": "Авторів не знайдено."},
-
-	// Genres
-	"genres.title": {"en": "Genres", "uk": "Жанри"},
-	"genres.none":  {"en": "No genres found.", "uk": "Жанрів не знайдено."},
-
-	// Series
-	"series.title": {"en": "Series", "uk": "Серії"},
-	"series.none":  {"en": "No series found.", "uk": "Серій не знайдено."},
-
-	// Languages page
-	"languages.title": {"en": "Languages", "uk": "Мови"},
-	"languages.none":  {"en": "No languages found.", "uk": "Мов не знайдено."},
-
-	// Catalogs
-	"catalogs.title": {"en": "Catalogs", "uk": "Каталоги"},
-	"catalogs.none":  {"en": "No items found.", "uk": "Елементів не знайдено."},
-
-	// Bookshelf
-	"bookshelf.title":  {"en": "My Bookshelf", "uk": "Моя полиця"},
-	"bookshelf.empty":  {"en": "Your bookshelf is empty.", "uk": "Ваша полиця порожня."},
-	"bookshelf.remove": {"en": "Remove", "uk": "Видалити"},
-
-	// Audiobook detail
-	"audio.tracks":     {"en": "Tracks", "uk": "Треки"},
-	"audio.parts":      {"en": "Parts", "uk": "Частини"},
-	"audio.duration":   {"en": "Duration", "uk": "Тривалість"},
-	"audio.download":   {"en": "Download ZIP", "uk": "Завантажити ZIP"},
-	"audio.collection": {"en": "Collection", "uk": "Збірка"},
-	"audio.book":       {"en": "Audiobook", "uk": "Аудіокнига"},
-	"audio.selectall":  {"en": "Select All", "uk": "Вибрати все"},
-	"audio.downloadsel": {"en": "Download Selected", "uk": "Завантажити вибране"},
-
-	// Error
-	"error.title": {"en": "Error", "uk": "Помилка"},
-	"error.back":  {"en": "Back to Home", "uk": "На головну"},
-
-	// Help page
-	"help.title":   {"en": "Help", "uk": "Довідка"},
-	"help.welcome": {"en": "Welcome to SOPDS Library", "uk": "Ласкаво просимо до бібліотеки SOPDS"},
-	"help.intro":   {"en": "SOPDS is an OPDS catalog server for your e-book collection.", "uk": "SOPDS — це OPDS-сервер каталогу для вашої колекції електронних книг."},
-
-	"help.search.title":  {"en": "Search", "uk": "Пошук"},
-	"help.search.p1":     {"en": "The search bar has two fields:", "uk": "Панель пошуку має два поля:"},
-	"help.search.field1": {"en": "Title field — searches in book titles", "uk": "Поле назви — шукає в назвах книг"},
-	"help.search.field2": {"en": "Author field — searches in author names (first and last)", "uk": "Поле автора — шукає в іменах авторів"},
-	"help.search.p2":     {"en": "Both fields can be used together (AND logic). Check '+desc' to also search in book descriptions.", "uk": "Обидва поля можна використовувати разом (логіка І). Позначте '+опис', щоб шукати також в описах книг."},
-
-	"help.scope.title": {"en": "Scoped Search", "uk": "Контекстний пошук"},
-	"help.scope.p1":    {"en": "When browsing authors, genres, series, or languages, search is automatically scoped to that context.", "uk": "При перегляді авторів, жанрів, серій або мов, пошук автоматично обмежується цим контекстом."},
-
-	"help.filters.title":  {"en": "Advanced Filters", "uk": "Розширені фільтри"},
-	"help.filters.p1":     {"en": "You can add URL parameters for advanced filtering:", "uk": "Ви можете додати параметри URL для розширеної фільтрації:"},
-	"help.filters.lang":   {"en": "lang_pattern=uk — filter by language", "uk": "lang_pattern=uk — фільтр за мовою"},
-	"help.filters.genre":  {"en": "genre_pattern=comedy — filter by genre name", "uk": "genre_pattern=comedy — фільтр за назвою жанру"},
-	"help.filters.series": {"en": "series_pattern=Silo — filter by series name", "uk": "series_pattern=Silo — фільтр за назвою серії"},
-
-	"help.browse.title":  {"en": "Browsing", "uk": "Перегляд"},
-	"help.browse.p1":     {"en": "Use the navigation menu to browse by:", "uk": "Використовуйте меню навігації для перегляду за:"},
-	"help.browse.cat":    {"en": "Catalogs — folder structure of your library", "uk": "Каталоги — структура папок вашої бібліотеки"},
-	"help.browse.auth":   {"en": "Authors — alphabetical list with drill-down", "uk": "Автори — алфавітний список із деталізацією"},
-	"help.browse.genre":  {"en": "Genres — grouped by category", "uk": "Жанри — згруповані за категоріями"},
-	"help.browse.series": {"en": "Series — alphabetical with drill-down", "uk": "Серії — алфавітний із деталізацією"},
-	"help.browse.lang":   {"en": "Languages — books by language", "uk": "Мови — книги за мовами"},
-
-	"help.download.title": {"en": "Downloads", "uk": "Завантаження"},
-	"help.download.p1":    {"en": "Each book can be downloaded in its original format. FB2 books can also be converted to EPUB or MOBI.", "uk": "Кожну книгу можна завантажити в оригінальному форматі. Книги FB2 також можна конвертувати в EPUB або MOBI."},
-
-	"help.opds.title": {"en": "OPDS Access", "uk": "Доступ OPDS"},
-	"help.opds.p1":    {"en": "Use the OPDS endpoint with e-book readers like Moon+ Reader, FBReader, or Calibre:", "uk": "Використовуйте OPDS-ендпоінт з читалками електронних книг, такими як Moon+ Reader, FBReader або Calibre:"},
-
-	"help.bookshelf.title": {"en": "Bookshelf", "uk": "Полиця"},
-	"help.bookshelf.p1":    {"en": "Add books to your personal bookshelf for quick access. Click 'Add to Shelf' on any book.", "uk": "Додавайте книги на особисту полицю для швидкого доступу. Натисніть 'На полицю' на будь-якій книзі."},
-
-	// Auth
-	"auth.login":        {"en": "Login", "uk": "Увійти"},
-	"auth.logout":       {"en": "Logout", "uk": "Вийти"},
-	"auth.register":     {"en": "Register", "uk": "Реєстрація"},
-	"auth.guest":        {"en": "Guest", "uk": "Гість"},
-	"auth.guest_warning": {"en": "You are browsing as a guest. Your bookshelf and settings will not be saved after session expires.", "uk": "Ви переглядаєте як гість. Ваша полиця та налаштування не будуть збережені після закінчення сесії."},
+	return i18n.DefaultLang
 }
 
 // Template data structures
@@ -261,8 +88,8 @@ type PageData struct {
 	ScopeName      string // Human-readable scope name for display
 	IncludeDesc    bool   // Include description in search
 	// i18n
-	Lang      string     // Current language code
-	Languages []Language // Available languages for switcher
+	Lang      string          // Current language code
+	Languages []i18n.Language // Available languages for switcher
 	// Auth info
 	Auth AuthInfo // User authentication state
 }
@@ -274,10 +101,7 @@ const defaultPageSize = 50
 // newPageData creates PageData with common fields including i18n
 func (s *Server) newPageData(r *http.Request, title string) PageData {
 	// UI language is set via cookie only (not URL param, which is for book filtering)
-	lang := defaultLang
-	if cookie, err := r.Cookie("lang"); err == nil && isValidLang(cookie.Value) {
-		lang = cookie.Value
-	}
+	lang := getLang(r)
 	return PageData{
 		Title:      title,
 		SiteTitle:  s.config.Site.Title,
@@ -286,20 +110,15 @@ func (s *Server) newPageData(r *http.Request, title string) PageData {
 		HasEPUB:    true, // Internal converter always available
 		HasMOBI:    checkEbookConvert(s.config.Converters.FB2ToMOBI),
 		Lang:       lang,
-		Languages:  supportedLanguages,
+		Languages:  i18n.GetSupportedLanguages(),
 		Auth:       GetAuthInfo(r),
 	}
 }
 
 // addI18n adds language fields to PageData (for handlers that don't use newPageData)
 func (s *Server) addI18n(pd *PageData, r *http.Request) {
-	// UI language is set via cookie only (not URL param, which is for book filtering)
-	lang := defaultLang
-	if cookie, err := r.Cookie("lang"); err == nil && isValidLang(cookie.Value) {
-		lang = cookie.Value
-	}
-	pd.Lang = lang
-	pd.Languages = supportedLanguages
+	pd.Lang = getLang(r)
+	pd.Languages = i18n.GetSupportedLanguages()
 	pd.Auth = GetAuthInfo(r)
 }
 
@@ -507,7 +326,7 @@ func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 	// If no search criteria at all, show empty search page
 	if titleQuery == "" && authorQuery == "" && langPattern == "" && genrePattern == "" && seriesPattern == "" {
 		data := PageData{
-			Title:      T(getLang(r), "search.books"),
+			Title:      i18n.T(getLang(r), "search.books"),
 			SiteTitle:  s.config.Site.Title,
 			WebPrefix:  s.config.Server.WebPrefix,
 			OPDSPrefix: s.config.Server.OPDSPrefix,
@@ -604,7 +423,7 @@ func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 		searchDesc = "all books"
 	}
 
-	pd := s.newPageData(r, fmt.Sprintf("%s: %s", T(getLang(r), "main.search"), searchDesc))
+	pd := s.newPageData(r, fmt.Sprintf("%s: %s", i18n.T(getLang(r), "main.search"), searchDesc))
 	pd.Query = titleQuery
 	pd.AuthorQuery = authorQuery
 	pd.Page = page
@@ -652,7 +471,7 @@ func (s *Server) handleWebAuthors(w http.ResponseWriter, r *http.Request) {
 	// First level: show 1-char prefixes
 	if prefix == "" {
 		prefixes := s.getAuthorPrefixes(ctx, "", 1)
-		pd := s.newPageData(r, T(lang, "authors.title"))
+		pd := s.newPageData(r, i18n.T(lang, "authors.title"))
 		data := AuthorsData{
 			PageData: pd,
 			Prefixes: prefixes,
@@ -668,7 +487,7 @@ func (s *Server) handleWebAuthors(w http.ResponseWriter, r *http.Request) {
 	// If more than 100 and prefix < 3 chars, drill down
 	if count > 100 && len(prefix) < 3 {
 		prefixes := s.getAuthorPrefixes(ctx, prefix, len(prefix)+1)
-		pd := s.newPageData(r, fmt.Sprintf("%s: %s", T(lang, "authors.title"), prefix))
+		pd := s.newPageData(r, fmt.Sprintf("%s: %s", i18n.T(lang, "authors.title"), prefix))
 		pd.Prefix = prefix
 		data := AuthorsData{
 			PageData: pd,
@@ -692,7 +511,7 @@ func (s *Server) handleWebAuthors(w http.ResponseWriter, r *http.Request) {
 		authorViews = append(authorViews, AuthorView{ID: a.ID, Name: a.FullName()})
 	}
 
-	pd := s.newPageData(r, fmt.Sprintf("%s: %s", T(lang, "authors.title"), prefix))
+	pd := s.newPageData(r, fmt.Sprintf("%s: %s", i18n.T(lang, "authors.title"), prefix))
 	pd.Prefix = prefix
 	pd.Page = page
 	pd.HasMore = len(authors) >= 100
@@ -830,7 +649,7 @@ func (s *Server) handleWebGenres(w http.ResponseWriter, r *http.Request) {
 		}
 
 		pd := PageData{
-			Title:      T(lang, "genres.title"),
+			Title:      i18n.T(lang, "genres.title"),
 			SiteTitle:  s.config.Site.Title,
 			WebPrefix:  s.config.Server.WebPrefix,
 			OPDSPrefix: s.config.Server.OPDSPrefix,
@@ -976,7 +795,7 @@ func (s *Server) handleWebSeries(w http.ResponseWriter, r *http.Request) {
 	if prefix == "" {
 		prefixes := s.getSeriesPrefixes(ctx, "", 1)
 		pd := PageData{
-			Title:      T(lang, "series.title"),
+			Title:      i18n.T(lang, "series.title"),
 			SiteTitle:  s.config.Site.Title,
 			WebPrefix:  s.config.Server.WebPrefix,
 			OPDSPrefix: s.config.Server.OPDSPrefix,
@@ -996,7 +815,7 @@ func (s *Server) handleWebSeries(w http.ResponseWriter, r *http.Request) {
 	if count > 100 && len(prefix) < 3 {
 		prefixes := s.getSeriesPrefixes(ctx, prefix, len(prefix)+1)
 		pd := PageData{
-			Title:      fmt.Sprintf("%s: %s", T(lang, "series.title"), prefix),
+			Title:      fmt.Sprintf("%s: %s", i18n.T(lang, "series.title"), prefix),
 			SiteTitle:  s.config.Site.Title,
 			WebPrefix:  s.config.Server.WebPrefix,
 			OPDSPrefix: s.config.Server.OPDSPrefix,
@@ -1025,7 +844,7 @@ func (s *Server) handleWebSeries(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pd := PageData{
-		Title:       fmt.Sprintf("%s: %s", T(lang, "series.title"), prefix),
+		Title:       fmt.Sprintf("%s: %s", i18n.T(lang, "series.title"), prefix),
 		SiteTitle:   s.config.Site.Title,
 		WebPrefix:   s.config.Server.WebPrefix,
 		OPDSPrefix:  s.config.Server.OPDSPrefix,
@@ -1217,7 +1036,7 @@ func (s *Server) handleWebNew(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pd := PageData{
-		Title:       T(lang, "main.newbooks"),
+		Title:       i18n.T(lang, "main.newbooks"),
 		SiteTitle:   s.config.Site.Title,
 		WebPrefix:   s.config.Server.WebPrefix,
 		OPDSPrefix:  s.config.Server.OPDSPrefix,
@@ -1318,7 +1137,7 @@ func (s *Server) handleWebAudio(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pd := PageData{
-		Title:       T(lang, "main.audiobooks"),
+		Title:       i18n.T(lang, "main.audiobooks"),
 		SiteTitle:   s.config.Site.Title,
 		WebPrefix:   s.config.Server.WebPrefix,
 		OPDSPrefix:  s.config.Server.OPDSPrefix,
@@ -1894,7 +1713,7 @@ func (s *Server) handleWebBookshelf(w http.ResponseWriter, r *http.Request) {
 	count, _ := s.svc.CountBookShelf(ctx, user)
 	hasMore := pageSize > 0 && count > int64(pagination.Offset()+len(books))
 
-	pd := s.newPageData(r, T(lang, "bookshelf.title"))
+	pd := s.newPageData(r, i18n.T(lang, "bookshelf.title"))
 	pd.CurrentPath = s.config.Server.WebPrefix + "/bookshelf"
 	pd.Page = page
 	pd.PageSize = pageSize
@@ -1998,7 +1817,7 @@ func (s *Server) handleWebLanguages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pd := PageData{
-		Title:      T(lang, "languages.title"),
+		Title:      i18n.T(lang, "languages.title"),
 		SiteTitle:  s.config.Site.Title,
 		WebPrefix:  s.config.Server.WebPrefix,
 		OPDSPrefix: s.config.Server.OPDSPrefix,
@@ -2067,7 +1886,7 @@ func (s *Server) handleWebLanguage(w http.ResponseWriter, r *http.Request) {
 
 	langName := getLanguageName(bookLang)
 	pd := PageData{
-		Title:       fmt.Sprintf("%s: %s", T(uiLang, "languages.title"), langName),
+		Title:       fmt.Sprintf("%s: %s", i18n.T(uiLang, "languages.title"), langName),
 		SiteTitle:   s.config.Site.Title,
 		WebPrefix:   s.config.Server.WebPrefix,
 		OPDSPrefix:  s.config.Server.OPDSPrefix,
@@ -2113,7 +1932,7 @@ func (s *Server) handleWebCatalogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pd := PageData{
-		Title:       T(lang, "catalogs.title"),
+		Title:       i18n.T(lang, "catalogs.title"),
 		SiteTitle:   s.config.Site.Title,
 		WebPrefix:   s.config.Server.WebPrefix,
 		OPDSPrefix:  s.config.Server.OPDSPrefix,
@@ -2201,9 +2020,9 @@ func (s *Server) handleWebDuplicates(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the book title for the page header
-	title := T(lang, "books.duplicates")
+	title := i18n.T(lang, "books.duplicates")
 	if len(books) > 0 {
-		title = fmt.Sprintf("%s: %s", T(lang, "books.duplicates"), books[0].Title)
+		title = fmt.Sprintf("%s: %s", i18n.T(lang, "books.duplicates"), books[0].Title)
 	}
 
 	hasMore := pageSize > 0 && pagination.TotalCount > int64(pagination.Offset()+len(books))
@@ -2240,7 +2059,7 @@ type HelpData struct {
 
 func (s *Server) handleWebHelp(w http.ResponseWriter, r *http.Request) {
 	pd := s.newPageData(r, "")
-	pd.Title = T(pd.Lang, "help.title")
+	pd.Title = i18n.T(pd.Lang, "help.title")
 	data := HelpData{
 		PageData: pd,
 	}
@@ -2510,7 +2329,7 @@ func (s *Server) renderError(w http.ResponseWriter, message string, err error) {
 
 func (s *Server) renderTemplate(w http.ResponseWriter, name string, data interface{}) {
 	// Extract language from data for translation function
-	lang := defaultLang
+	lang := i18n.DefaultLang
 	if pd, ok := data.(interface{ GetLang() string }); ok {
 		lang = pd.GetLang()
 	} else {
@@ -2539,7 +2358,7 @@ func (s *Server) renderTemplate(w http.ResponseWriter, name string, data interfa
 		}
 	}
 	if lang == "" {
-		lang = defaultLang
+		lang = i18n.DefaultLang
 	}
 
 	// Auth info is not directly available here since we don't have the request
@@ -2547,7 +2366,7 @@ func (s *Server) renderTemplate(w http.ResponseWriter, name string, data interfa
 
 	funcMap := template.FuncMap{
 		"t": func(key string) string {
-			return T(lang, key)
+			return i18n.T(lang, key)
 		},
 		"sortPrefixes": func(prefixes []string) []string {
 			sorted := make([]string, len(prefixes))
