@@ -20,7 +20,7 @@ import (
 var localesFS embed.FS
 
 // Supported languages - add new language codes here
-var supportedLanguages = []string{"en", "uk"}
+var supportedLanguages = []string{"en", "uk", "fr", "es", "de"}
 
 // DefaultLang is the fallback language
 const DefaultLang = "en"
@@ -38,6 +38,9 @@ type Language struct {
 var languageNames = map[string]string{
 	"en": "English",
 	"uk": "Українська",
+	"fr": "Français",
+	"es": "Español",
+	"de": "Deutsch",
 }
 
 func init() {

@@ -1,0 +1,162 @@
+# French translations for SOPDS
+# Traductions françaises pour SOPDS
+
+# Navigation
+nav:
+  home: "Accueil"
+  catalogs: "Catalogues"
+  authors: "Auteurs"
+  genres: "Genres"
+  series: "Séries"
+  languages: "Langues"
+  new: "Nouveautés"
+  audio: "Audio"
+  bookshelf: "Étagère"
+  help: "Aide"
+
+# Main page
+main:
+  stats: "Statistiques de la bibliothèque"
+  books: "Livres"
+  authors: "Auteurs"
+  genres: "Genres"
+  series: "Séries"
+  new7d: "Nouveaux (7j)"
+  browse: "Parcourir la bibliothèque"
+  newbooks: "Nouveaux livres"
+  audiobooks: "Livres audio"
+  search: "Rechercher"
+
+# Search
+search:
+  title: "Rechercher par titre"
+  author: "Nom de l'auteur..."
+  indesc: "+desc"
+  books: "Rechercher des livres"
+  hint: "Utilisez la barre de recherche pour trouver des livres par titre ou nom d'auteur."
+  in: "dans"
+
+# Books
+books:
+  show: "Afficher :"
+  all: "Tous"
+  filters: "Filtres :"
+  alllang: "Toutes les langues"
+  download: "Télécharger"
+  addshelf: "Ajouter à l'étagère"
+  duplicates: "Doublons"
+  prev: "Précédent"
+  next: "Suivant"
+  nobooks: "Aucun livre trouvé."
+
+# Authors
+authors:
+  title: "Auteurs"
+  none: "Aucun auteur trouvé."
+
+# Genres
+genres:
+  title: "Genres"
+  none: "Aucun genre trouvé."
+
+# Series
+series:
+  title: "Séries"
+  none: "Aucune série trouvée."
+
+# Languages page
+languages:
+  title: "Langues"
+  none: "Aucune langue trouvée."
+
+# Catalogs
+catalogs:
+  title: "Catalogues"
+  none: "Aucun élément trouvé."
+
+# Bookshelf
+bookshelf:
+  title: "Mon étagère"
+  empty: "Votre étagère est vide."
+  remove: "Supprimer"
+
+# Audiobook detail
+audio:
+  tracks: "Pistes"
+  parts: "Parties"
+  duration: "Durée"
+  download: "Télécharger ZIP"
+  collection: "Collection"
+  book: "Livre audio"
+  selectall: "Tout sélectionner"
+  downloadsel: "Télécharger la sélection"
+
+# Error
+error:
+  title: "Erreur"
+  back: "Retour à l'accueil"
+
+# Help page
+help:
+  title: "Aide"
+  welcome: "Bienvenue dans la bibliothèque SOPDS"
+  intro: "SOPDS est un serveur de catalogue OPDS pour votre collection de livres électroniques."
+  search_title: "Recherche"
+  search_p1: "La barre de recherche comporte deux champs :"
+  search_field1: "Champ titre — recherche dans les titres des livres"
+  search_field2: "Champ auteur — recherche dans les noms des auteurs"
+  search_p2: "Les deux champs peuvent être utilisés ensemble (logique ET). Cochez '+desc' pour rechercher aussi dans les descriptions."
+  scope_title: "Recherche contextuelle"
+  scope_p1: "Lors de la navigation par auteurs, genres, séries ou langues, la recherche est automatiquement limitée à ce contexte."
+  filters_title: "Filtres avancés"
+  filters_p1: "Vous pouvez ajouter des paramètres URL pour un filtrage avancé :"
+  filters_lang: "lang_pattern=fr — filtrer par langue"
+  filters_genre: "genre_pattern=comedy — filtrer par nom de genre"
+  filters_series: "series_pattern=Silo — filtrer par nom de série"
+  browse_title: "Navigation"
+  browse_p1: "Utilisez le menu de navigation pour parcourir par :"
+  browse_cat: "Catalogues — structure des dossiers de votre bibliothèque"
+  browse_auth: "Auteurs — liste alphabétique avec exploration"
+  browse_genre: "Genres — regroupés par catégorie"
+  browse_series: "Séries — alphabétique avec exploration"
+  browse_lang: "Langues — livres par langue"
+  download_title: "Téléchargements"
+  download_p1: "Chaque livre peut être téléchargé dans son format original. Les livres FB2 peuvent aussi être convertis en EPUB ou MOBI."
+  opds_title: "Accès OPDS"
+  opds_p1: "Utilisez le point d'accès OPDS avec des lecteurs comme Moon+ Reader, FBReader ou Calibre :"
+  bookshelf_title: "Étagère"
+  bookshelf_p1: "Ajoutez des livres à votre étagère personnelle pour un accès rapide. Cliquez sur 'Ajouter à l'étagère' sur n'importe quel livre."
+
+# Auth pages
+auth:
+  login: "Connexion"
+  logout: "Déconnexion"
+  register: "Inscription"
+  guest: "Invité"
+  guest_warning: "Vous naviguez en tant qu'invité. Votre étagère et vos paramètres ne seront pas sauvegardés après l'expiration de la session."
+  email: "Email"
+  username: "Nom d'utilisateur"
+  password: "Mot de passe"
+  confirm_password: "Confirmer le mot de passe"
+  forgot_password: "Mot de passe oublié ?"
+  reset_password: "Réinitialiser le mot de passe"
+  send_reset_link: "Envoyer le lien"
+  login_or_username: "Email ou nom d'utilisateur"
+  continue_as_guest: "Continuer en tant qu'invité"
+  already_have_account: "Vous avez déjà un compte ?"
+  no_account: "Pas de compte ?"
+  register_success: "Inscription réussie ! Vérifiez votre email pour confirmer votre compte."
+  verify_success: "Email vérifié ! Vous pouvez maintenant vous connecter."
+  reset_success: "Mot de passe réinitialisé ! Vous pouvez maintenant vous connecter."
+  password_requirements: "Le mot de passe doit contenir au moins 8 caractères avec 1 minuscule, 1 majuscule et 1 chiffre"
+  username_requirements: "Nom d'utilisateur : 3-30 caractères, alphanumérique et underscore uniquement"
+  welcome: "Bienvenue sur"
+  library_description: "Votre bibliothèque personnelle"
+  or: "ou"
+  req_length: "8+ caractères"
+  req_lower: "minuscule"
+  req_upper: "majuscule"
+  req_digit: "chiffre"
+  passwords_no_match: "Les mots de passe ne correspondent pas"
+  username_not_available: "Nom d'utilisateur non disponible"
+  email_not_available: "Email déjà utilisé"
