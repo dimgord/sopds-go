@@ -641,19 +641,81 @@ func (s *Server) serveFromZip(w http.ResponseWriter, r *http.Request, book *data
 	s.writeError(w, http.StatusNotFound, "File not found in ZIP")
 }
 
+// placeholderCoverSVG is a placeholder image for books without covers
+// Aspect ratio is 2:3 (typical book cover), size 200x300
+const placeholderCoverSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300" width="200" height="300">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b4252"/>
+      <stop offset="100%" style="stop-color:#2e3440"/>
+    </linearGradient>
+  </defs>
+  <rect width="200" height="300" fill="url(#bg)"/>
+  <rect x="10" y="10" width="180" height="280" rx="3" fill="none" stroke="#4c566a" stroke-width="2"/>
+  <g transform="translate(100,130)" fill="#5e81ac">
+    <rect x="-35" y="-40" width="30" height="80" rx="2"/>
+    <rect x="-2" y="-35" width="28" height="75" rx="2" fill="#81a1c1"/>
+    <rect x="30" y="-30" width="25" height="70" rx="2" fill="#88c0d0"/>
+  </g>
+  <text x="100" y="220" text-anchor="middle" fill="#d8dee9" font-family="sans-serif" font-size="14">No Cover</text>
+</svg>`
+
+// placeholderAudioCoverSVG is a placeholder image for audiobooks without covers
+// Uses headphones icon instead of books
+const placeholderAudioCoverSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300" width="200" height="300">
+  <defs>
+    <linearGradient id="abg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b4252"/>
+      <stop offset="100%" style="stop-color:#2e3440"/>
+    </linearGradient>
+  </defs>
+  <rect width="200" height="300" fill="url(#abg)"/>
+  <rect x="10" y="10" width="180" height="280" rx="3" fill="none" stroke="#4c566a" stroke-width="2"/>
+  <g transform="translate(100,125)" fill="#5e81ac">
+    <!-- Headband -->
+    <path d="M-40,0 A40,40 0 0,1 40,0" fill="none" stroke="#5e81ac" stroke-width="8" stroke-linecap="round"/>
+    <!-- Left ear cup -->
+    <rect x="-48" y="-5" width="20" height="45" rx="5" fill="#81a1c1"/>
+    <rect x="-45" y="0" width="14" height="35" rx="3" fill="#5e81ac"/>
+    <!-- Right ear cup -->
+    <rect x="28" y="-5" width="20" height="45" rx="5" fill="#81a1c1"/>
+    <rect x="31" y="0" width="14" height="35" rx="3" fill="#5e81ac"/>
+    <!-- Cushion details -->
+    <ellipse cx="-38" cy="17" rx="6" ry="12" fill="#88c0d0" opacity="0.5"/>
+    <ellipse cx="38" cy="17" rx="6" ry="12" fill="#88c0d0" opacity="0.5"/>
+  </g>
+  <text x="100" y="220" text-anchor="middle" fill="#d8dee9" font-family="sans-serif" font-size="14">No Cover</text>
+</svg>`
+
+// servePlaceholderCover serves the placeholder cover image for books
+func (s *Server) servePlaceholderCover(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Content-Length", strconv.Itoa(len(placeholderCoverSVG)))
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write([]byte(placeholderCoverSVG))
+}
+
+// servePlaceholderAudioCover serves the placeholder cover image for audiobooks
+func (s *Server) servePlaceholderAudioCover(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Content-Length", strconv.Itoa(len(placeholderAudioCoverSVG)))
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write([]byte(placeholderAudioCoverSVG))
+}
+
 // handleCover serves book cover image
 func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	bookID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "Invalid book ID")
+		s.servePlaceholderCover(w)
 		return
 	}
 
 	book, err := s.svc.GetBook(ctx, bookID)
-	if err != nil {
-		s.writeError(w, http.StatusNotFound, "Book not found")
+	if err != nil || book == nil {
+		s.servePlaceholderCover(w)
 		return
 	}
 
@@ -665,9 +727,9 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only FB2 files have embedded covers
+	// Only FB2 files have embedded covers, serve placeholder for others
 	if format != "fb2" {
-		s.writeError(w, http.StatusNotFound, "Cover not available for this format")
+		s.servePlaceholderCover(w)
 		return
 	}
 
@@ -677,13 +739,13 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 		filePath := filepath.Join(s.config.Library.Root, book.Path, book.Filename)
 		fb2Data, err = os.ReadFile(filePath)
 		if err != nil {
-			s.writeError(w, http.StatusNotFound, "Book file not found")
+			s.servePlaceholderCover(w)
 			return
 		}
 	} else {
 		fb2Data, err = s.readFromZip(book)
 		if err != nil {
-			s.writeError(w, http.StatusNotFound, "Failed to read book from ZIP")
+			s.servePlaceholderCover(w)
 			return
 		}
 	}
@@ -691,7 +753,7 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 	// Extract cover from FB2
 	coverData, coverType, err := extractFB2Cover(fb2Data)
 	if err != nil || len(coverData) == 0 {
-		s.writeError(w, http.StatusNotFound, "Cover not found in book")
+		s.servePlaceholderCover(w)
 		return
 	}
 
@@ -789,37 +851,46 @@ func (s *Server) serveAudioCover(w http.ResponseWriter, r *http.Request, book *d
 
 	// Handle folder-based audiobooks differently
 	if strings.ToLower(book.Format) == "folder" {
-		// For folder audiobooks, get the first track path from chapters JSON
-		folderPath := filepath.Join(s.config.Library.Root, book.Path)
+		// For folder audiobooks, full path includes book.Filename (which is the folder name)
+		folderPath := filepath.Join(s.config.Library.Root, book.Path, book.Filename)
 
-		// Try to get first track for @eaDir cover lookup
+		// Parse tracks from chapters JSON
+		var trackPaths []string
 		if book.Chapters != "" {
 			var structure struct {
 				Tracks []struct {
 					Path string `json:"path"`
 				} `json:"tracks"`
 			}
-			if err := json.Unmarshal([]byte(book.Chapters), &structure); err == nil && len(structure.Tracks) > 0 {
-				// Use first track path for @eaDir lookup
-				audioPath = structure.Tracks[0].Path
+			if err := json.Unmarshal([]byte(book.Chapters), &structure); err == nil {
+				for _, track := range structure.Tracks {
+					trackPath := track.Path
+					// Construct full track path (handles various storage formats)
+					var fullPath string
+					if strings.HasPrefix(trackPath, "/") {
+						fullPath = trackPath
+					} else if strings.Contains(trackPath, string(filepath.Separator)) || strings.Contains(trackPath, "/") {
+						fullPath = filepath.Join(s.config.Library.Root, book.Path, trackPath)
+					} else {
+						fullPath = filepath.Join(folderPath, trackPath)
+					}
+					trackPaths = append(trackPaths, fullPath)
+				}
 			}
 		}
 
-		// Fallback: construct path to first file in folder
-		if audioPath == "" {
-			audioPath = folderPath
+		// First, try @eaDir for any track
+		for _, tp := range trackPaths {
+			if coverData, coverType := s.getEaDirCover(tp); len(coverData) > 0 {
+				w.Header().Set("Content-Type", coverType)
+				w.Header().Set("Content-Length", strconv.Itoa(len(coverData)))
+				w.Header().Set("Cache-Control", "public, max-age=86400")
+				w.Write(coverData)
+				return
+			}
 		}
 
-		// First, try @eaDir for the first track
-		if coverData, coverType := s.getEaDirCover(audioPath); len(coverData) > 0 {
-			w.Header().Set("Content-Type", coverType)
-			w.Header().Set("Content-Length", strconv.Itoa(len(coverData)))
-			w.Header().Set("Cache-Control", "public, max-age=86400")
-			w.Write(coverData)
-			return
-		}
-
-		// Try folder cover in the audiobook folder
+		// Try folder cover in the audiobook folder (cover.jpg, folder.jpg)
 		if coverData, coverType := s.getFolderCoverInDir(folderPath); len(coverData) > 0 {
 			w.Header().Set("Content-Type", coverType)
 			w.Header().Set("Content-Length", strconv.Itoa(len(coverData)))
@@ -828,10 +899,9 @@ func (s *Server) serveAudioCover(w http.ResponseWriter, r *http.Request, book *d
 			return
 		}
 
-		// Try extracting from first audio file
-		if audioPath != "" && audioPath != folderPath {
-			if f, err := os.Open(audioPath); err == nil {
-				defer f.Close()
+		// Try extracting embedded cover from any track (stop at first found)
+		for _, tp := range trackPaths {
+			if f, err := os.Open(tp); err == nil {
 				if m, err := tag.ReadFrom(f); err == nil {
 					if pic := m.Picture(); pic != nil && len(pic.Data) > 0 {
 						contentType := pic.MIMEType
@@ -841,14 +911,16 @@ func (s *Server) serveAudioCover(w http.ResponseWriter, r *http.Request, book *d
 						w.Header().Set("Content-Type", contentType)
 						w.Header().Set("Content-Length", strconv.Itoa(len(pic.Data)))
 						w.Header().Set("Cache-Control", "public, max-age=86400")
+						f.Close()
 						w.Write(pic.Data)
 						return
 					}
 				}
+				f.Close()
 			}
 		}
 
-		s.writeError(w, http.StatusNotFound, "Cover not found in audiobook folder")
+		s.servePlaceholderAudioCover(w)
 		return
 	}
 
@@ -877,7 +949,7 @@ func (s *Server) serveAudioCover(w http.ResponseWriter, r *http.Request, book *d
 	if ext == ".7z" || ext == ".zip" || book.CatType != database.CatNormal {
 		coverData, coverType, err := s.extractAudioCoverFromArchive(book)
 		if err != nil || len(coverData) == 0 {
-			s.writeError(w, http.StatusNotFound, "Cover not found in audiobook")
+			s.servePlaceholderAudioCover(w)
 			return
 		}
 		w.Header().Set("Content-Type", coverType)
@@ -890,20 +962,20 @@ func (s *Server) serveAudioCover(w http.ResponseWriter, r *http.Request, book *d
 	// Open the audio file and extract cover directly
 	f, err := os.Open(audioPath)
 	if err != nil {
-		s.writeError(w, http.StatusNotFound, "Audio file not found")
+		s.servePlaceholderAudioCover(w)
 		return
 	}
 	defer f.Close()
 
 	m, err := tag.ReadFrom(f)
 	if err != nil {
-		s.writeError(w, http.StatusNotFound, "Failed to read audio tags")
+		s.servePlaceholderAudioCover(w)
 		return
 	}
 
 	pic := m.Picture()
 	if pic == nil || len(pic.Data) == 0 {
-		s.writeError(w, http.StatusNotFound, "Cover not found in audio file")
+		s.servePlaceholderAudioCover(w)
 		return
 	}
 

@@ -397,15 +397,16 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 			return nil
 		}
 
-		// Audio files are collected for grouping (except M4B which are single-file audiobooks)
-		if s.audioExtSet[ext] && ext != ".m4b" {
+		// Audio files are collected for grouping
+		// GroupByFolder will handle: single file = individual, multiple files = grouped
+		if s.audioExtSet[ext] {
 			audioFilesMu.Lock()
 			audioFiles = append(audioFiles, path)
 			audioFilesMu.Unlock()
 			return nil
 		}
 
-		// Other files (including M4B, fb2, etc.) go to workers
+		// Other files (fb2, epub, etc.) go to workers
 		if s.extSet[ext] {
 			fileChan <- path
 		}
@@ -608,10 +609,15 @@ func (s *Scanner) processAudioGroup(ctx context.Context, group *AudiobookGroup) 
 		return
 	}
 
-	// Get relative path from library root
-	relPath, err := filepath.Rel(s.config.Library.Root, group.FolderPath)
+	// Get relative path to PARENT directory (folder name becomes filename)
+	parentDir := filepath.Dir(group.FolderPath)
+	relPath, err := filepath.Rel(s.config.Library.Root, parentDir)
 	if err != nil {
-		relPath = group.FolderPath
+		relPath = parentDir
+	}
+	// Handle case where folder is directly in library root
+	if relPath == "." {
+		relPath = ""
 	}
 
 	// Use folder name as filename for the "virtual" audiobook
@@ -626,9 +632,19 @@ func (s *Scanner) processAudioGroup(ctx context.Context, group *AudiobookGroup) 
 		return
 	}
 
-	// Get or create catalog tree
+	// Clean up any individual audio files that may exist in this folder
+	// (from scans before grouping was implemented)
+	folderRelPath, _ := filepath.Rel(s.config.Library.Root, group.FolderPath)
+	if deletedCount, err := s.svc.MarkAudioFilesInFolderDeleted(ctx, folderRelPath); err != nil {
+		log.Printf("Failed to clean up individual files in %s: %v", folderRelPath, err)
+	} else if deletedCount > 0 {
+		log.Printf("Cleaned up %d individual audio files in folder %s", deletedCount, group.FolderName)
+		atomic.AddInt64(&s.stats.BooksDeleted, deletedCount)
+	}
+
+	// Get or create catalog tree (use parent path for catalog)
 	var catID int64
-	if relPath != "." && relPath != "" {
+	if relPath != "" {
 		pathParts := strings.Split(relPath, string(filepath.Separator))
 		catID, _ = s.svc.GetOrCreateCatalogTree(ctx, pathParts, database.CatNormal)
 	}

@@ -85,6 +85,39 @@ sudo systemctl status sopds.service
 ./sopds migrate       # Run database migrations
 ```
 
+### Taskfile (Recommended)
+
+Install [Task](https://taskfile.dev) and use `Taskfile.yml` for common operations:
+
+```bash
+task --list           # Show all available tasks
+
+# Common tasks
+task build            # Build binary
+task migrate          # Run migrations
+task start            # Build and start server
+task stop             # Stop server
+task restart          # Restart server
+task scan             # Run library scan
+
+# Systemd service
+task service-start    # Start systemd service
+task service-stop     # Stop systemd service
+task service-restart  # Restart systemd service
+task service-logs     # View service logs
+
+# Database
+task db-backup        # Backup database
+task db-vacuum        # Run VACUUM ANALYZE
+task db-stats         # Show table statistics
+
+# Development
+task dev              # Build and start
+task test             # Run tests
+task lint             # Run vet and fmt
+task clean            # Remove artifacts
+```
+
 ### Database Setup
 
 ```bash
@@ -200,10 +233,11 @@ server:
   opds_prefix: /opds          # OPDS API endpoint
   web_prefix: /web            # Web UI endpoint
   auth:
-    enabled: false
+    enabled: false            # Basic auth for anonymous/OPDS users
     users:
       - username: admin
         password: admin
+  jwt_secret: ""              # Secret for JWT tokens (auto-generated if empty)
 
 scanner:
   workers: 4                  # Parallel scan workers
@@ -246,6 +280,9 @@ Features:
 - Duplicate detection with "See duplicates" links to view all versions of a book
 - Help page with usage instructions
 - **Audiobook support**: dedicated browser, detail page with tree view, duration/narrator display, headphones badge
+- **User authentication**: register, login (email or username), logout, password reset
+- Guest mode with warning banner (bookshelf not persisted)
+- User dropdown in navigation header
 
 **Internationalization (i18n):**
 - Switch language via URL param: `?lang=en` or `?lang=uk`
@@ -366,6 +403,21 @@ Supports audio formats: MP3, M4B, M4A, FLAC, OGG, OPUS
 - `GET /opds/book/{id}/epub` - Convert to EPUB
 - `GET /opds/book/{id}/mobi` - Convert to MOBI
 
+**Authentication API (rate-limited):**
+- `GET /api/auth/check-username?username=x` - Check username availability (150/min)
+- `GET /api/auth/check-email?email=x` - Check email availability (150/min)
+- `GET /api/auth/check-password?password=x` - Validate password strength (no limit)
+
+**Auth Pages:**
+- `GET /web/landing` - Landing page (unauthenticated)
+- `GET|POST /web/login` - Login page
+- `GET|POST /web/register` - Registration page
+- `GET /web/logout` - Logout (clears JWT cookie)
+- `GET|POST /web/forgot-password` - Forgot password (5/hour limit)
+- `GET|POST /web/reset-password?token=x` - Reset password with token
+- `GET /web/verify-email?token=x` - Verify email
+- `POST /web/guest` - Continue as guest
+
 **Web UI:**
 - `GET /web/` - Home page
 - `GET /web/search` - Search with parameters:
@@ -417,6 +469,7 @@ github.com/robfig/cron/v3     # Cron scheduler
 github.com/google/uuid        # UUID generation
 gopkg.in/yaml.v3              # YAML parser
 github.com/dhowden/tag        # Audio metadata (ID3, MP4, FLAC, OGG)
+github.com/golang-jwt/jwt/v5  # JWT authentication
 github.com/bodgit/sevenzip    # 7z archive support
 ```
 

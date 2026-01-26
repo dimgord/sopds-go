@@ -12,6 +12,7 @@ type Repositories struct {
 	Series    repository.SeriesRepository
 	Catalogs  repository.CatalogRepository
 	Bookshelf repository.BookshelfRepository
+	Users     *UserRepository
 }
 
 // NewRepositories creates all repositories from a database connection
@@ -23,5 +24,6 @@ func NewRepositories(db *DB) *Repositories {
 		Series:    NewSeriesRepository(db),
 		Catalogs:  NewCatalogRepository(db),
 		Bookshelf: NewBookshelfRepository(db),
+		Users:     NewUserRepository(db.DB),
 	}
 }

@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"fmt"
 
 	"gorm.io/gorm"
 
@@ -621,6 +622,47 @@ func (s *Service) GetBookShelfIDs(ctx context.Context, username string) (map[int
 	return s.repos.Bookshelf.GetBookIDs(ctx, username)
 }
 
+// MigrateAnonBookshelf copies anonymous bookshelf items to user's account
+// Items that already exist in user's bookshelf are not overwritten
+func (s *Service) MigrateAnonBookshelf(ctx context.Context, anonID string, userID int64) error {
+	// Get anonymous bookshelf items
+	var anonItems []BookshelfModel
+	if err := s.db.DB.WithContext(ctx).
+		Where("user_name = ?", anonID).
+		Find(&anonItems).Error; err != nil {
+		return err
+	}
+
+	if len(anonItems) == 0 {
+		return nil
+	}
+
+	// Get user's current bookshelf to avoid duplicates
+	username := fmt.Sprintf("user_%d", userID) // User's bookshelf key
+	userBookIDs, err := s.repos.Bookshelf.GetBookIDs(ctx, username)
+	if err != nil {
+		return err
+	}
+
+	// Copy items that don't exist in user's bookshelf
+	for _, item := range anonItems {
+		if !userBookIDs[item.BookID] {
+			newItem := BookshelfModel{
+				UserName: username,
+				BookID:   item.BookID,
+				UserID:   &userID,
+				ReadTime: item.ReadTime,
+			}
+			s.db.DB.WithContext(ctx).Create(&newItem)
+		}
+	}
+
+	// Optionally delete anonymous items after migration
+	s.db.DB.WithContext(ctx).Where("user_name = ?", anonID).Delete(&BookshelfModel{})
+
+	return nil
+}
+
 // --- Statistics Operations ---
 
 // GetDBInfo returns database statistics
@@ -1007,6 +1049,26 @@ func (s *Service) MarkBooksUnavailable(ctx context.Context, bookIDs []int64) (in
 		Model(&BookModel{}).
 		Where("book_id IN ?", bookIDs).
 		Update("avail", 0)
+	return result.RowsAffected, result.Error
+}
+
+// MarkAudioFilesInFolderDeleted marks individual audio files in a folder as unavailable.
+// This is used when creating a grouped audiobook entry to clean up old individual entries.
+func (s *Service) MarkAudioFilesInFolderDeleted(ctx context.Context, folderPath string) (int64, error) {
+	if folderPath == "" {
+		return 0, nil
+	}
+
+	// All audio formats that can be grouped
+	audioFormats := []string{"mp3", "m4a", "m4b", "flac", "ogg", "opus"}
+
+	// Mark individual audio files in this folder as unavailable
+	// Files have path = folderPath and format in audioFormats
+	result := s.db.DB.WithContext(ctx).
+		Model(&BookModel{}).
+		Where("path = ? AND format IN ? AND avail != 0", folderPath, audioFormats).
+		Update("avail", 0)
+
 	return result.RowsAffected, result.Error
 }
 

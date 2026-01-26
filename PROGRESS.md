@@ -1,7 +1,218 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 0.45
+## Current Version: 0.50
+
+---
+
+### Revision 36 - 2026-01-26
+**Feature: Favicon and Placeholder Covers:**
+- Added SVG favicon with book icon in app theme colors
+  - Routes: `/favicon.ico` and `/favicon.svg`
+  - Added `<link rel="icon">` to HTML templates
+
+**Feature: Placeholder Covers for Missing Book/Audiobook Covers:**
+- Added fallback placeholder SVG images for books/audiobooks without covers
+- Books use book icon placeholder (3 book spines)
+- Audiobooks use headphones icon placeholder
+  - Replaces 404 responses with 200 + placeholder image
+  - Nordic-themed design (matching app colors) with book icon
+  - Aspect ratio 2:3 (200x300) - standard book cover dimensions
+  - "No Cover" text label
+- Created `placeholderCoverSVG` constant in handlers.go
+- Created `servePlaceholderCover()` function for serving the placeholder
+- Updated `handleCover()` to return placeholder instead of 404 for:
+  - Invalid book ID (non-numeric)
+  - Non-existent book ID
+  - Non-FB2 formats without embedded covers
+  - FB2 files without cover images
+  - File not found errors
+- Updated `serveAudioCover()` to return placeholder for all error cases
+- Updated `handleAudioTrackCover()` to return placeholder for all error cases:
+  - Invalid audiobook ID
+  - Missing file parameter
+  - Audiobook not found
+  - Not an audiobook
+  - Cover not found in track
+- **Bug fix**: Fixed nil pointer panic when GetBook returns nil book without error
+  - GetBook returns `nil, nil` for non-existent books (not an error)
+  - Added `book == nil` check alongside error check
+
+**Files Created:**
+- `internal/server/favicon.go` - SVG favicon with book icon
+
+**Files Modified:**
+- `internal/server/handlers.go` - Added placeholderCoverSVG, servePlaceholderCover(), updated handleCover() and serveAudioCover()
+- `internal/server/server.go` - Added favicon routes (/favicon.ico, /favicon.svg)
+- `internal/server/web.go` - Added favicon link to HTML templates, updated handleAudioTrackCover() to use placeholder
+
+---
+
+### Revision 35 - 2026-01-25
+**Feature: SMTP Email Sending for Authentication:**
+- Added `SMTPConfig` to configuration (`internal/config/config.go`)
+  - Supports SMTP with STARTTLS (port 587) or implicit TLS (port 465)
+  - Configurable: host, port, username, password, from address
+- Created `EmailService` (`internal/server/email.go`)
+  - `SendVerificationEmail()` - sends email verification links
+  - `SendPasswordResetEmail()` - sends password reset links
+  - Falls back to logging tokens when SMTP is disabled (dev mode)
+- Updated `auth.go` to use EmailService instead of just logging
+- Fixed auth template rendering (was returning empty page)
+  - Templates define `{{define "content"}}` blocks
+  - Now properly clones base template and executes "auth" template
+- Fixed user dropdown hover issue (menu disappeared on hover)
+  - Changed from margin-top gap to padding-top with transparent outer
+  - Added primary color background on hover for visibility
+- Added users table migration (`012_users.sql`) to schema
+
+**Configuration (config.yaml):**
+```yaml
+smtp:
+  enabled: false
+  host: smtp.gmail.com
+  port: 587
+  username: ""
+  password: ""
+  from: "SOPDS Library <noreply@example.com>"
+  use_tls: false
+  use_starttls: true
+```
+
+**Files Modified:**
+- `internal/config/config.go` - Added `SMTPConfig`
+- `internal/server/email.go` - New file, email sending service
+- `internal/server/server.go` - Added `emailService` to Server, template fix
+- `internal/server/auth.go` - Use emailService for verification/reset emails
+- `internal/server/web.go` - Fixed dropdown hover CSS, audiodetail PageData
+- `config.yaml` - Added smtp section, fixed site.url
+
+---
+
+### Revision 34 - 2026-01-25
+**Fix: Folder-Based Audiobook Path Calculation & M4B Grouping:**
+- Fixed bug where folder audiobooks were stored with incorrect path
+  - Problem: `relPath` included the folder name itself (e.g., "Music/Author - Title")
+  - Fix: Now uses parent directory as path (e.g., "Music"), folder name as filename
+  - This matches the pattern used by regular files
+- **M4B files now included in folder grouping**
+  - Folders with multiple M4B files are grouped as audiobook collections
+  - Single M4B in a folder still processed as individual audiobook
+  - Use case: collection folders like "Author - short stories (1)" with multiple M4B files
+- Added cleanup of old individual audio files when creating grouped audiobook
+  - `MarkAudioFilesInFolderDeleted()` marks old individual entries as unavailable
+  - Affects all audio formats: mp3, m4a, m4b, flac, ogg, opus
+  - Prevents duplicate entries when rescanning after grouping was added
+- Fixed audio track serving for folder audiobooks
+  - `serveTrackFromFolder()` now handles multiple path formats:
+    1. Full filesystem paths (starts with /)
+    2. Paths relative to library root (FolderName/file.mp3)
+    3. Just filenames
+  - Constructs correct full path using book.Path and trackPath
+  - Added debug logging for path resolution issues
+- Added cover extraction support for folder audiobooks
+  - `extractTrackCoverFromFolder()` reads cover from audio file metadata
+- **Per-track covers for folder audiobooks**
+  - Audio player updates cover image when switching tracks
+  - Each M4B/audio file can have its own embedded cover art
+  - Uses preloading to avoid flicker when switching tracks
+- **Fixed main book cover endpoint for folder audiobooks**
+  - `serveAudioCover()` now correctly constructs folder path with `book.Filename`
+  - Iterates through ALL tracks to find one with embedded cover (not just first)
+  - Previously returned 404 when first track had no cover
+  - Now serves cover from any track that has embedded art
+- **Header now shows current track info**
+  - Added "Now Playing" indicator with pulsing speaker icon
+  - Shows current track name in header when playing
+  - Cover image always visible (placeholder if none)
+  - Cover updates per-track for folder audiobooks
+  - Header remains sticky at top when scrolling
+
+**Files Modified:**
+- `internal/scanner/scanner.go` - Fixed `processAudioGroup()`, include M4B in grouping
+- `internal/infrastructure/persistence/service.go` - Added `MarkAudioFilesInFolderDeleted()` with M4B
+- `internal/server/web.go` - Fixed `serveTrackFromFolder()`, added `extractTrackCoverFromFolder()`, added "Now Playing" header indicator, cover placeholder, per-track cover updates
+- `internal/server/handlers.go` - Fixed `serveAudioCover()` folder path and track iteration
+
+---
+
+### Revision 33 - 2026-01-25
+**Taskfile for Project Automation:**
+- Added Taskfile.yml for common project tasks
+- Commands: build, init, migrate, start, stop, restart, status, scan
+- Systemd: service-start, service-stop, service-restart, service-status, service-logs
+- Database: db-backup, db-restore, db-vacuum, db-stats
+- Duplicates: dupes, dupes-clear
+- Development: dev, test, vet, fmt, lint, clean
+- Import: import-mysql, version
+
+**Files Created:**
+- `Taskfile.yml` - Task runner configuration
+
+---
+
+### Revision 32 - 2026-01-25
+**User Authentication System:**
+- Added complete user authentication with JWT tokens
+  - Registration with real-time validation (username/email availability check)
+  - Login by email OR username
+  - Logout functionality
+  - Password reset with token (logged to console, no SMTP)
+  - Email verification required before login
+- Rate limiting for security
+  - Username/email check: 150 requests/minute (prevents enumeration)
+  - Forgot password: 5 requests/hour (prevents abuse)
+- Password requirements with real-time feedback
+  - Minimum 8 characters
+  - At least 1 lowercase, 1 uppercase, 1 digit
+  - Color-coded validation in registration form
+- Username validation
+  - 3-30 characters
+  - Alphanumeric and underscore only
+  - Trimmed (no leading/trailing spaces)
+- Anonymous guest mode
+  - "Continue as guest" option on landing page
+  - Basic auth credentials work for guest mode (if configured)
+  - Warning banner for anonymous users (bookshelf not saved)
+- User dropdown in navigation
+  - Shows username for logged-in users
+  - Shows "Guest" for anonymous users
+  - Login/Register links for unauthenticated
+  - Logout link for authenticated
+- Bookshelf migration on login
+  - Anonymous bookshelf items copied to user account
+  - Existing items not overwritten
+- JWT-based sessions
+  - HTTP-only cookie for security
+  - 24-hour expiration
+  - Optional jwt_secret in config.yaml
+
+**Files Created:**
+- `internal/infrastructure/persistence/migrations/012_users.sql` - Users table, bookshelf user_id
+- `internal/domain/user/user.go` - User entity with validation
+- `internal/domain/repository/user_repository.go` - Repository interface
+- `internal/infrastructure/persistence/user_repository.go` - GORM implementation
+- `internal/server/auth.go` - JWT utilities, rate limiting, auth handlers
+- `internal/server/auth_templates.go` - Auth page templates (landing, login, register, etc.)
+
+**Files Modified:**
+- `internal/infrastructure/persistence/models.go` - Added UserID to BookshelfModel
+- `internal/infrastructure/persistence/repositories.go` - Added Users repository
+- `internal/infrastructure/persistence/service.go` - Added MigrateAnonBookshelf method
+- `internal/config/config.go` - Added JWTSecret to ServerConfig
+- `internal/server/server.go` - Added userRepo, authHandlers, auth routes, authMiddleware
+- `internal/server/web.go` - Added Auth field to PageData, auth translations, user dropdown, guest warning
+
+**New Dependencies:**
+- `github.com/golang-jwt/jwt/v5` - JWT token handling
+
+**Auth Page Templates:**
+- Landing page with login/register/guest options
+- Login form with email/username support
+- Registration form with real-time validation
+- Forgot password form
+- Reset password form with password strength indicator
+- Message page for verification errors
 
 ---
 
@@ -923,6 +1134,7 @@ internal/
 | Internationalization (i18n) | Done |
 | Help Page | Done |
 | Audiobook Support | Done |
+| User Authentication | Done |
 
 ---
 
@@ -939,3 +1151,4 @@ internal/
 | bseries | Book-series relationships |
 | catalogs | Directory structure |
 | bookshelf | User reading lists |
+| users | User accounts |

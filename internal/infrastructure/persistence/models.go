@@ -153,6 +153,7 @@ func (CatalogModel) TableName() string {
 type BookshelfModel struct {
 	UserName string    `gorm:"column:user_name;size:32;primaryKey"`
 	BookID   int64     `gorm:"column:book_id;primaryKey"`
+	UserID   *int64    `gorm:"column:user_id;index:idx_bookshelf_user"`
 	ReadTime time.Time `gorm:"column:readtime;autoCreateTime"`
 
 	// Relationships
