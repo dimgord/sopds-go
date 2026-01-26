@@ -72,14 +72,24 @@
 - Both password fields have eye icon toggle for show/hide
 - Real-time validation checks passwords match before enabling submit
 - When password changes, confirm field re-validates automatically
-- Full i18n for all auth page strings (EN/UK):
-  - Confirm Password / Підтвердіть пароль
-  - Password requirements (8+ chars, lowercase, uppercase, digit)
-  - "or" divider text
-  - JavaScript validation errors (passwords don't match, username/email not available)
+
+**Feature: Centralized i18n with Language Resource Files:**
+- Created `internal/i18n/` package for internationalization
+- Language files stored in `internal/i18n/locales/*.yaml`
+- To add a new language: copy `en.yaml`, translate, add code to `supportedLanguages`
+- All translations consolidated from web.go and server.go into YAML files
+- Uses Go's `embed` to compile translations into binary
+- Full EN/UK support for all strings
+
+**Files Created:**
+- `internal/i18n/i18n.go` - i18n package with YAML loading
+- `internal/i18n/locales/en.yaml` - English translations
+- `internal/i18n/locales/uk.yaml` - Ukrainian translations
 
 **Files Modified:**
-- `internal/server/auth_templates.go` - Added password confirmation field with toggle, CSS for `.password-wrapper` and `.password-toggle`, JavaScript `togglePassword()` and `validateConfirmPassword()` functions
+- `internal/server/web.go` - Uses i18n package instead of inline translations
+- `internal/server/server.go` - Uses i18n package for auth translations
+- `internal/server/auth_templates.go` - Password confirmation with toggle
 
 **Files Created:**
 - `internal/server/favicon.go` - SVG favicon with book icon

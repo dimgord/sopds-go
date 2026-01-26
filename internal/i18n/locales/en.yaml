@@ -1,0 +1,162 @@
+# English translations for SOPDS
+# To add a new language, copy this file and translate all values
+
+# Navigation
+nav:
+  home: "Home"
+  catalogs: "Catalogs"
+  authors: "Authors"
+  genres: "Genres"
+  series: "Series"
+  languages: "Languages"
+  new: "New"
+  audio: "Audio"
+  bookshelf: "Bookshelf"
+  help: "Help"
+
+# Main page
+main:
+  stats: "Library Statistics"
+  books: "Books"
+  authors: "Authors"
+  genres: "Genres"
+  series: "Series"
+  new7d: "New (7d)"
+  browse: "Browse Library"
+  newbooks: "New Books"
+  audiobooks: "Audiobooks"
+  search: "Search"
+
+# Search
+search:
+  title: "Search by title"
+  author: "Author name..."
+  indesc: "+desc"
+  books: "Search Books"
+  hint: "Use the search box above to find books by title or author name."
+  in: "in"
+
+# Books
+books:
+  show: "Show:"
+  all: "All"
+  filters: "Filters:"
+  alllang: "All Languages"
+  download: "Download"
+  addshelf: "Add to Shelf"
+  duplicates: "Duplicates"
+  prev: "Previous"
+  next: "Next"
+  nobooks: "No books found."
+
+# Authors
+authors:
+  title: "Authors"
+  none: "No authors found."
+
+# Genres
+genres:
+  title: "Genres"
+  none: "No genres found."
+
+# Series
+series:
+  title: "Series"
+  none: "No series found."
+
+# Languages page
+languages:
+  title: "Languages"
+  none: "No languages found."
+
+# Catalogs
+catalogs:
+  title: "Catalogs"
+  none: "No items found."
+
+# Bookshelf
+bookshelf:
+  title: "My Bookshelf"
+  empty: "Your bookshelf is empty."
+  remove: "Remove"
+
+# Audiobook detail
+audio:
+  tracks: "Tracks"
+  parts: "Parts"
+  duration: "Duration"
+  download: "Download ZIP"
+  collection: "Collection"
+  book: "Audiobook"
+  selectall: "Select All"
+  downloadsel: "Download Selected"
+
+# Error
+error:
+  title: "Error"
+  back: "Back to Home"
+
+# Help page
+help:
+  title: "Help"
+  welcome: "Welcome to SOPDS Library"
+  intro: "SOPDS is an OPDS catalog server for your e-book collection."
+  search_title: "Search"
+  search_p1: "The search bar has two fields:"
+  search_field1: "Title field — searches in book titles"
+  search_field2: "Author field — searches in author names (first and last)"
+  search_p2: "Both fields can be used together (AND logic). Check '+desc' to also search in book descriptions."
+  scope_title: "Scoped Search"
+  scope_p1: "When browsing authors, genres, series, or languages, search is automatically scoped to that context."
+  filters_title: "Advanced Filters"
+  filters_p1: "You can add URL parameters for advanced filtering:"
+  filters_lang: "lang_pattern=uk — filter by language"
+  filters_genre: "genre_pattern=comedy — filter by genre name"
+  filters_series: "series_pattern=Silo — filter by series name"
+  browse_title: "Browsing"
+  browse_p1: "Use the navigation menu to browse by:"
+  browse_cat: "Catalogs — folder structure of your library"
+  browse_auth: "Authors — alphabetical list with drill-down"
+  browse_genre: "Genres — grouped by category"
+  browse_series: "Series — alphabetical with drill-down"
+  browse_lang: "Languages — books by language"
+  download_title: "Downloads"
+  download_p1: "Each book can be downloaded in its original format. FB2 books can also be converted to EPUB or MOBI."
+  opds_title: "OPDS Access"
+  opds_p1: "Use the OPDS endpoint with e-book readers like Moon+ Reader, FBReader, or Calibre:"
+  bookshelf_title: "Bookshelf"
+  bookshelf_p1: "Add books to your personal bookshelf for quick access. Click 'Add to Shelf' on any book."
+
+# Auth pages
+auth:
+  login: "Login"
+  logout: "Logout"
+  register: "Register"
+  guest: "Guest"
+  guest_warning: "You are browsing as a guest. Your bookshelf and settings will not be saved after session expires."
+  email: "Email"
+  username: "Username"
+  password: "Password"
+  confirm_password: "Confirm Password"
+  forgot_password: "Forgot Password?"
+  reset_password: "Reset Password"
+  send_reset_link: "Send Reset Link"
+  login_or_username: "Email or Username"
+  continue_as_guest: "Continue as Guest"
+  already_have_account: "Already have an account?"
+  no_account: "Don't have an account?"
+  register_success: "Registration successful! Please check your email to verify your account."
+  verify_success: "Email verified successfully! You can now log in."
+  reset_success: "Password reset successfully! You can now log in."
+  password_requirements: "Password must be at least 8 characters with 1 lowercase, 1 uppercase, and 1 digit"
+  username_requirements: "Username: 3-30 characters, alphanumeric and underscore only"
+  welcome: "Welcome to"
+  library_description: "Your personal e-book library"
+  or: "or"
+  req_length: "8+ chars"
+  req_lower: "lowercase"
+  req_upper: "uppercase"
+  req_digit: "digit"
+  passwords_no_match: "Passwords do not match"
+  username_not_available: "Username not available"
+  email_not_available: "Email not available"
