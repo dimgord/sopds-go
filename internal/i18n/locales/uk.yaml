@@ -160,3 +160,15 @@ auth:
   passwords_no_match: "Паролі не співпадають"
   username_not_available: "Ім'я користувача зайнято"
   email_not_available: "Email вже використовується"
+
+# Reader
+reader:
+  read: "Читати"
+  toc: "Зміст"
+  font_smaller: "Менший шрифт"
+  font_larger: "Більший шрифт"
+  dark_mode: "Темна тема"
+  close: "Закрити"
+  not_supported: "Цей формат не підтримується для читання"
+  conversion_failed: "Не вдалося конвертувати книгу"
+  loading: "Завантаження..."

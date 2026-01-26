@@ -1,7 +1,52 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 0.50
+## Current Version: 0.51
+
+---
+
+### Revision 37 - 2026-01-26
+**Feature: Web-Based FB2 Reader:**
+- Implemented in-browser ebook reader for FB2, EPUB, and MOBI formats
+- Non-FB2 formats converted to FB2 using Calibre's ebook-convert
+- Route: `GET /web/read/{id}` - opens book in reader
+
+**Reader Features:**
+- Full book content display with proper typography
+- Table of Contents navigation (collapsible sidebar)
+- Font size controls (+/-)
+- Light/dark mode toggle
+- Reading position saved in localStorage
+- Images embedded as data URIs
+- Responsive design (mobile-friendly TOC)
+
+**Files Created:**
+- `internal/converter/reader.go` - FB2 to reader HTML conversion
+  - `ReaderContent` struct with title, authors, TOC, HTML, cover
+  - `FB2ToReaderHTML()` parses FB2 and generates reader-friendly HTML
+  - `ConvertToFB2()` converts EPUB/MOBI to FB2 via Calibre
+
+**Files Modified:**
+- `internal/server/web.go`
+  - Added `ReaderData` struct for reader template
+  - Added `handleWebReader()` handler
+  - Added `readFrom7z()` for reading books from 7z archives
+  - Added `renderReaderTemplate()` with reader template
+  - Added `readerTemplate` constant with full HTML/CSS/JS
+  - Added "Read" button to book list template for FB2/EPUB/MOBI
+  - Added "Read" button to bookshelf template
+- `internal/server/server.go` - Registered `/web/read/{id}` route
+- `internal/i18n/locales/*.yaml` - Added reader translations (all 5 languages)
+
+**i18n Keys Added:**
+- `reader.read` - Read button label
+- `reader.toc` - Table of Contents
+- `reader.font_smaller` / `reader.font_larger` - Font controls
+- `reader.dark_mode` - Dark mode toggle
+- `reader.close` - Close button
+- `reader.not_supported` - Error for unsupported formats
+- `reader.conversion_failed` - Conversion error message
+- `reader.loading` - Loading indicator
 
 ---
 
