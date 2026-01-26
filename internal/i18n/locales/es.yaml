@@ -1,0 +1,174 @@
+# Spanish translations for SOPDS
+# Traducciones en español para SOPDS
+
+# Navigation
+nav:
+  home: "Inicio"
+  catalogs: "Catálogos"
+  authors: "Autores"
+  genres: "Géneros"
+  series: "Series"
+  languages: "Idiomas"
+  new: "Novedades"
+  audio: "Audio"
+  bookshelf: "Estantería"
+  help: "Ayuda"
+
+# Main page
+main:
+  stats: "Estadísticas de la biblioteca"
+  books: "Libros"
+  authors: "Autores"
+  genres: "Géneros"
+  series: "Series"
+  new7d: "Nuevos (7d)"
+  browse: "Explorar biblioteca"
+  newbooks: "Libros nuevos"
+  audiobooks: "Audiolibros"
+  search: "Buscar"
+
+# Search
+search:
+  title: "Buscar por título"
+  author: "Nombre del autor..."
+  indesc: "+desc"
+  books: "Buscar libros"
+  hint: "Use la barra de búsqueda para encontrar libros por título o nombre de autor."
+  in: "en"
+
+# Books
+books:
+  show: "Mostrar:"
+  all: "Todos"
+  filters: "Filtros:"
+  alllang: "Todos los idiomas"
+  download: "Descargar"
+  addshelf: "Añadir a estantería"
+  duplicates: "Duplicados"
+  prev: "Anterior"
+  next: "Siguiente"
+  nobooks: "No se encontraron libros."
+
+# Authors
+authors:
+  title: "Autores"
+  none: "No se encontraron autores."
+
+# Genres
+genres:
+  title: "Géneros"
+  none: "No se encontraron géneros."
+
+# Series
+series:
+  title: "Series"
+  none: "No se encontraron series."
+
+# Languages page
+languages:
+  title: "Idiomas"
+  none: "No se encontraron idiomas."
+
+# Catalogs
+catalogs:
+  title: "Catálogos"
+  none: "No se encontraron elementos."
+
+# Bookshelf
+bookshelf:
+  title: "Mi estantería"
+  empty: "Su estantería está vacía."
+  remove: "Eliminar"
+
+# Audiobook detail
+audio:
+  tracks: "Pistas"
+  parts: "Partes"
+  duration: "Duración"
+  download: "Descargar ZIP"
+  collection: "Colección"
+  book: "Audiolibro"
+  selectall: "Seleccionar todo"
+  downloadsel: "Descargar selección"
+
+# Error
+error:
+  title: "Error"
+  back: "Volver al inicio"
+
+# Help page
+help:
+  title: "Ayuda"
+  welcome: "Bienvenido a la biblioteca SOPDS"
+  intro: "SOPDS es un servidor de catálogo OPDS para su colección de libros electrónicos."
+  search_title: "Búsqueda"
+  search_p1: "La barra de búsqueda tiene dos campos:"
+  search_field1: "Campo de título — busca en títulos de libros"
+  search_field2: "Campo de autor — busca en nombres de autores"
+  search_p2: "Ambos campos pueden usarse juntos (lógica Y). Marque '+desc' para buscar también en descripciones."
+  scope_title: "Búsqueda contextual"
+  scope_p1: "Al navegar por autores, géneros, series o idiomas, la búsqueda se limita automáticamente a ese contexto."
+  filters_title: "Filtros avanzados"
+  filters_p1: "Puede añadir parámetros URL para filtrado avanzado:"
+  filters_lang: "lang_pattern=es — filtrar por idioma"
+  filters_genre: "genre_pattern=comedy — filtrar por nombre de género"
+  filters_series: "series_pattern=Silo — filtrar por nombre de serie"
+  browse_title: "Navegación"
+  browse_p1: "Use el menú de navegación para explorar por:"
+  browse_cat: "Catálogos — estructura de carpetas de su biblioteca"
+  browse_auth: "Autores — lista alfabética con desglose"
+  browse_genre: "Géneros — agrupados por categoría"
+  browse_series: "Series — alfabético con desglose"
+  browse_lang: "Idiomas — libros por idioma"
+  download_title: "Descargas"
+  download_p1: "Cada libro puede descargarse en su formato original. Los libros FB2 también pueden convertirse a EPUB o MOBI."
+  opds_title: "Acceso OPDS"
+  opds_p1: "Use el punto de acceso OPDS con lectores como Moon+ Reader, FBReader o Calibre:"
+  bookshelf_title: "Estantería"
+  bookshelf_p1: "Añada libros a su estantería personal para acceso rápido. Haga clic en 'Añadir a estantería' en cualquier libro."
+
+# Auth pages
+auth:
+  login: "Iniciar sesión"
+  logout: "Cerrar sesión"
+  register: "Registrarse"
+  guest: "Invitado"
+  guest_warning: "Está navegando como invitado. Su estantería y configuración no se guardarán después de que expire la sesión."
+  email: "Email"
+  username: "Nombre de usuario"
+  password: "Contraseña"
+  confirm_password: "Confirmar contraseña"
+  forgot_password: "¿Olvidó su contraseña?"
+  reset_password: "Restablecer contraseña"
+  send_reset_link: "Enviar enlace"
+  login_or_username: "Email o nombre de usuario"
+  continue_as_guest: "Continuar como invitado"
+  already_have_account: "¿Ya tiene una cuenta?"
+  no_account: "¿No tiene cuenta?"
+  register_success: "¡Registro exitoso! Revise su email para verificar su cuenta."
+  verify_success: "¡Email verificado! Ya puede iniciar sesión."
+  reset_success: "¡Contraseña restablecida! Ya puede iniciar sesión."
+  password_requirements: "La contraseña debe tener al menos 8 caracteres con 1 minúscula, 1 mayúscula y 1 dígito"
+  username_requirements: "Usuario: 3-30 caracteres, alfanumérico y guion bajo únicamente"
+  welcome: "Bienvenido a"
+  library_description: "Su biblioteca personal"
+  or: "o"
+  req_length: "8+ caracteres"
+  req_lower: "minúscula"
+  req_upper: "mayúscula"
+  req_digit: "dígito"
+  passwords_no_match: "Las contraseñas no coinciden"
+  username_not_available: "Nombre de usuario no disponible"
+  email_not_available: "Email ya en uso"
+
+# Reader
+reader:
+  read: "Leer"
+  toc: "Índice"
+  font_smaller: "Fuente más pequeña"
+  font_larger: "Fuente más grande"
+  dark_mode: "Modo oscuro"
+  close: "Cerrar"
+  not_supported: "Este formato no es compatible para lectura"
+  conversion_failed: "Error al convertir el libro"
+  loading: "Cargando..."

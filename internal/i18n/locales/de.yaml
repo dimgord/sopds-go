@@ -1,0 +1,174 @@
+# German translations for SOPDS
+# Deutsche Übersetzungen für SOPDS
+
+# Navigation
+nav:
+  home: "Startseite"
+  catalogs: "Kataloge"
+  authors: "Autoren"
+  genres: "Genres"
+  series: "Serien"
+  languages: "Sprachen"
+  new: "Neu"
+  audio: "Audio"
+  bookshelf: "Bücherregal"
+  help: "Hilfe"
+
+# Main page
+main:
+  stats: "Bibliotheksstatistik"
+  books: "Bücher"
+  authors: "Autoren"
+  genres: "Genres"
+  series: "Serien"
+  new7d: "Neu (7T)"
+  browse: "Bibliothek durchsuchen"
+  newbooks: "Neue Bücher"
+  audiobooks: "Hörbücher"
+  search: "Suchen"
+
+# Search
+search:
+  title: "Nach Titel suchen"
+  author: "Autorenname..."
+  indesc: "+Beschr."
+  books: "Bücher suchen"
+  hint: "Verwenden Sie die Suchleiste, um Bücher nach Titel oder Autorennamen zu finden."
+  in: "in"
+
+# Books
+books:
+  show: "Anzeigen:"
+  all: "Alle"
+  filters: "Filter:"
+  alllang: "Alle Sprachen"
+  download: "Herunterladen"
+  addshelf: "Zum Regal hinzufügen"
+  duplicates: "Duplikate"
+  prev: "Zurück"
+  next: "Weiter"
+  nobooks: "Keine Bücher gefunden."
+
+# Authors
+authors:
+  title: "Autoren"
+  none: "Keine Autoren gefunden."
+
+# Genres
+genres:
+  title: "Genres"
+  none: "Keine Genres gefunden."
+
+# Series
+series:
+  title: "Serien"
+  none: "Keine Serien gefunden."
+
+# Languages page
+languages:
+  title: "Sprachen"
+  none: "Keine Sprachen gefunden."
+
+# Catalogs
+catalogs:
+  title: "Kataloge"
+  none: "Keine Einträge gefunden."
+
+# Bookshelf
+bookshelf:
+  title: "Mein Bücherregal"
+  empty: "Ihr Bücherregal ist leer."
+  remove: "Entfernen"
+
+# Audiobook detail
+audio:
+  tracks: "Titel"
+  parts: "Teile"
+  duration: "Dauer"
+  download: "ZIP herunterladen"
+  collection: "Sammlung"
+  book: "Hörbuch"
+  selectall: "Alle auswählen"
+  downloadsel: "Auswahl herunterladen"
+
+# Error
+error:
+  title: "Fehler"
+  back: "Zurück zur Startseite"
+
+# Help page
+help:
+  title: "Hilfe"
+  welcome: "Willkommen in der SOPDS-Bibliothek"
+  intro: "SOPDS ist ein OPDS-Katalogserver für Ihre E-Book-Sammlung."
+  search_title: "Suche"
+  search_p1: "Die Suchleiste hat zwei Felder:"
+  search_field1: "Titelfeld — sucht in Buchtiteln"
+  search_field2: "Autorenfeld — sucht in Autorennamen"
+  search_p2: "Beide Felder können zusammen verwendet werden (UND-Logik). Aktivieren Sie '+Beschr.' um auch in Beschreibungen zu suchen."
+  scope_title: "Kontextsuche"
+  scope_p1: "Beim Durchsuchen nach Autoren, Genres, Serien oder Sprachen wird die Suche automatisch auf diesen Kontext beschränkt."
+  filters_title: "Erweiterte Filter"
+  filters_p1: "Sie können URL-Parameter für erweiterte Filterung hinzufügen:"
+  filters_lang: "lang_pattern=de — nach Sprache filtern"
+  filters_genre: "genre_pattern=comedy — nach Genrename filtern"
+  filters_series: "series_pattern=Silo — nach Serienname filtern"
+  browse_title: "Navigation"
+  browse_p1: "Verwenden Sie das Navigationsmenü zum Durchsuchen nach:"
+  browse_cat: "Kataloge — Ordnerstruktur Ihrer Bibliothek"
+  browse_auth: "Autoren — alphabetische Liste mit Aufschlüsselung"
+  browse_genre: "Genres — nach Kategorie gruppiert"
+  browse_series: "Serien — alphabetisch mit Aufschlüsselung"
+  browse_lang: "Sprachen — Bücher nach Sprache"
+  download_title: "Downloads"
+  download_p1: "Jedes Buch kann im Originalformat heruntergeladen werden. FB2-Bücher können auch in EPUB oder MOBI konvertiert werden."
+  opds_title: "OPDS-Zugang"
+  opds_p1: "Verwenden Sie den OPDS-Endpunkt mit E-Book-Readern wie Moon+ Reader, FBReader oder Calibre:"
+  bookshelf_title: "Bücherregal"
+  bookshelf_p1: "Fügen Sie Bücher zu Ihrem persönlichen Regal für schnellen Zugriff hinzu. Klicken Sie auf 'Zum Regal hinzufügen' bei jedem Buch."
+
+# Auth pages
+auth:
+  login: "Anmelden"
+  logout: "Abmelden"
+  register: "Registrieren"
+  guest: "Gast"
+  guest_warning: "Sie browsen als Gast. Ihr Bücherregal und Ihre Einstellungen werden nach Ablauf der Sitzung nicht gespeichert."
+  email: "E-Mail"
+  username: "Benutzername"
+  password: "Passwort"
+  confirm_password: "Passwort bestätigen"
+  forgot_password: "Passwort vergessen?"
+  reset_password: "Passwort zurücksetzen"
+  send_reset_link: "Link senden"
+  login_or_username: "E-Mail oder Benutzername"
+  continue_as_guest: "Als Gast fortfahren"
+  already_have_account: "Haben Sie bereits ein Konto?"
+  no_account: "Kein Konto?"
+  register_success: "Registrierung erfolgreich! Überprüfen Sie Ihre E-Mail zur Bestätigung."
+  verify_success: "E-Mail bestätigt! Sie können sich jetzt anmelden."
+  reset_success: "Passwort zurückgesetzt! Sie können sich jetzt anmelden."
+  password_requirements: "Passwort muss mindestens 8 Zeichen mit 1 Kleinbuchstaben, 1 Großbuchstaben und 1 Ziffer enthalten"
+  username_requirements: "Benutzername: 3-30 Zeichen, alphanumerisch und Unterstrich"
+  welcome: "Willkommen bei"
+  library_description: "Ihre persönliche Bibliothek"
+  or: "oder"
+  req_length: "8+ Zeichen"
+  req_lower: "Kleinbuchstabe"
+  req_upper: "Großbuchstabe"
+  req_digit: "Ziffer"
+  passwords_no_match: "Passwörter stimmen nicht überein"
+  username_not_available: "Benutzername nicht verfügbar"
+  email_not_available: "E-Mail bereits verwendet"
+
+# Reader
+reader:
+  read: "Lesen"
+  toc: "Inhaltsverzeichnis"
+  font_smaller: "Kleinere Schrift"
+  font_larger: "Größere Schrift"
+  dark_mode: "Dunkelmodus"
+  close: "Schließen"
+  not_supported: "Dieses Format wird nicht zum Lesen unterstützt"
+  conversion_failed: "Buch konnte nicht konvertiert werden"
+  loading: "Laden..."

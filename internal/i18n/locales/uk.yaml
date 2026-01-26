@@ -1,0 +1,174 @@
+# Ukrainian translations for SOPDS
+# Українські переклади для SOPDS
+
+# Navigation
+nav:
+  home: "Головна"
+  catalogs: "Каталоги"
+  authors: "Автори"
+  genres: "Жанри"
+  series: "Серії"
+  languages: "Мови"
+  new: "Новинки"
+  audio: "Аудіо"
+  bookshelf: "Полиця"
+  help: "Довідка"
+
+# Main page
+main:
+  stats: "Статистика бібліотеки"
+  books: "Книги"
+  authors: "Автори"
+  genres: "Жанри"
+  series: "Серії"
+  new7d: "Нові (7д)"
+  browse: "Перегляд бібліотеки"
+  newbooks: "Нові книги"
+  audiobooks: "Аудіокниги"
+  search: "Пошук"
+
+# Search
+search:
+  title: "Пошук за назвою"
+  author: "Ім'я автора..."
+  indesc: "+опис"
+  books: "Пошук книг"
+  hint: "Використовуйте поле пошуку вище, щоб знайти книги за назвою або автором."
+  in: "у"
+
+# Books
+books:
+  show: "Показати:"
+  all: "Всі"
+  filters: "Фільтри:"
+  alllang: "Всі мови"
+  download: "Завантажити"
+  addshelf: "На полицю"
+  duplicates: "Дублікати"
+  prev: "Попередня"
+  next: "Наступна"
+  nobooks: "Книг не знайдено."
+
+# Authors
+authors:
+  title: "Автори"
+  none: "Авторів не знайдено."
+
+# Genres
+genres:
+  title: "Жанри"
+  none: "Жанрів не знайдено."
+
+# Series
+series:
+  title: "Серії"
+  none: "Серій не знайдено."
+
+# Languages page
+languages:
+  title: "Мови"
+  none: "Мов не знайдено."
+
+# Catalogs
+catalogs:
+  title: "Каталоги"
+  none: "Елементів не знайдено."
+
+# Bookshelf
+bookshelf:
+  title: "Моя полиця"
+  empty: "Ваша полиця порожня."
+  remove: "Видалити"
+
+# Audiobook detail
+audio:
+  tracks: "Треки"
+  parts: "Частини"
+  duration: "Тривалість"
+  download: "Завантажити ZIP"
+  collection: "Збірка"
+  book: "Аудіокнига"
+  selectall: "Вибрати все"
+  downloadsel: "Завантажити вибране"
+
+# Error
+error:
+  title: "Помилка"
+  back: "На головну"
+
+# Help page
+help:
+  title: "Довідка"
+  welcome: "Ласкаво просимо до бібліотеки SOPDS"
+  intro: "SOPDS — це OPDS-сервер каталогу для вашої колекції електронних книг."
+  search_title: "Пошук"
+  search_p1: "Панель пошуку має два поля:"
+  search_field1: "Поле назви — шукає в назвах книг"
+  search_field2: "Поле автора — шукає в іменах авторів"
+  search_p2: "Обидва поля можна використовувати разом (логіка І). Позначте '+опис', щоб шукати також в описах книг."
+  scope_title: "Контекстний пошук"
+  scope_p1: "При перегляді авторів, жанрів, серій або мов, пошук автоматично обмежується цим контекстом."
+  filters_title: "Розширені фільтри"
+  filters_p1: "Ви можете додати параметри URL для розширеної фільтрації:"
+  filters_lang: "lang_pattern=uk — фільтр за мовою"
+  filters_genre: "genre_pattern=comedy — фільтр за назвою жанру"
+  filters_series: "series_pattern=Silo — фільтр за назвою серії"
+  browse_title: "Перегляд"
+  browse_p1: "Використовуйте меню навігації для перегляду за:"
+  browse_cat: "Каталоги — структура папок вашої бібліотеки"
+  browse_auth: "Автори — алфавітний список із деталізацією"
+  browse_genre: "Жанри — згруповані за категоріями"
+  browse_series: "Серії — алфавітний із деталізацією"
+  browse_lang: "Мови — книги за мовами"
+  download_title: "Завантаження"
+  download_p1: "Кожну книгу можна завантажити в оригінальному форматі. Книги FB2 також можна конвертувати в EPUB або MOBI."
+  opds_title: "Доступ OPDS"
+  opds_p1: "Використовуйте OPDS-ендпоінт з читалками електронних книг, такими як Moon+ Reader, FBReader або Calibre:"
+  bookshelf_title: "Полиця"
+  bookshelf_p1: "Додавайте книги на особисту полицю для швидкого доступу. Натисніть 'На полицю' на будь-якій книзі."
+
+# Auth pages
+auth:
+  login: "Увійти"
+  logout: "Вийти"
+  register: "Реєстрація"
+  guest: "Гість"
+  guest_warning: "Ви переглядаєте як гість. Ваша полиця та налаштування не будуть збережені після закінчення сесії."
+  email: "Email"
+  username: "Ім'я користувача"
+  password: "Пароль"
+  confirm_password: "Підтвердіть пароль"
+  forgot_password: "Забули пароль?"
+  reset_password: "Скинути пароль"
+  send_reset_link: "Надіслати посилання"
+  login_or_username: "Email або ім'я користувача"
+  continue_as_guest: "Продовжити як гість"
+  already_have_account: "Вже є акаунт?"
+  no_account: "Немає акаунту?"
+  register_success: "Реєстрація успішна! Перевірте пошту для підтвердження."
+  verify_success: "Email підтверджено! Тепер ви можете увійти."
+  reset_success: "Пароль змінено! Тепер ви можете увійти."
+  password_requirements: "Пароль: мінімум 8 символів, 1 мала літера, 1 велика літера, 1 цифра"
+  username_requirements: "Ім'я: 3-30 символів, літери, цифри та підкреслення"
+  welcome: "Ласкаво просимо до"
+  library_description: "Ваша персональна бібліотека"
+  or: "або"
+  req_length: "8+ символів"
+  req_lower: "мала літера"
+  req_upper: "велика літера"
+  req_digit: "цифра"
+  passwords_no_match: "Паролі не співпадають"
+  username_not_available: "Ім'я користувача зайнято"
+  email_not_available: "Email вже використовується"
+
+# Reader
+reader:
+  read: "Читати"
+  toc: "Зміст"
+  font_smaller: "Менший шрифт"
+  font_larger: "Більший шрифт"
+  dark_mode: "Темна тема"
+  close: "Закрити"
+  not_supported: "Цей формат не підтримується для читання"
+  conversion_failed: "Не вдалося конвертувати книгу"
+  loading: "Завантаження..."
