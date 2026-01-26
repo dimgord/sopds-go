@@ -3511,9 +3511,10 @@ function goToPage(page) {
                 </summary>
                 <ul class="track-list" data-part="{{$i}}">
                     {{range $j, $track := $part.Tracks}}
-                    <li data-url="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" data-name="{{$track.Name}}" data-duration="{{$track.Duration}}" data-path="{{$track.Path}}" onclick="player.onTrackClick(this, event)">
+                    {{$trackFile := or $track.Path $track.Name}}
+                    <li data-url="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$trackFile}}" data-name="{{$track.Name}}" data-duration="{{$track.Duration}}" data-path="{{$trackFile}}" onclick="player.onTrackClick(this, event)">
                         <label class="track-checkbox" onclick="event.stopPropagation()">
-                            <input type="checkbox" class="track-select" data-part="{{$i}}" data-path="{{$track.Path}}" onchange="updateSelection()">
+                            <input type="checkbox" class="track-select" data-part="{{$i}}" data-path="{{$trackFile}}" onchange="updateSelection()">
                         </label>
                         <i class="fas fa-music track-icon"></i>
                         <span class="track-name">{{$track.Name}}</span>
@@ -3521,7 +3522,7 @@ function goToPage(page) {
                         <button class="track-play" onclick="event.stopPropagation(); player.playTrack(this.closest('li'))" title="Play">
                             <i class="fas fa-play"></i>
                         </button>
-                        <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" class="track-download" title="Download" onclick="event.stopPropagation()">
+                        <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$trackFile}}" class="track-download" title="Download" onclick="event.stopPropagation()">
                             <i class="fas fa-download"></i>
                         </a>
                     </li>
@@ -3534,9 +3535,10 @@ function goToPage(page) {
         <h2><i class="fas fa-list-ol"></i> {{t "audio.tracks"}} ({{len .Structure.Tracks}})</h2>
         <ul class="track-list flat">
             {{range $i, $track := .Structure.Tracks}}
-            <li data-url="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" data-name="{{$track.Name}}" data-duration="{{$track.Duration}}" data-path="{{$track.Path}}" onclick="player.onTrackClick(this, event)">
+            {{$trackFile := or $track.Path $track.Name}}
+            <li data-url="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$trackFile}}" data-name="{{$track.Name}}" data-duration="{{$track.Duration}}" data-path="{{$trackFile}}" onclick="player.onTrackClick(this, event)">
                 <label class="track-checkbox" onclick="event.stopPropagation()">
-                    <input type="checkbox" class="track-select" data-path="{{$track.Path}}" onchange="updateSelection()">
+                    <input type="checkbox" class="track-select" data-path="{{$trackFile}}" onchange="updateSelection()">
                 </label>
                 <i class="fas fa-music track-icon"></i>
                 <span class="track-name">{{$track.Name}}</span>
@@ -3544,7 +3546,7 @@ function goToPage(page) {
                 <button class="track-play" onclick="event.stopPropagation(); player.playTrack(this.closest('li'))" title="Play">
                     <i class="fas fa-play"></i>
                 </button>
-                <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$track.Path}}" class="track-download" title="Download" onclick="event.stopPropagation()">
+                <a href="{{$.WebPrefix}}/audio/{{$.Book.ID}}/track?file={{$trackFile}}" class="track-download" title="Download" onclick="event.stopPropagation()">
                     <i class="fas fa-download"></i>
                 </a>
             </li>
