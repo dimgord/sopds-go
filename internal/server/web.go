@@ -3407,7 +3407,7 @@ function goToPage(page) {
             </div>
         </div>
         <div class="book-actions">
-            {{if eq .Format "FOLDER"}}<a href="{{$.WebPrefix}}/audio/{{.ID}}" class="btn btn-primary"><i class="fas fa-headphones"></i> {{.TrackCount}} {{t "audio.tracks"}}</a>{{else}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/download" class="btn btn-primary"><i class="fas fa-download"></i> {{.Format}}</a>{{end}}
+            {{if .IsAudiobook}}<a href="{{$.WebPrefix}}/audio/{{.ID}}" class="btn btn-primary"><i class="fas fa-headphones"></i> {{if gt .TrackCount 1}}{{.TrackCount}} {{t "audio.tracks"}}{{else}}{{t "audio.book"}}{{end}}</a>{{else}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/download" class="btn btn-primary"><i class="fas fa-download"></i> {{.Format}}</a>{{end}}
             {{if or (eq .Format "FB2") (eq .Format "EPUB") (eq .Format "MOBI")}}<a href="{{$.WebPrefix}}/read/{{.ID}}" class="btn btn-info"><i class="fas fa-book-open"></i> {{t "reader.read"}}</a>{{end}}
             {{if and $.HasEPUB .CanEPUB}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/epub" class="btn btn-success"><i class="fas fa-file-arrow-down"></i> EPUB</a>{{end}}
             {{if and $.HasMOBI .CanMOBI}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/mobi" class="btn btn-warning"><i class="fas fa-file-arrow-down"></i> MOBI</a>{{end}}
@@ -4546,7 +4546,7 @@ function downloadSelected() {
             </div>
         </div>
         <div class="book-actions">
-            {{if eq .Format "FOLDER"}}<a href="{{$.WebPrefix}}/audio/{{.ID}}" class="btn btn-primary"><i class="fas fa-headphones"></i> {{.TrackCount}} {{t "audio.tracks"}}</a>{{else}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/download" class="btn btn-primary"><i class="fas fa-download"></i> {{.Format}}</a>{{end}}
+            {{if .IsAudiobook}}<a href="{{$.WebPrefix}}/audio/{{.ID}}" class="btn btn-primary"><i class="fas fa-headphones"></i> {{if gt .TrackCount 1}}{{.TrackCount}} {{t "audio.tracks"}}{{else}}{{t "audio.book"}}{{end}}</a>{{else}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/download" class="btn btn-primary"><i class="fas fa-download"></i> {{.Format}}</a>{{end}}
             {{if or (eq .Format "FB2") (eq .Format "EPUB") (eq .Format "MOBI")}}<a href="{{$.WebPrefix}}/read/{{.ID}}" class="btn btn-info"><i class="fas fa-book-open"></i> {{t "reader.read"}}</a>{{end}}
             {{if and $.HasEPUB .CanEPUB}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/epub" class="btn btn-success"><i class="fas fa-file-arrow-down"></i> EPUB</a>{{end}}
             {{if and $.HasMOBI .CanMOBI}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/mobi" class="btn btn-warning"><i class="fas fa-file-arrow-down"></i> MOBI</a>{{end}}
