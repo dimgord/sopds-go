@@ -273,14 +273,10 @@ const defaultPageSize = 50
 
 // newPageData creates PageData with common fields including i18n
 func (s *Server) newPageData(r *http.Request, title string) PageData {
-	// Check query param first (takes priority), then cookie
-	lang := r.URL.Query().Get("lang")
-	if !isValidLang(lang) {
-		if cookie, err := r.Cookie("lang"); err == nil && isValidLang(cookie.Value) {
-			lang = cookie.Value
-		} else {
-			lang = defaultLang
-		}
+	// UI language is set via cookie only (not URL param, which is for book filtering)
+	lang := defaultLang
+	if cookie, err := r.Cookie("lang"); err == nil && isValidLang(cookie.Value) {
+		lang = cookie.Value
 	}
 	return PageData{
 		Title:      title,
@@ -295,22 +291,12 @@ func (s *Server) newPageData(r *http.Request, title string) PageData {
 	}
 }
 
-// setLangCookie sets language cookie if lang param is present
-func setLangCookie(w http.ResponseWriter, r *http.Request) {
-	if lang := r.URL.Query().Get("lang"); isValidLang(lang) {
-		http.SetCookie(w, &http.Cookie{Name: "lang", Value: lang, Path: "/", MaxAge: 86400 * 365})
-	}
-}
-
 // addI18n adds language fields to PageData (for handlers that don't use newPageData)
 func (s *Server) addI18n(pd *PageData, r *http.Request) {
-	lang := r.URL.Query().Get("lang")
-	if !isValidLang(lang) {
-		if cookie, err := r.Cookie("lang"); err == nil && isValidLang(cookie.Value) {
-			lang = cookie.Value
-		} else {
-			lang = defaultLang
-		}
+	// UI language is set via cookie only (not URL param, which is for book filtering)
+	lang := defaultLang
+	if cookie, err := r.Cookie("lang"); err == nil && isValidLang(cookie.Value) {
+		lang = cookie.Value
 	}
 	pd.Lang = lang
 	pd.Languages = supportedLanguages
@@ -458,7 +444,6 @@ type CatalogItem struct {
 
 func (s *Server) handleWebHome(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 
 	info, _ := s.svc.GetDBInfo(ctx, false)
 	var newBooks int64
@@ -477,7 +462,6 @@ func (s *Server) handleWebHome(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	titleQuery := r.URL.Query().Get("q")
 	authorQuery := r.URL.Query().Get("author")
 	page := getPage(r)
@@ -661,7 +645,6 @@ func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebAuthors(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	prefix := r.URL.Query().Get("prefix")
 	page := getPage(r)
 	lang := getLang(r)
@@ -727,7 +710,6 @@ func (s *Server) handleWebAuthors(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebAuthor(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	authorID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		s.renderError(w, "Invalid author ID", err)
@@ -837,7 +819,6 @@ func (s *Server) handleWebAuthor(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebGenres(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	section := r.URL.Query().Get("section")
 	lang := getLang(r)
 
@@ -895,7 +876,6 @@ func (s *Server) handleWebGenres(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebGenre(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	genreID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		s.renderError(w, "Invalid genre ID", err)
@@ -989,7 +969,6 @@ func (s *Server) handleWebGenre(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebSeries(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	prefix := r.URL.Query().Get("prefix")
 	page := getPage(r)
 	lang := getLang(r)
@@ -1069,7 +1048,6 @@ func (s *Server) handleWebSeries(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebSeriesBooks(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	seriesID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		s.renderError(w, "Invalid series ID", err)
@@ -1184,7 +1162,6 @@ func (s *Server) handleWebSeriesBooks(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebNew(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	lang := getLang(r)
 	page := getPage(r)
 	pageSize := getPageSize(r)
@@ -1286,7 +1263,6 @@ func (s *Server) handleWebNew(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebAudio(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	lang := getLang(r)
 	page := getPage(r)
 	pageSize := getPageSize(r)
@@ -1416,7 +1392,6 @@ type AudioDetailData struct {
 
 func (s *Server) handleWebAudioDetail(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -1848,7 +1823,6 @@ func (s *Server) extractTrackCoverFromFolder(book *database.Book, trackPath stri
 
 func (s *Server) handleWebBookshelf(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	lang := getLang(r)
 
 	user := s.getWebUser(r)
@@ -1956,7 +1930,6 @@ func genresToLinkedItems(ids []int64, names []string) []LinkedItem {
 
 func (s *Server) handleWebLanguages(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	lang := getLang(r)
 
 	langs, err := s.svc.GetLanguages(ctx)
@@ -1991,7 +1964,6 @@ func (s *Server) handleWebLanguages(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebLanguage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	uiLang := getLang(r)
 	bookLang := chi.URLParam(r, "lang")
 
@@ -2080,7 +2052,6 @@ func (s *Server) handleWebLanguage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebCatalogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	lang := getLang(r)
 	page := getPage(r)
 	pagination := database.NewPagination(page, 100)
@@ -2113,7 +2084,6 @@ func (s *Server) handleWebCatalogs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebCatalog(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	catID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		s.renderError(w, "Invalid catalog ID", err)
@@ -2159,7 +2129,6 @@ func (s *Server) handleWebCatalog(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWebDuplicates(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	setLangCookie(w, r)
 	lang := getLang(r)
 	bookID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -2220,7 +2189,6 @@ type HelpData struct {
 }
 
 func (s *Server) handleWebHelp(w http.ResponseWriter, r *http.Request) {
-	setLangCookie(w, r)
 	pd := s.newPageData(r, "")
 	pd.Title = T(pd.Lang, "help.title")
 	data := HelpData{

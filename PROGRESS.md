@@ -38,6 +38,13 @@
   - GetBook returns `nil, nil` for non-existent books (not an error)
   - Added `book == nil` check alongside error check
 
+**Bug Fix: UI language switching when filtering books:**
+- The `lang` URL parameter was used for both UI language AND book filtering
+- Filtering books by language (e.g., Japanese) would switch UI if it matched a supported language
+- Fix: UI language now only set via cookie (JavaScript switcher)
+- URL `lang` parameter is now exclusively for book language filtering
+- Removed `setLangCookie()` function and all 18 calls to it
+
 **Files Created:**
 - `internal/server/favicon.go` - SVG favicon with book icon
 
