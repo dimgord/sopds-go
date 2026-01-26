@@ -458,6 +458,11 @@ var authPageTemplates = map[string]string{
 
 <script>
 const apiBase = '/api/auth';
+const i18n = {
+    passwords_no_match: '{{.T.passwords_no_match}}',
+    username_not_available: '{{.T.username_not_available}}',
+    email_not_available: '{{.T.email_not_available}}'
+};
 let usernameValid = false;
 let emailValid = false;
 let passwordValid = false;
@@ -500,7 +505,7 @@ function validateConfirmPassword() {
     } else {
         input.classList.remove('valid');
         input.classList.add('invalid');
-        error.textContent = 'Passwords do not match';
+        error.textContent = i18n.passwords_no_match;
         confirmValid = false;
     }
     updateSubmitButton();
@@ -533,7 +538,7 @@ document.getElementById('username').addEventListener('input', function() {
                 } else {
                     input.classList.remove('valid');
                     input.classList.add('invalid');
-                    error.textContent = data.error || 'Username not available';
+                    error.textContent = data.error || i18n.username_not_available;
                     usernameValid = false;
                 }
                 updateSubmitButton();
@@ -568,7 +573,7 @@ document.getElementById('email').addEventListener('input', function() {
                 } else {
                     input.classList.remove('valid');
                     input.classList.add('invalid');
-                    error.textContent = data.error || 'Email not available';
+                    error.textContent = data.error || i18n.email_not_available;
                     emailValid = false;
                 }
                 updateSubmitButton();
