@@ -48,6 +48,11 @@
 - `reader.conversion_failed` - Conversion error message
 - `reader.loading` - Loading indicator
 
+**Bug Fix: Audiobook player link for all formats:**
+- Changed condition from `Format=="FOLDER"` to `IsAudiobook`
+- Now 7z/zip single-file audiobooks properly link to audio player page
+- Single-track audiobooks show "Audiobook" instead of "1 Tracks"
+
 ---
 
 ### Revision 36 - 2026-01-26
