@@ -61,6 +61,12 @@
 - Created `serveFileFromZip()` and `serveFileFrom7z()` helper functions
 - Handles cases where tracks don't have full path stored (legacy data)
 
+**Bug Fix: Empty track path in audiobook template:**
+- Legacy audiobook data has empty `path` field in tracks (only `name` stored)
+- Template was generating `?file=` (empty) causing 400 errors
+- Fix: Use `{{or $track.Path $track.Name}}` to fallback to filename
+- Applied to both collection tracks and flat track list templates
+
 **Files Created:**
 - `internal/server/favicon.go` - SVG favicon with book icon
 
