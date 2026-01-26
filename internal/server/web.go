@@ -1501,7 +1501,12 @@ func (s *Server) handleAudioTrackDownload(w http.ResponseWriter, r *http.Request
 	}
 
 	// Construct archive path
-	archivePath := filepath.Join(s.config.Library.Root, book.Path, book.Filename)
+	// Handle bug where path == filename (should be "." for files in library root)
+	bookPath := book.Path
+	if bookPath == book.Filename {
+		bookPath = "."
+	}
+	archivePath := filepath.Join(s.config.Library.Root, bookPath, book.Filename)
 	format := strings.ToLower(book.Format)
 
 	// Determine MIME type from track extension
@@ -1543,19 +1548,22 @@ func (s *Server) serveTrackFromZip(w http.ResponseWriter, archivePath, trackPath
 	}
 	defer zr.Close()
 
+	// Try multiple matching strategies
+	trackBasename := filepath.Base(trackPath)
 	for _, f := range zr.File {
-		if f.Name == trackPath || strings.HasSuffix(f.Name, "/"+trackPath) {
-			rc, err := f.Open()
-			if err != nil {
-				http.Error(w, "Failed to open file in archive", http.StatusInternalServerError)
-				return
-			}
-			defer rc.Close()
-
-			w.Header().Set("Content-Type", mimeType)
-			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", f.UncompressedSize64))
-			io.Copy(w, rc)
+		// Exact match
+		if f.Name == trackPath {
+			s.serveFileFromZip(w, f, filename, mimeType)
+			return
+		}
+		// Suffix match (trackPath is relative path within archive)
+		if strings.HasSuffix(f.Name, "/"+trackPath) {
+			s.serveFileFromZip(w, f, filename, mimeType)
+			return
+		}
+		// Basename match (trackPath is just filename, search anywhere in archive)
+		if trackPath == trackBasename && strings.HasSuffix(f.Name, "/"+trackBasename) {
+			s.serveFileFromZip(w, f, filename, mimeType)
 			return
 		}
 	}
@@ -1563,32 +1571,74 @@ func (s *Server) serveTrackFromZip(w http.ResponseWriter, archivePath, trackPath
 	http.Error(w, "File not found in archive", http.StatusNotFound)
 }
 
+func (s *Server) serveFileFromZip(w http.ResponseWriter, f *zip.File, filename, mimeType string) {
+	rc, err := f.Open()
+	if err != nil {
+		http.Error(w, "Failed to open file in archive", http.StatusInternalServerError)
+		return
+	}
+	defer rc.Close()
+
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", f.UncompressedSize64))
+	io.Copy(w, rc)
+}
+
 func (s *Server) serveTrackFrom7z(w http.ResponseWriter, archivePath, trackPath, filename, mimeType string) {
 	szr, err := sevenzip.OpenReader(archivePath)
 	if err != nil {
-		http.Error(w, "Failed to open archive", http.StatusInternalServerError)
-		return
+		// Archive path might be wrong (path=filename bug), try with just directory
+		archiveDir := filepath.Dir(archivePath)
+		archiveName := filepath.Base(archivePath)
+		if archiveDir != archivePath {
+			altPath := filepath.Join(archiveDir, archiveName)
+			if altPath != archivePath {
+				szr, err = sevenzip.OpenReader(filepath.Join(filepath.Dir(archiveDir), archiveName))
+			}
+		}
+		if err != nil {
+			http.Error(w, "Failed to open archive", http.StatusInternalServerError)
+			return
+		}
 	}
 	defer szr.Close()
 
+	// Try multiple matching strategies
+	trackBasename := filepath.Base(trackPath)
 	for _, f := range szr.File {
-		if f.Name == trackPath || strings.HasSuffix(f.Name, "/"+trackPath) {
-			rc, err := f.Open()
-			if err != nil {
-				http.Error(w, "Failed to open file in archive", http.StatusInternalServerError)
-				return
-			}
-			defer rc.Close()
-
-			w.Header().Set("Content-Type", mimeType)
-			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", f.UncompressedSize))
-			io.Copy(w, rc)
+		// Exact match
+		if f.Name == trackPath {
+			s.serveFileFrom7z(w, f, filename, mimeType)
+			return
+		}
+		// Suffix match (trackPath is relative path within archive)
+		if strings.HasSuffix(f.Name, "/"+trackPath) {
+			s.serveFileFrom7z(w, f, filename, mimeType)
+			return
+		}
+		// Basename match (trackPath is just filename, search anywhere in archive)
+		if trackPath == trackBasename && strings.HasSuffix(f.Name, "/"+trackBasename) {
+			s.serveFileFrom7z(w, f, filename, mimeType)
 			return
 		}
 	}
 
 	http.Error(w, "File not found in archive", http.StatusNotFound)
+}
+
+func (s *Server) serveFileFrom7z(w http.ResponseWriter, f *sevenzip.File, filename, mimeType string) {
+	rc, err := f.Open()
+	if err != nil {
+		http.Error(w, "Failed to open file in archive", http.StatusInternalServerError)
+		return
+	}
+	defer rc.Close()
+
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", f.UncompressedSize))
+	io.Copy(w, rc)
 }
 
 // serveTrackFromFolder serves audio files from folder-based audiobooks (regular files on disk)
