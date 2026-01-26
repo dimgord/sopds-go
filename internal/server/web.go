@@ -226,6 +226,13 @@ var translations = map[string]map[string]string{
 
 	"help.bookshelf.title": {"en": "Bookshelf", "uk": "Полиця"},
 	"help.bookshelf.p1":    {"en": "Add books to your personal bookshelf for quick access. Click 'Add to Shelf' on any book.", "uk": "Додавайте книги на особисту полицю для швидкого доступу. Натисніть 'На полицю' на будь-якій книзі."},
+
+	// Auth
+	"auth.login":        {"en": "Login", "uk": "Увійти"},
+	"auth.logout":       {"en": "Logout", "uk": "Вийти"},
+	"auth.register":     {"en": "Register", "uk": "Реєстрація"},
+	"auth.guest":        {"en": "Guest", "uk": "Гість"},
+	"auth.guest_warning": {"en": "You are browsing as a guest. Your bookshelf and settings will not be saved after session expires.", "uk": "Ви переглядаєте як гість. Ваша полиця та налаштування не будуть збережені після закінчення сесії."},
 }
 
 // Template data structures
@@ -256,6 +263,8 @@ type PageData struct {
 	// i18n
 	Lang      string     // Current language code
 	Languages []Language // Available languages for switcher
+	// Auth info
+	Auth AuthInfo // User authentication state
 }
 
 // Available page sizes
@@ -282,6 +291,7 @@ func (s *Server) newPageData(r *http.Request, title string) PageData {
 		HasMOBI:    checkEbookConvert(s.config.Converters.FB2ToMOBI),
 		Lang:       lang,
 		Languages:  supportedLanguages,
+		Auth:       GetAuthInfo(r),
 	}
 }
 
@@ -304,6 +314,7 @@ func (s *Server) addI18n(pd *PageData, r *http.Request) {
 	}
 	pd.Lang = lang
 	pd.Languages = supportedLanguages
+	pd.Auth = GetAuthInfo(r)
 }
 
 func getPageSize(r *http.Request) int {
@@ -609,23 +620,15 @@ func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 		searchDesc = "all books"
 	}
 
-	pd := PageData{
-		Title:       fmt.Sprintf("%s: %s", T(getLang(r), "main.search"), searchDesc),
-		SiteTitle:   s.config.Site.Title,
-		WebPrefix:   s.config.Server.WebPrefix,
-		OPDSPrefix:  s.config.Server.OPDSPrefix,
-		Query:       titleQuery,  // Pre-fill title search field
-		AuthorQuery: authorQuery, // Pre-fill author search field
-		Page:        page,
-		PageSize:    pageSize,
-		HasMore:     hasMore,
-		PrevPage:    page - 1,
-		NextPage:    page + 1,
-		CurrentPath: s.config.Server.WebPrefix + "/search",
-		HasEPUB:     true, // Internal converter always available
-		HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
-	}
-	s.addI18n(&pd, r)
+	pd := s.newPageData(r, fmt.Sprintf("%s: %s", T(getLang(r), "main.search"), searchDesc))
+	pd.Query = titleQuery
+	pd.AuthorQuery = authorQuery
+	pd.Page = page
+	pd.PageSize = pageSize
+	pd.HasMore = hasMore
+	pd.PrevPage = page - 1
+	pd.NextPage = page + 1
+	pd.CurrentPath = s.config.Server.WebPrefix + "/search"
 
 	// Build filter options with proper types
 	var langOptions []LangOption
@@ -666,13 +669,7 @@ func (s *Server) handleWebAuthors(w http.ResponseWriter, r *http.Request) {
 	// First level: show 1-char prefixes
 	if prefix == "" {
 		prefixes := s.getAuthorPrefixes(ctx, "", 1)
-		pd := PageData{
-			Title:      T(lang, "authors.title"),
-			SiteTitle:  s.config.Site.Title,
-			WebPrefix:  s.config.Server.WebPrefix,
-			OPDSPrefix: s.config.Server.OPDSPrefix,
-		}
-		s.addI18n(&pd, r)
+		pd := s.newPageData(r, T(lang, "authors.title"))
 		data := AuthorsData{
 			PageData: pd,
 			Prefixes: prefixes,
@@ -688,14 +685,8 @@ func (s *Server) handleWebAuthors(w http.ResponseWriter, r *http.Request) {
 	// If more than 100 and prefix < 3 chars, drill down
 	if count > 100 && len(prefix) < 3 {
 		prefixes := s.getAuthorPrefixes(ctx, prefix, len(prefix)+1)
-		pd := PageData{
-			Title:      fmt.Sprintf("%s: %s", T(lang, "authors.title"), prefix),
-			SiteTitle:  s.config.Site.Title,
-			WebPrefix:  s.config.Server.WebPrefix,
-			OPDSPrefix: s.config.Server.OPDSPrefix,
-			Prefix:     prefix,
-		}
-		s.addI18n(&pd, r)
+		pd := s.newPageData(r, fmt.Sprintf("%s: %s", T(lang, "authors.title"), prefix))
+		pd.Prefix = prefix
 		data := AuthorsData{
 			PageData: pd,
 			Prefixes: prefixes,
@@ -718,19 +709,13 @@ func (s *Server) handleWebAuthors(w http.ResponseWriter, r *http.Request) {
 		authorViews = append(authorViews, AuthorView{ID: a.ID, Name: a.FullName()})
 	}
 
-	pd := PageData{
-		Title:       fmt.Sprintf("%s: %s", T(lang, "authors.title"), prefix),
-		SiteTitle:   s.config.Site.Title,
-		WebPrefix:   s.config.Server.WebPrefix,
-		OPDSPrefix:  s.config.Server.OPDSPrefix,
-		Prefix:      prefix,
-		Page:        page,
-		HasMore:     len(authors) >= 100,
-		PrevPage:    page - 1,
-		NextPage:    page + 1,
-		CurrentPath: s.config.Server.WebPrefix + "/authors",
-	}
-	s.addI18n(&pd, r)
+	pd := s.newPageData(r, fmt.Sprintf("%s: %s", T(lang, "authors.title"), prefix))
+	pd.Prefix = prefix
+	pd.Page = page
+	pd.HasMore = len(authors) >= 100
+	pd.PrevPage = page - 1
+	pd.NextPage = page + 1
+	pd.CurrentPath = s.config.Server.WebPrefix + "/authors"
 	data := AuthorsData{
 		PageData: pd,
 		Authors:  authorViews,
@@ -1499,13 +1484,7 @@ func (s *Server) handleWebAudioDetail(w http.ResponseWriter, r *http.Request) {
 		Narrators:       narratorLinks,
 	}
 
-	pd := PageData{
-		Title:      book.Title,
-		SiteTitle:  s.config.Site.Title,
-		WebPrefix:  s.config.Server.WebPrefix,
-		OPDSPrefix: s.config.Server.OPDSPrefix,
-	}
-	s.addI18n(&pd, r)
+	pd := s.newPageData(r, book.Title)
 
 	data := AudioDetailData{
 		PageData:  pd,
@@ -1573,8 +1552,9 @@ func (s *Server) handleAudioTrackDownload(w http.ResponseWriter, r *http.Request
 	} else if format == "7z" {
 		s.serveTrackFrom7z(w, archivePath, trackPath, trackFilename, mimeType)
 	} else if format == "folder" {
-		// For folder-based audiobooks, trackPath is the full filesystem path
-		s.serveTrackFromFolder(w, r, trackPath, trackFilename, mimeType)
+		// For folder-based audiobooks, construct full path from track path
+		// Track path can be: full path, relative to library root, or relative to book folder
+		s.serveTrackFromFolder(w, r, book, trackPath, trackFilename, mimeType)
 	} else {
 		http.Error(w, "Unsupported audiobook format", http.StatusBadRequest)
 	}
@@ -1637,10 +1617,33 @@ func (s *Server) serveTrackFrom7z(w http.ResponseWriter, archivePath, trackPath,
 }
 
 // serveTrackFromFolder serves audio files from folder-based audiobooks (regular files on disk)
-func (s *Server) serveTrackFromFolder(w http.ResponseWriter, r *http.Request, trackPath, filename, mimeType string) {
+func (s *Server) serveTrackFromFolder(w http.ResponseWriter, r *http.Request, book *database.Book, trackPath, filename, mimeType string) {
+	// Construct full path from track path
+	// Track path can be in different formats:
+	// 1. Full filesystem path (starts with /)
+	// 2. Path relative to library root (FolderName/file.mp3)
+	// 3. Just the filename
+
+	var fullPath string
+	if strings.HasPrefix(trackPath, "/") {
+		// Already a full path
+		fullPath = trackPath
+	} else if strings.Contains(trackPath, string(filepath.Separator)) || strings.Contains(trackPath, "/") {
+		// Relative path with directory component (likely includes folder name)
+		// Construct: library_root / book.Path / trackPath
+		fullPath = filepath.Join(s.config.Library.Root, book.Path, trackPath)
+	} else {
+		// Just a filename - construct full path from book location
+		// For folder audiobooks: library_root / book.Path / book.Filename / filename
+		fullPath = filepath.Join(s.config.Library.Root, book.Path, book.Filename, trackPath)
+	}
+
+	// Clean the path
+	cleanPath := filepath.Clean(fullPath)
+
 	// Security check: ensure path is within library root
-	cleanPath := filepath.Clean(trackPath)
 	if !strings.HasPrefix(cleanPath, s.config.Library.Root) {
+		log.Printf("Audio track path security violation: %s (not in %s)", cleanPath, s.config.Library.Root)
 		http.Error(w, "Invalid file path", http.StatusBadRequest)
 		return
 	}
@@ -1648,6 +1651,8 @@ func (s *Server) serveTrackFromFolder(w http.ResponseWriter, r *http.Request, tr
 	// Check if file exists
 	stat, err := os.Stat(cleanPath)
 	if err != nil {
+		log.Printf("Audio track not found: %s (from trackPath=%s, book.Path=%s, book.Filename=%s)",
+			cleanPath, trackPath, book.Path, book.Filename)
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
@@ -1675,24 +1680,24 @@ func (s *Server) handleAudioTrackCover(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		http.Error(w, "Invalid audiobook ID", http.StatusBadRequest)
+		s.servePlaceholderAudioCover(w)
 		return
 	}
 
 	trackPath := r.URL.Query().Get("file")
 	if trackPath == "" {
-		http.Error(w, "Missing file parameter", http.StatusBadRequest)
+		s.servePlaceholderAudioCover(w)
 		return
 	}
 
 	book, err := s.svc.GetBook(ctx, id)
-	if err != nil {
-		http.Error(w, "Audiobook not found", http.StatusNotFound)
+	if err != nil || book == nil {
+		s.servePlaceholderAudioCover(w)
 		return
 	}
 
 	if !book.IsAudiobook {
-		http.Error(w, "Not an audiobook", http.StatusBadRequest)
+		s.servePlaceholderAudioCover(w)
 		return
 	}
 
@@ -1706,10 +1711,12 @@ func (s *Server) handleAudioTrackCover(w http.ResponseWriter, r *http.Request) {
 		coverData, coverType = s.extractTrackCoverFromZip(archivePath, trackPath)
 	} else if format == "7z" {
 		coverData, coverType = s.extractTrackCoverFrom7z(archivePath, trackPath)
+	} else if format == "folder" {
+		coverData, coverType = s.extractTrackCoverFromFolder(book, trackPath)
 	}
 
 	if coverData == nil {
-		http.Error(w, "Cover not found", http.StatusNotFound)
+		s.servePlaceholderAudioCover(w)
 		return
 	}
 
@@ -1796,6 +1803,49 @@ func (s *Server) extractCoverFromAudioData(data []byte) ([]byte, string) {
 	return nil, ""
 }
 
+func (s *Server) extractTrackCoverFromFolder(book *database.Book, trackPath string) ([]byte, string) {
+	// Construct full path (same logic as serveTrackFromFolder)
+	var fullPath string
+	if strings.HasPrefix(trackPath, "/") {
+		fullPath = trackPath
+	} else if strings.Contains(trackPath, string(filepath.Separator)) || strings.Contains(trackPath, "/") {
+		fullPath = filepath.Join(s.config.Library.Root, book.Path, trackPath)
+	} else {
+		fullPath = filepath.Join(s.config.Library.Root, book.Path, book.Filename, trackPath)
+	}
+
+	cleanPath := filepath.Clean(fullPath)
+	if !strings.HasPrefix(cleanPath, s.config.Library.Root) {
+		return nil, ""
+	}
+
+	f, err := os.Open(cleanPath)
+	if err != nil {
+		return nil, ""
+	}
+	defer f.Close()
+
+	m, err := tag.ReadFrom(f)
+	if err != nil {
+		return nil, ""
+	}
+
+	if pic := m.Picture(); pic != nil && len(pic.Data) > 0 {
+		mimeType := pic.MIMEType
+		if mimeType == "" {
+			if len(pic.Data) > 2 && pic.Data[0] == 0xFF && pic.Data[1] == 0xD8 {
+				mimeType = "image/jpeg"
+			} else if len(pic.Data) > 8 && pic.Data[0] == 0x89 && pic.Data[1] == 0x50 && pic.Data[2] == 0x4E && pic.Data[3] == 0x47 {
+				mimeType = "image/png"
+			} else {
+				mimeType = "image/jpeg"
+			}
+		}
+		return pic.Data, mimeType
+	}
+	return nil, ""
+}
+
 func (s *Server) handleWebBookshelf(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	setLangCookie(w, r)
@@ -1820,21 +1870,13 @@ func (s *Server) handleWebBookshelf(w http.ResponseWriter, r *http.Request) {
 	count, _ := s.svc.CountBookShelf(ctx, user)
 	hasMore := pageSize > 0 && count > int64(pagination.Offset()+len(books))
 
-	pd := PageData{
-		Title:       T(lang, "bookshelf.title"),
-		SiteTitle:   s.config.Site.Title,
-		WebPrefix:   s.config.Server.WebPrefix,
-		OPDSPrefix:  s.config.Server.OPDSPrefix,
-		HasEPUB:     true,
-		HasMOBI:     checkEbookConvert(s.config.Converters.FB2ToMOBI),
-		CurrentPath: s.config.Server.WebPrefix + "/bookshelf",
-		Page:        page,
-		PageSize:    pageSize,
-		HasMore:     hasMore,
-		PrevPage:    page - 1,
-		NextPage:    page + 1,
-	}
-	s.addI18n(&pd, r)
+	pd := s.newPageData(r, T(lang, "bookshelf.title"))
+	pd.CurrentPath = s.config.Server.WebPrefix + "/bookshelf"
+	pd.Page = page
+	pd.PageSize = pageSize
+	pd.HasMore = hasMore
+	pd.PrevPage = page - 1
+	pd.NextPage = page + 1
 	data := BooksData{
 		PageData:   pd,
 		Books:      s.booksToViewForUser(ctx, books, user),
@@ -2482,6 +2524,9 @@ func (s *Server) renderTemplate(w http.ResponseWriter, name string, data interfa
 		lang = defaultLang
 	}
 
+	// Auth info is not directly available here since we don't have the request
+	// We'll need to pass it through the data or use a different approach
+
 	funcMap := template.FuncMap{
 		"t": func(key string) string {
 			return T(lang, key)
@@ -2544,6 +2589,7 @@ const baseTemplate = `<!DOCTYPE html>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{.Title}} - {{.SiteTitle}}</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         :root {
@@ -3059,6 +3105,23 @@ const baseTemplate = `<!DOCTYPE html>
         .lang-switch a { padding: 4px 8px; border-radius: 4px; text-decoration: none; color: var(--gray); font-size: 0.85rem; text-transform: uppercase; }
         .lang-switch a:hover { background: var(--border); }
         .lang-switch a.active { background: var(--primary); color: white; }
+        /* User dropdown */
+        .user-dropdown { position: relative; margin-left: 10px; }
+        .user-btn { background: var(--light); border: 1px solid var(--border); padding: 8px 14px; border-radius: 20px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--dark); transition: all 0.3s; }
+        .user-btn:hover { background: var(--primary); color: white; }
+        .user-btn i { font-size: 1.1rem; }
+        .user-menu { display: none; position: absolute; right: 0; top: 100%; padding-top: 5px; background: transparent; min-width: 150px; z-index: 100; }
+        .user-menu-inner { background: white; border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
+        .user-dropdown:hover .user-menu { display: block; }
+        .user-menu-inner a { display: flex; align-items: center; gap: 8px; padding: 12px 16px; color: var(--dark); text-decoration: none; font-size: 0.9rem; transition: all 0.2s; }
+        .user-menu-inner a:hover { background: var(--primary); color: white; }
+        .user-menu-inner a:hover i { color: white; }
+        .user-menu-inner a i { width: 16px; color: var(--gray); }
+        /* Guest warning banner */
+        .guest-warning { background: #fef3c7; border: 1px solid #fcd34d; color: #92400e; padding: 12px 20px; border-radius: 8px; margin-bottom: 20px; font-size: 0.9rem; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .guest-warning i { color: #f59e0b; }
+        .guest-warning a { color: var(--primary); text-decoration: none; font-weight: 500; }
+        .guest-warning a:hover { text-decoration: underline; }
         @media (max-width: 768px) {
             .header-top { flex-direction: column; align-items: stretch; }
             nav { justify-content: center; }
@@ -3084,6 +3147,17 @@ const baseTemplate = `<!DOCTYPE html>
                     <a href="{{.OPDSPrefix}}/"><i class="fas fa-rss"></i> OPDS</a>
                     <a href="{{.WebPrefix}}/help"><i class="fas fa-circle-question"></i> {{t "nav.help"}}</a>
                     <span class="lang-switch">{{range .Languages}}<a href="javascript:void(0)" onclick="switchLang('{{.Code}}')"{{if eq $.Lang .Code}} class="active"{{end}}>{{.Code}}</a>{{end}}</span>
+                    <div class="user-dropdown">
+                        <button class="user-btn"><i class="fas fa-user-circle"></i>{{if .Auth.IsAuthenticated}} {{.Auth.Username}}{{else if .Auth.IsAnonymous}} {{t "auth.guest"}}{{end}}</button>
+                        <div class="user-menu"><div class="user-menu-inner">
+                            {{if .Auth.IsAuthenticated}}
+                            <a href="{{.WebPrefix}}/logout"><i class="fas fa-sign-out-alt"></i> {{t "auth.logout"}}</a>
+                            {{else}}
+                            <a href="{{.WebPrefix}}/login"><i class="fas fa-sign-in-alt"></i> {{t "auth.login"}}</a>
+                            <a href="{{.WebPrefix}}/register"><i class="fas fa-user-plus"></i> {{t "auth.register"}}</a>
+                            {{end}}
+                        </div></div>
+                    </div>
                 </nav>
             </div>
             <form class="search-form" action="{{.WebPrefix}}/search" method="get">
@@ -3098,6 +3172,12 @@ const baseTemplate = `<!DOCTYPE html>
                 <button type="submit"><i class="fas fa-search"></i></button>
             </form>
         </header>
+        {{if .Auth.IsAnonymous}}
+        <div class="guest-warning">
+            <i class="fas fa-exclamation-triangle"></i> {{t "auth.guest_warning"}}
+            <a href="{{.WebPrefix}}/login">{{t "auth.login"}}</a> | <a href="{{.WebPrefix}}/register">{{t "auth.register"}}</a>
+        </div>
+        {{end}}
         <main>
             {{template "content" .}}
         </main>
@@ -3351,9 +3431,12 @@ function goToPage(page) {
 	"audiodetail": `{{define "content"}}
 <div class="audio-detail">
     <div class="audio-header" id="audioHeader">
-        {{if .Book.HasCover}}<img src="{{.OPDSPrefix}}/book/{{.Book.ID}}/cover" class="audio-cover" alt="Cover" onerror="this.style.display='none'">{{end}}
+        <img id="audioCover" src="{{if .Book.HasCover}}{{.OPDSPrefix}}/book/{{.Book.ID}}/cover{{else}}data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 150 150'%3E%3Crect fill='%23333' width='150' height='150'/%3E%3Ctext x='75' y='80' text-anchor='middle' fill='%23666' font-size='40'%3E%F0%9F%8E%A7%3C/text%3E%3C/svg%3E{{end}}" class="audio-cover" alt="Cover" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 150 150\'%3E%3Crect fill=\'%23333\' width=\'150\' height=\'150\'/%3E%3Ctext x=\'75\' y=\'80\' text-anchor=\'middle\' fill=\'%23666\' font-size=\'40\'%3E%F0%9F%8E%A7%3C/text%3E%3C/svg%3E'">
         <div class="audio-info">
             <h1><i class="fas fa-headphones"></i> {{.Book.Title}}</h1>
+            <div id="nowPlaying" class="now-playing hidden">
+                <i class="fas fa-volume-up pulse"></i> <span id="nowPlayingTrack">--</span>
+            </div>
             {{if .Authors}}
             <div class="audio-authors">
                 <i class="fas fa-user"></i>
@@ -3383,7 +3466,6 @@ function goToPage(page) {
             {{if .Book.OnBookshelf}}<span class="btn btn-secondary disabled"><i class="fas fa-check"></i> Added</span>{{else}}<a href="#" onclick="return bookshelfAction(this, '{{.WebPrefix}}/bookshelf/add/{{.Book.ID}}')" class="btn btn-secondary"><i class="fas fa-bookmark"></i> {{t "books.addshelf"}}</a>{{end}}
         </div>
     </div>
-    <div class="audio-header-spacer" id="audioHeaderSpacer"></div>
 
     {{if .Structure}}
     <div class="audio-structure">
@@ -3502,6 +3584,7 @@ function goToPage(page) {
 
 <script>
 const bookId = {{.Book.ID}};
+const bookFormat = "{{.Book.Format}}";
 const webPrefix = "{{.WebPrefix}}";
 const i18n = {
     downloadsel: "{{t "audio.downloadsel"}}"
@@ -3540,7 +3623,9 @@ class AudioPlayer {
         this.speedIndex = 2; // Default 1x
         this.isSeeking = false;
         this.trackPositions = {}; // Per-track position storage
-        this.coverImg = document.querySelector('.audio-cover');
+        this.coverImg = document.getElementById('audioCover');
+        this.nowPlayingEl = document.getElementById('nowPlaying');
+        this.nowPlayingTrackEl = document.getElementById('nowPlayingTrack');
 
         this.init();
     }
@@ -3552,7 +3637,8 @@ class AudioPlayer {
                 el: li,
                 url: li.dataset.url,
                 name: li.dataset.name,
-                duration: parseInt(li.dataset.duration) || 0
+                duration: parseInt(li.dataset.duration) || 0,
+                path: li.dataset.path || ''
             });
         });
 
@@ -3690,8 +3776,25 @@ class AudioPlayer {
         this.trackNameEl.textContent = track.name;
         this.playerBar.classList.remove('hidden');
 
-        // Track-specific covers disabled - reading large files from archives is too slow
-        // All tracks share the book's cover image
+        // Update "Now Playing" in header
+        if (this.nowPlayingEl && this.nowPlayingTrackEl) {
+            this.nowPlayingTrackEl.textContent = track.name;
+            this.nowPlayingEl.classList.remove('hidden');
+        }
+
+        // Update track-specific cover for folder audiobooks (fast - files on disk)
+        if (bookFormat.toLowerCase() === 'folder' && this.coverImg && track.path) {
+            const coverUrl = webPrefix + '/audio/' + bookId + '/cover?file=' + encodeURIComponent(track.path);
+            // Use a new Image to preload and avoid flicker
+            const img = new Image();
+            img.onload = () => {
+                this.coverImg.src = coverUrl;
+            };
+            img.onerror = () => {
+                // Keep current cover if track doesn't have one
+            };
+            img.src = coverUrl;
+        }
 
         // Restore saved position for this specific track
         if (trackPath && this.trackPositions[trackPath] > 0) {
@@ -3934,38 +4037,7 @@ class AudioPlayer {
 // Initialize player
 const player = new AudioPlayer();
 
-// Fixed header on scroll
-(function() {
-    const header = document.getElementById('audioHeader');
-    const spacer = document.getElementById('audioHeaderSpacer');
-    if (!header || !spacer) return;
-
-    let headerTop = header.offsetTop;
-    let headerHeight = header.offsetHeight;
-
-    function updateFixedHeader() {
-        if (window.scrollY > headerTop - 10) {
-            if (!header.classList.contains('fixed')) {
-                header.classList.add('fixed');
-                spacer.style.height = headerHeight + 'px';
-                spacer.classList.add('visible');
-            }
-        } else {
-            if (header.classList.contains('fixed')) {
-                header.classList.remove('fixed');
-                spacer.classList.remove('visible');
-            }
-        }
-    }
-
-    window.addEventListener('scroll', updateFixedHeader);
-    window.addEventListener('resize', function() {
-        if (!header.classList.contains('fixed')) {
-            headerTop = header.offsetTop;
-            headerHeight = header.offsetHeight;
-        }
-    });
-})();
+// Header is now position:sticky via CSS, no JS needed
 
 // Selection functions (unchanged)
 function updateSelection() {
@@ -4047,29 +4119,15 @@ function downloadSelected() {
     justify-content: flex-start;
     align-items: flex-start;
     gap: 20px;
-    margin-bottom: 30px;
+    margin-bottom: 20px;
     padding: 20px;
     background: var(--card-bg);
     border-radius: 12px;
     flex-wrap: wrap;
-    z-index: 100;
-    transition: box-shadow 0.2s;
-}
-.audio-header.fixed {
-    position: fixed;
+    position: sticky;
     top: 10px;
-    left: 50%;
-    transform: translateX(-50%);
-    max-width: 940px;
-    width: calc(100% - 60px);
-    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-    margin-bottom: 0;
-}
-.audio-header-spacer {
-    display: none;
-}
-.audio-header-spacer.visible {
-    display: block;
+    z-index: 100;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.2);
 }
 .audio-cover {
     width: 150px;
@@ -4097,6 +4155,27 @@ function downloadSelected() {
 }
 .audio-authors a:hover {
     text-decoration: underline;
+}
+.now-playing {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 1rem;
+    color: var(--success);
+    background: rgba(40, 167, 69, 0.15);
+    padding: 6px 12px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+}
+.now-playing.hidden {
+    display: none;
+}
+.now-playing .pulse {
+    animation: pulse 1.5s ease-in-out infinite;
+}
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
 }
 .audio-meta {
     display: flex;

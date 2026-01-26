@@ -11,17 +11,21 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/sopds/sopds-go/internal/config"
 	"github.com/sopds/sopds-go/internal/converter"
+	"github.com/sopds/sopds-go/internal/domain/repository"
 	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
 	"github.com/sopds/sopds-go/internal/opds"
 )
 
 // Server represents the HTTP server
 type Server struct {
-	config     *config.Config
-	svc        *persistence.Service
-	converter  *converter.Converter
-	httpServer *http.Server
-	router     chi.Router
+	config       *config.Config
+	svc          *persistence.Service
+	converter    *converter.Converter
+	userRepo     repository.UserRepository
+	emailService *EmailService
+	authHandlers *AuthHandlers
+	httpServer   *http.Server
+	router       chi.Router
 }
 
 // New creates a new HTTP server
@@ -32,12 +36,26 @@ func New(cfg *config.Config, svc *persistence.Service) *Server {
 		ebookConvertPath = "ebook-convert" // Use system PATH
 	}
 
-	s := &Server{
-		config:    cfg,
-		svc:       svc,
-		converter: converter.New(ebookConvertPath),
+	// Set JWT secret from config
+	if cfg.Server.JWTSecret != "" {
+		SetJWTSecret(cfg.Server.JWTSecret)
 	}
 
+	// Determine base URL for email links
+	baseURL := cfg.Site.URL
+	if baseURL == "" {
+		baseURL = fmt.Sprintf("http://localhost:%d", cfg.Server.Port)
+	}
+
+	s := &Server{
+		config:       cfg,
+		svc:          svc,
+		converter:    converter.New(ebookConvertPath),
+		userRepo:     svc.Repos().Users,
+		emailService: NewEmailService(&cfg.SMTP, cfg.Site.Title, baseURL),
+	}
+
+	s.authHandlers = NewAuthHandlers(s)
 	s.router = s.setupRouter()
 
 	s.httpServer = &http.Server{
@@ -61,10 +79,34 @@ func (s *Server) setupRouter() chi.Router {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	// Basic auth if enabled
-	if s.config.Server.Auth.Enabled {
-		r.Use(s.basicAuth)
-	}
+	// Favicon (no auth required)
+	r.Get("/favicon.ico", s.handleFavicon)
+	r.Get("/favicon.svg", s.handleFavicon)
+
+	// Auth API routes (rate-limited, no auth required)
+	r.Route("/api/auth", func(r chi.Router) {
+		r.With(RateLimitMiddleware(checkRateLimiter)).Get("/check-username", s.authHandlers.HandleCheckUsername)
+		r.With(RateLimitMiddleware(checkRateLimiter)).Get("/check-email", s.authHandlers.HandleCheckEmail)
+		r.Get("/check-password", s.authHandlers.HandleCheckPassword) // No rate limit - client-side only
+	})
+
+	// Auth page routes (no auth required) - must be before authMiddleware
+	r.Get(s.config.Server.WebPrefix+"/landing", s.authHandlers.HandleLanding)
+	r.Get(s.config.Server.WebPrefix+"/login", s.authHandlers.HandleLogin)
+	r.Post(s.config.Server.WebPrefix+"/login", s.authHandlers.HandleLogin)
+	r.Get(s.config.Server.WebPrefix+"/register", s.authHandlers.HandleRegister)
+	r.Post(s.config.Server.WebPrefix+"/register", s.authHandlers.HandleRegister)
+	r.Get(s.config.Server.WebPrefix+"/logout", s.authHandlers.HandleLogout)
+	r.Get(s.config.Server.WebPrefix+"/forgot-password", s.authHandlers.HandleForgotPassword)
+	r.Post(s.config.Server.WebPrefix+"/forgot-password", s.authHandlers.HandleForgotPassword)
+	r.Get(s.config.Server.WebPrefix+"/reset-password", s.authHandlers.HandleResetPassword)
+	r.Post(s.config.Server.WebPrefix+"/reset-password", s.authHandlers.HandleResetPassword)
+	r.Get(s.config.Server.WebPrefix+"/verify-email", s.authHandlers.HandleVerifyEmail)
+	r.Post(s.config.Server.WebPrefix+"/guest", s.authHandlers.HandleGuestLogin)
+
+	// Apply auth middleware (JWT + optional basic auth) for all routes below
+	r.Group(func(r chi.Router) {
+		r.Use(s.authMiddleware)
 
 	// OPDS routes
 	r.Route(s.config.Server.OPDSPrefix, func(r chi.Router) {
@@ -120,11 +162,12 @@ func (s *Server) setupRouter() chi.Router {
 		r.Get("/help", s.handleWebHelp)
 	})
 
-	// Health check
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	})
+		// Health check (inside auth group)
+		r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("OK"))
+		})
+	}) // Close auth middleware Group
 
 	return r
 }
@@ -216,4 +259,216 @@ func headToGet(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// authMiddleware handles JWT authentication and optional basic auth fallback
+func (s *Server) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var username string
+
+		// First check JWT cookie
+		if cookie, err := r.Cookie(JWTCookieName); err == nil && cookie.Value != "" {
+			if claims, err := ValidateJWT(cookie.Value); err == nil {
+				// Valid JWT - set user in context
+				u, err := s.userRepo.GetByID(r.Context(), claims.UserID)
+				if err == nil && u != nil {
+					ctx := context.WithValue(r.Context(), ctxUserKey, u)
+					ctx = context.WithValue(ctx, "username", u.Username)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+		}
+
+		// Check for anonymous session cookie
+		if anonID := GetAnonCookie(r); anonID != "" {
+			ctx := context.WithValue(r.Context(), ctxAnonKey, anonID)
+			ctx = context.WithValue(ctx, "username", anonID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
+		// If basic auth is enabled and required, check it
+		if s.config.Server.Auth.Enabled {
+			var password string
+			var ok bool
+			username, password, ok = r.BasicAuth()
+			if !ok {
+				s.unauthorized(w)
+				return
+			}
+
+			// Check credentials
+			valid := false
+			for _, user := range s.config.Server.Auth.Users {
+				if user.Username == username && user.Password == password {
+					valid = true
+					break
+				}
+			}
+
+			if !valid {
+				s.unauthorized(w)
+				return
+			}
+
+			// Create anonymous session with basic auth username
+			SetAnonCookie(w, username)
+			ctx := context.WithValue(r.Context(), ctxAnonKey, username)
+			ctx = context.WithValue(ctx, "username", username)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
+		// No auth required - generate anonymous session
+		anonID := generateAnonID()
+		SetAnonCookie(w, anonID)
+		ctx := context.WithValue(r.Context(), ctxAnonKey, anonID)
+		ctx = context.WithValue(ctx, "username", anonID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// renderAuthTemplate renders authentication page templates
+func (s *Server) renderAuthTemplate(w http.ResponseWriter, r *http.Request, templateName string, data map[string]string) {
+	// Get language from cookie/query
+	lang := r.URL.Query().Get("lang")
+	if lang == "" {
+		if cookie, err := r.Cookie("lang"); err == nil {
+			lang = cookie.Value
+		}
+	}
+	if lang == "" {
+		lang = "en"
+	}
+
+	// Prepare template data
+	tmplData := struct {
+		Lang       string
+		WebPrefix  string
+		SiteTitle  string
+		Error      string
+		Success    string
+		Token      string
+		Title      string
+		Message    string
+		Registered bool
+		Verified   bool
+		Reset      bool
+		T          map[string]string
+	}{
+		Lang:      lang,
+		WebPrefix: s.config.Server.WebPrefix,
+		SiteTitle: s.config.Site.Title,
+		T:         getAuthTranslations(lang),
+	}
+
+	if data != nil {
+		tmplData.Error = data["error"]
+		tmplData.Success = data["success"]
+		tmplData.Token = data["token"]
+		tmplData.Title = data["title"]
+		tmplData.Message = data["message"]
+	}
+
+	// Check query params for messages
+	if r.URL.Query().Get("registered") == "1" {
+		tmplData.Registered = true
+	}
+	if r.URL.Query().Get("verified") == "1" {
+		tmplData.Verified = true
+	}
+	if r.URL.Query().Get("reset") == "1" {
+		tmplData.Reset = true
+	}
+
+	// Render template - first parse the page template to get "content" definition,
+	// then execute the "auth" base template which includes {{template "content" .}}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	// Clone the base template and add the specific page content
+	tmpl, err := authTemplates.Clone()
+	if err != nil {
+		log.Printf("Template clone error: %v", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+
+	// The page templates define "content" block - execute base which uses it
+	pageContent, ok := authPageTemplates[templateName]
+	if !ok {
+		log.Printf("Template not found: %s", templateName)
+		http.Error(w, "Template not found", http.StatusNotFound)
+		return
+	}
+
+	if _, err := tmpl.Parse(pageContent); err != nil {
+		log.Printf("Template parse error: %v", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tmpl.ExecuteTemplate(w, "auth", tmplData); err != nil {
+		log.Printf("Template execution error: %v", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+	}
+}
+
+// getAuthTranslations returns translations for auth pages
+func getAuthTranslations(lang string) map[string]string {
+	translations := map[string]map[string]string{
+		"en": {
+			"login":               "Login",
+			"register":            "Register",
+			"logout":              "Logout",
+			"email":               "Email",
+			"username":            "Username",
+			"password":            "Password",
+			"confirm_password":    "Confirm Password",
+			"forgot_password":     "Forgot Password?",
+			"reset_password":      "Reset Password",
+			"send_reset_link":     "Send Reset Link",
+			"login_or_username":   "Email or Username",
+			"continue_as_guest":   "Continue as Guest",
+			"already_have_account": "Already have an account?",
+			"no_account":          "Don't have an account?",
+			"register_success":    "Registration successful! Please check your email to verify your account.",
+			"verify_success":      "Email verified successfully! You can now log in.",
+			"reset_success":       "Password reset successfully! You can now log in.",
+			"password_requirements": "Password must be at least 8 characters with 1 lowercase, 1 uppercase, and 1 digit",
+			"username_requirements": "Username: 3-30 characters, alphanumeric and underscore only",
+			"guest_warning":       "You are browsing as a guest. Your bookshelf and settings will not be saved.",
+			"welcome":             "Welcome to",
+			"library_description": "Your personal e-book library",
+		},
+		"uk": {
+			"login":               "Увійти",
+			"register":            "Реєстрація",
+			"logout":              "Вийти",
+			"email":               "Email",
+			"username":            "Ім'я користувача",
+			"password":            "Пароль",
+			"confirm_password":    "Підтвердіть пароль",
+			"forgot_password":     "Забули пароль?",
+			"reset_password":      "Скинути пароль",
+			"send_reset_link":     "Надіслати посилання",
+			"login_or_username":   "Email або ім'я користувача",
+			"continue_as_guest":   "Продовжити як гість",
+			"already_have_account": "Вже є акаунт?",
+			"no_account":          "Немає акаунту?",
+			"register_success":    "Реєстрація успішна! Перевірте пошту для підтвердження.",
+			"verify_success":      "Email підтверджено! Тепер ви можете увійти.",
+			"reset_success":       "Пароль змінено! Тепер ви можете увійти.",
+			"password_requirements": "Пароль: мінімум 8 символів, 1 мала літера, 1 велика літера, 1 цифра",
+			"username_requirements": "Ім'я: 3-30 символів, літери, цифри та підкреслення",
+			"guest_warning":       "Ви переглядаєте як гість. Ваша полиця та налаштування не будуть збережені.",
+			"welcome":             "Ласкаво просимо до",
+			"library_description": "Ваша персональна бібліотека",
+		},
+	}
+
+	if t, ok := translations[lang]; ok {
+		return t
+	}
+	return translations["en"]
 }

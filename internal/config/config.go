@@ -17,6 +17,19 @@ type Config struct {
 	Site       SiteConfig       `yaml:"site"`
 	Logging    LoggingConfig    `yaml:"logging"`
 	Converters ConvertersConfig `yaml:"converters"`
+	SMTP       SMTPConfig       `yaml:"smtp"`
+}
+
+// SMTPConfig holds email sending settings
+type SMTPConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+	From     string `yaml:"from"`      // From address (e.g., "SOPDS Library <noreply@example.com>")
+	UseTLS   bool   `yaml:"use_tls"`   // Use TLS (port 465)
+	UseSTARTTLS bool `yaml:"use_starttls"` // Use STARTTLS (port 587)
 }
 
 // DatabaseConfig holds PostgreSQL connection settings
@@ -54,6 +67,7 @@ type ServerConfig struct {
 	OPDSPrefix string     `yaml:"opds_prefix"`
 	WebPrefix  string     `yaml:"web_prefix"`
 	Auth       AuthConfig `yaml:"auth"`
+	JWTSecret  string     `yaml:"jwt_secret"` // Secret for signing JWT tokens
 }
 
 // AuthConfig holds authentication settings
@@ -155,6 +169,12 @@ func DefaultConfig() *Config {
 		},
 		Converters: ConvertersConfig{
 			TempDir: "/tmp",
+		},
+		SMTP: SMTPConfig{
+			Enabled:     false,
+			Host:        "smtp.example.com",
+			Port:        587,
+			UseSTARTTLS: true,
 		},
 	}
 }
