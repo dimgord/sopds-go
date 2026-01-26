@@ -45,6 +45,22 @@
 - URL `lang` parameter is now exclusively for book language filtering
 - Removed `setLangCookie()` function and all 18 calls to it
 
+**Bug Fix: FOLDER button 404:**
+- Folder-based audiobooks showed "FOLDER" as download button, which caused 404
+- Fix: For folder format, show headphones button with track count linking to audio detail page
+- Applied to both book list template and bookshelf template
+
+**Bug Fix: Subfolder track playback in archive audiobooks:**
+- Tracks inside subfolders within ZIP/7z archives couldn't be played
+- Two issues fixed:
+  1. Archive path construction when `path == filename` (data bug workaround)
+  2. Track matching now uses multiple strategies:
+     - Exact path match
+     - Suffix match for relative paths
+     - Basename match for just filenames
+- Created `serveFileFromZip()` and `serveFileFrom7z()` helper functions
+- Handles cases where tracks don't have full path stored (legacy data)
+
 **Files Created:**
 - `internal/server/favicon.go` - SVG favicon with book icon
 
