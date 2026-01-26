@@ -5,6 +5,41 @@
 
 ---
 
+### Revision 38 - 2026-01-26
+**Feature: Nokia AWB Audiobook Support:**
+- Added support for Nokia audiobooks (AWB format from Nokia Audiobook Manager ~2008)
+- AWB is AMR-WB (Adaptive Multi-Rate Wideband) audio codec
+- INX index files provide accurate durations (AWB files have no metadata tags)
+- AWB audiobooks treated as regular folder audiobooks (format="folder")
+
+**Files Created:**
+- `internal/scanner/inxparser.go` - Nokia INX index file parser
+  - `NokiaAudiobook` struct with name, tracks, chapters, version, codec info
+  - `NokiaTrack` struct with filename and duration (seconds)
+  - `ParseINX()` parses UTF-16 LE/BE INX files with BOM detection
+  - `FindINXFile()` finds INX file in a directory
+- `internal/scanner/inxparser_test.go` - Unit tests for INX parser
+
+**Files Modified:**
+- `internal/scanner/scanner.go`
+  - Added `.awb` to `audioExtSet` for audio file detection
+  - Modified `processAudioGroup()` to check for INX files and read durations
+  - Modified `countFiles()` to count audio files from audioExtSet
+- `internal/scanner/audioparser.go`
+  - Added AWB format handling - returns basic metadata (no tags to parse)
+- `internal/server/web.go`
+  - Added `serveTrackFromAWB()` for AWB→MP3 streaming conversion via ffmpeg
+  - Modified folder audiobook handling to detect AWB tracks by extension
+- `internal/config/config.go`
+  - Added `FFmpeg` field to `ConvertersConfig` (default: "ffmpeg")
+  - Added `.awb` to default library formats
+
+**Requirements:**
+- ffmpeg with libmp3lame for AWB→MP3 conversion
+- Conversion runs at ~430x realtime speed
+
+---
+
 ### Revision 37 - 2026-01-26
 **Feature: Web-Based FB2 Reader:**
 - Implemented in-browser ebook reader for FB2, EPUB, and MOBI formats

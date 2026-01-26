@@ -1352,9 +1352,13 @@ func (s *Server) handleAudioTrackDownload(w http.ResponseWriter, r *http.Request
 	} else if format == "7z" {
 		s.serveTrackFrom7z(w, archivePath, trackPath, trackFilename, mimeType)
 	} else if format == "folder" {
-		// For folder-based audiobooks, construct full path from track path
-		// Track path can be: full path, relative to library root, or relative to book folder
-		s.serveTrackFromFolder(w, r, book, trackPath, trackFilename, mimeType)
+		// For folder-based audiobooks, check if track is AWB (needs conversion)
+		if strings.ToLower(filepath.Ext(trackPath)) == ".awb" {
+			s.serveTrackFromAWB(w, r, book, trackPath)
+		} else {
+			// Regular audio files - serve directly
+			s.serveTrackFromFolder(w, r, book, trackPath, trackFilename, mimeType)
+		}
 	} else {
 		http.Error(w, "Unsupported audiobook format", http.StatusBadRequest)
 	}
@@ -1516,6 +1520,80 @@ func (s *Server) serveTrackFromFolder(w http.ResponseWriter, r *http.Request, bo
 
 	// Use http.ServeContent which handles range requests properly
 	http.ServeContent(w, r, filename, stat.ModTime(), f)
+}
+
+// serveTrackFromAWB serves AWB audio files converted to MP3 on-the-fly using ffmpeg
+func (s *Server) serveTrackFromAWB(w http.ResponseWriter, r *http.Request, book *database.Book, trackPath string) {
+	// Construct full path to AWB file
+	// trackPath is the full path stored in Chapters JSON
+	var fullPath string
+	if strings.HasPrefix(trackPath, "/") {
+		// Already a full path
+		fullPath = trackPath
+	} else {
+		// Relative path - construct from book location
+		fullPath = filepath.Join(s.config.Library.Root, book.Path, book.Filename, trackPath)
+	}
+
+	// Clean the path
+	cleanPath := filepath.Clean(fullPath)
+
+	// Security check: ensure path is within library root
+	if !strings.HasPrefix(cleanPath, s.config.Library.Root) {
+		log.Printf("AWB track path security violation: %s (not in %s)", cleanPath, s.config.Library.Root)
+		http.Error(w, "Invalid file path", http.StatusBadRequest)
+		return
+	}
+
+	// Check if AWB file exists
+	if _, err := os.Stat(cleanPath); err != nil {
+		log.Printf("AWB track not found: %s", cleanPath)
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	// Get ffmpeg path from config
+	ffmpegPath := s.config.Converters.FFmpeg
+	if ffmpegPath == "" {
+		ffmpegPath = "ffmpeg"
+	}
+
+	// Check if ffmpeg is available
+	if _, err := exec.LookPath(ffmpegPath); err != nil {
+		log.Printf("ffmpeg not found: %v", err)
+		http.Error(w, "MP3 conversion not available (ffmpeg not found)", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Output filename for Content-Disposition (replace .awb with .mp3)
+	filename := strings.TrimSuffix(filepath.Base(trackPath), filepath.Ext(trackPath)) + ".mp3"
+
+	// Set headers for MP3 streaming
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filename))
+	// Note: Cannot set Content-Length since we're streaming from ffmpeg
+
+	// Convert AWB to MP3 using ffmpeg
+	// AWB is AMR-WB format, ffmpeg supports it natively
+	// Command: ffmpeg -i input.awb -acodec libmp3lame -q:a 2 -f mp3 -
+	cmd := exec.Command(ffmpegPath,
+		"-i", cleanPath,       // Input AWB file
+		"-acodec", "libmp3lame", // MP3 codec
+		"-q:a", "2",           // Quality (~190kbps VBR, good for speech)
+		"-f", "mp3",           // Output format
+		"-",                   // Output to stdout
+	)
+
+	// Pipe stdout to response
+	cmd.Stdout = w
+	cmd.Stderr = nil // Discard stderr
+
+	// Run ffmpeg
+	if err := cmd.Run(); err != nil {
+		// If headers already sent, we can't send error - just log it
+		log.Printf("ffmpeg conversion failed for %s: %v", cleanPath, err)
+		return
+	}
 }
 
 // handleAudioTrackCover serves cover art from a specific audio file inside an archive

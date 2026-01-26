@@ -56,6 +56,16 @@ func NewAudioParser(readCover bool) *AudioParser {
 
 // Parse extracts metadata from an io.ReadSeeker
 func (p *AudioParser) Parse(r io.ReadSeeker, filesize int64, format string) (*AudioMetadata, error) {
+	// AWB (AMR-WB) files don't have standard tags - return basic metadata
+	// Duration will be read from INX file by processAudioGroup
+	if format == "awb" {
+		return &AudioMetadata{
+			Filesize: filesize,
+			Format:   format,
+			Bitrate:  12, // AMR-WB typically 12.65 kbps
+		}, nil
+	}
+
 	m, err := tag.ReadFrom(r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read audio tags: %w", err)
