@@ -100,6 +100,7 @@ func New(cfg *config.Config, svc *persistence.Service) *Scanner {
 	audioExtSet := map[string]bool{
 		".mp3": true, ".m4b": true, ".m4a": true,
 		".flac": true, ".ogg": true, ".opus": true,
+		".awb": true, // Nokia audiobook format (AMR-WB)
 	}
 
 	audioParser := NewAudioParser(cfg.Server.Port > 0)
@@ -213,7 +214,7 @@ func (s *Scanner) countFiles(ctx context.Context) (int64, error) {
 		ext := strings.ToLower(filepath.Ext(path))
 		if (ext == ".zip" || ext == ".7z") && s.config.Library.ScanZip {
 			count++
-		} else if s.extSet[ext] {
+		} else if s.extSet[ext] || s.audioExtSet[ext] {
 			count++
 		}
 		return nil
@@ -609,6 +610,17 @@ func (s *Scanner) processAudioGroup(ctx context.Context, group *AudiobookGroup) 
 		return
 	}
 
+	// Check for INX file (Nokia audiobooks) to get accurate durations
+	var inxDurations map[string]int // filename -> duration in seconds
+	if inxPath, _ := FindINXFile(group.FolderPath); inxPath != "" {
+		if nokia, err := ParseINX(inxPath); err == nil {
+			inxDurations = make(map[string]int)
+			for _, t := range nokia.Tracks {
+				inxDurations[t.Filename] = t.Duration
+			}
+		}
+	}
+
 	// Get relative path to PARENT directory (folder name becomes filename)
 	parentDir := filepath.Dir(group.FolderPath)
 	relPath, err := filepath.Rel(s.config.Library.Root, parentDir)
@@ -655,8 +667,16 @@ func (s *Scanner) processAudioGroup(ctx context.Context, group *AudiobookGroup) 
 	var totalSize int64
 
 	for _, t := range group.Tracks {
-		// Get duration from file
-		duration := int(t.Duration.Seconds())
+		// Get duration - check INX first (for AWB files), then metadata, then extract
+		duration := 0
+		if inxDurations != nil {
+			if d, ok := inxDurations[t.Filename]; ok {
+				duration = d
+			}
+		}
+		if duration == 0 {
+			duration = int(t.Duration.Seconds())
+		}
 		if duration == 0 {
 			// Try to extract actual duration
 			if dur, err := GetAudioDuration(t.Path); err == nil && dur > 0 {

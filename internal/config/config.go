@@ -116,6 +116,7 @@ type LoggingConfig struct {
 type ConvertersConfig struct {
 	FB2ToEPUB string `yaml:"fb2toepub"`
 	FB2ToMOBI string `yaml:"fb2tomobi"`
+	FFmpeg    string `yaml:"ffmpeg"`  // Path to ffmpeg for AWB→MP3 conversion
 	TempDir   string `yaml:"temp_dir"`
 }
 
@@ -132,7 +133,7 @@ func DefaultConfig() *Config {
 		},
 		Library: LibraryConfig{
 			Root:      "/var/lib/sopds/books",
-			Formats:   []string{".fb2", ".epub", ".mobi", ".pdf", ".djvu", ".mp3", ".m4b", ".m4a", ".flac", ".ogg", ".opus"},
+			Formats:   []string{".fb2", ".epub", ".mobi", ".pdf", ".djvu", ".mp3", ".m4b", ".m4a", ".flac", ".ogg", ".opus", ".awb"},
 			ScanZip:   true,
 			RescanZip: false,
 		},
@@ -168,6 +169,7 @@ func DefaultConfig() *Config {
 			MaxBackups: 3,
 		},
 		Converters: ConvertersConfig{
+			FFmpeg:  "ffmpeg", // AWB→MP3 conversion
 			TempDir: "/tmp",
 		},
 		SMTP: SMTPConfig{

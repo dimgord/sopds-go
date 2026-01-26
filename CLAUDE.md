@@ -324,7 +324,7 @@ sudo apt install calibre    # Ubuntu/Debian
 
 ### Audiobook Support
 
-Supports audio formats: MP3, M4B, M4A, FLAC, OGG, OPUS
+Supports audio formats: MP3, M4B, M4A, FLAC, OGG, OPUS, AWB
 
 **Features:**
 - Dedicated audiobook browser at `/web/audio` with filters
@@ -389,6 +389,14 @@ Supports audio formats: MP3, M4B, M4A, FLAC, OGG, OPUS
 - One SELECT per ZIP to check existing books (instead of one per book)
 - Multiple workers process ZIPs in parallel (configurable via `scanner.workers`)
 - Recommended: 4-8 workers; more causes I/O saturation and lock contention
+
+**Nokia AWB Audiobook Support:**
+- AWB = AMR-WB (Adaptive Multi-Rate Wideband) audio codec from Nokia Audiobook Manager (~2008)
+- AWB files treated as regular folder audiobooks (format="folder")
+- INX index file (UTF-16 LE/BE) provides accurate track durations (AWB has no metadata tags)
+- AWB→MP3 streaming conversion via ffmpeg (VBR ~190kbps, runs at ~430x realtime)
+- Requires ffmpeg with libmp3lame; path configurable via `converters.ffmpeg`
+- INX parser: `internal/scanner/inxparser.go`
 
 ### API Endpoints
 
