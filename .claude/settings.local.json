@@ -57,7 +57,8 @@
       "Bash(timeout 20 ./sopds scan:*)",
       "Bash(git config:*)",
       "Bash(gpg --list-secret-keys:*)",
-      "Bash(gpg:*)"
+      "Bash(gpg:*)",
+      "Bash(go test:*)"
     ]
   }
 }
