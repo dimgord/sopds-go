@@ -374,20 +374,8 @@ func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 	user := s.getWebUser(r)
 	bookViews := s.booksToViewForUser(ctx, books, user)
 
-	// Get filter options for the SCOPE (search query without filters)
-	scopeOpts := persistence.SearchOptions{
-		TitleQuery:        titleQuery,
-		AuthorQuery:       authorQuery,
-		IncludeAnnotation: includeDesc,
-		AuthorID:          authorID,
-		GenreID:           genreID, // scope genre, not filter
-		SeriesID:          seriesID,
-		CatalogID:         catalogID,
-		LangPattern:       langPattern,
-		GenrePattern:      genrePattern,
-		SeriesPattern:     seriesPattern,
-	}
-	filterOpts, _ := s.svc.GetFilterOptions(ctx, scopeOpts)
+	// Get filter options based on current filters (cascading)
+	filterOpts, _ := s.svc.GetFilterOptions(ctx, opts)
 
 	// Look up genre name if filter is active
 	var filterGenreName string
@@ -582,9 +570,8 @@ func (s *Server) handleWebAuthor(w http.ResponseWriter, r *http.Request) {
 	user := s.getWebUser(r)
 	bookViews := s.booksToViewForUser(ctx, books, user)
 
-	// Get filter options for the SCOPE (author only, without filters)
-	scopeOpts := persistence.SearchOptions{AuthorID: authorID}
-	filterOpts, _ := s.svc.GetFilterOptions(ctx, scopeOpts)
+	// Get filter options based on current filters (cascading)
+	filterOpts, _ := s.svc.GetFilterOptions(ctx, opts)
 
 	// Get filter genre name
 	filterGenreName := ""
@@ -739,9 +726,9 @@ func (s *Server) handleWebGenre(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get filter options for the SCOPE (not filtered results) to show all available options
-	scopeOpts := persistence.SearchOptions{GenreID: genreID}
-	filterOpts, _ := s.svc.GetFilterOptions(ctx, scopeOpts)
+	// Get filter options based on current filters (cascading filters)
+	// Each filter narrows down the options for subsequent filters
+	filterOpts, _ := s.svc.GetFilterOptions(ctx, opts)
 
 	hasMore := pageSize > 0 && pagination.TotalCount > int64(pagination.Offset()+len(books))
 	user := s.getWebUser(r)
@@ -918,9 +905,8 @@ func (s *Server) handleWebSeriesBooks(w http.ResponseWriter, r *http.Request) {
 	user := s.getWebUser(r)
 	bookViews := s.booksToViewForUser(ctx, books, user)
 
-	// Get filter options for the SCOPE (series only, without filters)
-	scopeOpts := persistence.SearchOptions{SeriesID: seriesID}
-	filterOpts, _ := s.svc.GetFilterOptions(ctx, scopeOpts)
+	// Get filter options based on current filters (cascading)
+	filterOpts, _ := s.svc.GetFilterOptions(ctx, opts)
 
 	// Get filter genre name
 	filterGenreName := ""
@@ -1021,9 +1007,8 @@ func (s *Server) handleWebNew(w http.ResponseWriter, r *http.Request) {
 	user := s.getWebUser(r)
 	bookViews := s.booksToViewForUser(ctx, books, user)
 
-	// Get filter options for the SCOPE (new period only, without filters)
-	scopeOpts := persistence.SearchOptions{NewPeriod: 7}
-	filterOpts, _ := s.svc.GetFilterOptions(ctx, scopeOpts)
+	// Get filter options based on current filters (cascading)
+	filterOpts, _ := s.svc.GetFilterOptions(ctx, opts)
 
 	// Get filter genre name
 	filterGenreName := ""
@@ -1122,9 +1107,8 @@ func (s *Server) handleWebAudio(w http.ResponseWriter, r *http.Request) {
 	user := s.getWebUser(r)
 	bookViews := s.booksToViewForUser(ctx, books, user)
 
-	// Get filter options for the SCOPE (audiobooks only, without filters)
-	scopeOpts := persistence.SearchOptions{AudioOnly: true}
-	filterOpts, _ := s.svc.GetFilterOptions(ctx, scopeOpts)
+	// Get filter options based on current filters (cascading)
+	filterOpts, _ := s.svc.GetFilterOptions(ctx, opts)
 
 	// Get filter genre name
 	filterGenreName := ""
