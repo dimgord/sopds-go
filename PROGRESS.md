@@ -5,6 +5,67 @@
 
 ---
 
+### Revision 40 - 2026-01-28
+**DRY Refactoring - Server Helpers:**
+- Created `internal/server/helpers.go` (208 lines) with consolidated helper functions
+- Eliminated ~150 lines of duplicated code across handlers.go and web.go
+
+**New Helper Functions:**
+- `BookPathInfo` struct - parsed path info (archive/regular file detection)
+- `getBookPath()` - full filesystem path for book file
+- `getBookDir()` - directory containing the book
+- `parseBookPath()` - parses archive info (ZIP/7z detection, internal path)
+- `getTrackPath()` - audiobook track path construction
+- `isAudioExtension()`, `isArchiveExtension()` - format detection
+- `readFromArchive()` - unified ZIP/7z reading (replaces separate functions)
+- `readFileFromZip()`, `readFileFrom7z()` - low-level archive reading
+- `BookLinks` struct - authors, genres, series for a book
+- `getBookLinks()` - fetches all book links in one call
+- `getTotalPages()` - pagination calculation
+
+**Code Consolidated:**
+- 20+ `filepath.Join(s.config.Library.Root, ...)` patterns → helper methods
+- 12 occurrences of `GetBookAuthors/Genres/Series` triplet → `getBookLinks()`
+- 8 pagination calculations → `getTotalPages()`
+- `readFromZip()` and `readFrom7z()` → `readFromArchive()`
+- `serveFromZip()` simplified using `parseBookPath()`
+
+**Bug Fixed:**
+- web.go:2132 was reading from `book.Path` instead of full path with filename
+
+---
+
+### Revision 39 - 2026-01-28
+**Comprehensive Test Suite:**
+- Created comprehensive tests before DRY refactoring (99 test functions total)
+- Tests document actual behavior for regression detection
+- Baseline saved to `test_baseline.txt`
+
+**New Test Files Created:**
+- `internal/config/config_test.go` (405 lines, 11 tests)
+  - DefaultConfig, DSN, Load, Save, validation, struct fields
+- `internal/converter/converter_test.go` (464 lines, 17 tests)
+  - FB2→EPUB conversion, cover handling, BOM support, ZIP structure
+- `internal/converter/reader_test.go` (411 lines, 18 tests)
+  - FB2→ReaderHTML, TOC extraction, nested sections, heading levels
+- `internal/scanner/fb2parser_test.go` (251 lines, 8 tests)
+  - FB2 parsing, authors, genres, series, BOM, partial parsing
+- `internal/scanner/audioparser_test.go` (401 lines, 19 tests)
+  - Audio format detection, MIME types, author extraction, encoding fixes
+- `internal/scanner/audiobookgrouper_test.go` (279 lines, 12 tests)
+  - Folder name parsing, year suffix removal, duration formatting
+- `internal/scanner/duration_test.go` (269 lines, 14 tests)
+  - Duration extraction for MP4, MP3, FLAC, OGG formats
+- `internal/scanner/inxparser_test.go` (231 lines, updated)
+  - Nokia INX parser structs, total duration, file detection
+
+**Known Implementation Issues Documented:**
+- `FormatDuration()` only shows single digits (uses modulo 10)
+- `parseTitleFromFolderName()` doesn't handle trailing separator
+- Tests document actual behavior for safe refactoring
+
+---
+
 ### Revision 38 - 2026-01-26
 **Feature: Nokia AWB Audiobook Support:**
 - Added support for Nokia audiobooks (AWB format from Nokia Audiobook Manager ~2008)

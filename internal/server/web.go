@@ -1305,12 +1305,7 @@ func (s *Server) handleAudioTrackDownload(w http.ResponseWriter, r *http.Request
 	}
 
 	// Construct archive path
-	// Handle bug where path == filename (should be "." for files in library root)
-	bookPath := book.Path
-	if bookPath == book.Filename {
-		bookPath = "."
-	}
-	archivePath := filepath.Join(s.config.Library.Root, bookPath, book.Filename)
+	archivePath := s.getBookPath(book)
 	format := strings.ToLower(book.Format)
 
 	// Determine MIME type from track extension
@@ -1452,24 +1447,8 @@ func (s *Server) serveFileFrom7z(w http.ResponseWriter, f *sevenzip.File, filena
 // serveTrackFromFolder serves audio files from folder-based audiobooks (regular files on disk)
 func (s *Server) serveTrackFromFolder(w http.ResponseWriter, r *http.Request, book *database.Book, trackPath, filename, mimeType string) {
 	// Construct full path from track path
-	// Track path can be in different formats:
-	// 1. Full filesystem path (starts with /)
-	// 2. Path relative to library root (FolderName/file.mp3)
-	// 3. Just the filename
-
-	var fullPath string
-	if strings.HasPrefix(trackPath, "/") {
-		// Already a full path
-		fullPath = trackPath
-	} else if strings.Contains(trackPath, string(filepath.Separator)) || strings.Contains(trackPath, "/") {
-		// Relative path with directory component (likely includes folder name)
-		// Construct: library_root / book.Path / trackPath
-		fullPath = filepath.Join(s.config.Library.Root, book.Path, trackPath)
-	} else {
-		// Just a filename - construct full path from book location
-		// For folder audiobooks: library_root / book.Path / book.Filename / filename
-		fullPath = filepath.Join(s.config.Library.Root, book.Path, book.Filename, trackPath)
-	}
+	// Construct full path using helper
+	fullPath := s.getTrackPath(book, trackPath)
 
 	// Clean the path
 	cleanPath := filepath.Clean(fullPath)
@@ -1508,16 +1487,8 @@ func (s *Server) serveTrackFromFolder(w http.ResponseWriter, r *http.Request, bo
 
 // serveTrackFromAWB serves AWB audio files converted to MP3 on-the-fly using ffmpeg
 func (s *Server) serveTrackFromAWB(w http.ResponseWriter, r *http.Request, book *database.Book, trackPath string) {
-	// Construct full path to AWB file
-	// trackPath is the full path stored in Chapters JSON
-	var fullPath string
-	if strings.HasPrefix(trackPath, "/") {
-		// Already a full path
-		fullPath = trackPath
-	} else {
-		// Relative path - construct from book location
-		fullPath = filepath.Join(s.config.Library.Root, book.Path, book.Filename, trackPath)
-	}
+	// Construct full path to AWB file using helper
+	fullPath := s.getTrackPath(book, trackPath)
 
 	// Clean the path
 	cleanPath := filepath.Clean(fullPath)
@@ -1608,7 +1579,7 @@ func (s *Server) handleAudioTrackCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	archivePath := filepath.Join(s.config.Library.Root, book.Path, book.Filename)
+	archivePath := s.getBookPath(book)
 	format := strings.ToLower(book.Format)
 
 	var coverData []byte
@@ -1711,16 +1682,8 @@ func (s *Server) extractCoverFromAudioData(data []byte) ([]byte, string) {
 }
 
 func (s *Server) extractTrackCoverFromFolder(book *database.Book, trackPath string) ([]byte, string) {
-	// Construct full path (same logic as serveTrackFromFolder)
-	var fullPath string
-	if strings.HasPrefix(trackPath, "/") {
-		fullPath = trackPath
-	} else if strings.Contains(trackPath, string(filepath.Separator)) || strings.Contains(trackPath, "/") {
-		fullPath = filepath.Join(s.config.Library.Root, book.Path, trackPath)
-	} else {
-		fullPath = filepath.Join(s.config.Library.Root, book.Path, book.Filename, trackPath)
-	}
-
+	// Construct full path using helper
+	fullPath := s.getTrackPath(book, trackPath)
 	cleanPath := filepath.Clean(fullPath)
 	if !strings.HasPrefix(cleanPath, s.config.Library.Root) {
 		return nil, ""
@@ -2166,7 +2129,7 @@ func (s *Server) handleWebReader(w http.ResponseWriter, r *http.Request) {
 	} else if strings.Contains(book.Path, ".7z") {
 		bookData, err = s.readFrom7z(book)
 	} else {
-		filePath := filepath.Join(s.config.Library.Root, book.Path)
+		filePath := s.getBookPath(book)
 		bookData, err = os.ReadFile(filePath)
 	}
 
@@ -2214,52 +2177,9 @@ func (s *Server) handleWebReader(w http.ResponseWriter, r *http.Request) {
 }
 
 // readFrom7z reads a book file from a 7z archive
+// Deprecated: Use readFromArchive instead
 func (s *Server) readFrom7z(book *database.Book) ([]byte, error) {
-	parts := strings.Split(book.Path, string(filepath.Separator))
-
-	// Find where the .7z extension is in the path
-	idx := -1
-	for i, part := range parts {
-		if strings.HasSuffix(strings.ToLower(part), ".7z") {
-			idx = i
-			break
-		}
-	}
-
-	if idx < 0 {
-		if strings.HasSuffix(strings.ToLower(book.Path), ".7z") {
-			idx = len(parts) - 1
-		} else {
-			return nil, fmt.Errorf("book not in 7z")
-		}
-	}
-
-	szFilePath := filepath.Join(s.config.Library.Root, filepath.Join(parts[:idx+1]...))
-	var internalPath string
-	if idx+1 < len(parts) {
-		internalPath = filepath.Join(append(parts[idx+1:], book.Filename)...)
-	} else {
-		internalPath = book.Filename
-	}
-
-	sz, err := sevenzip.OpenReader(szFilePath)
-	if err != nil {
-		return nil, err
-	}
-	defer sz.Close()
-
-	for _, f := range sz.File {
-		if f.Name == internalPath || f.Name == book.Filename {
-			rc, err := f.Open()
-			if err != nil {
-				return nil, err
-			}
-			defer rc.Close()
-			return io.ReadAll(rc)
-		}
-	}
-
-	return nil, fmt.Errorf("file not found in 7z")
+	return s.readFromArchive(book)
 }
 
 func (s *Server) renderReaderTemplate(w http.ResponseWriter, data ReaderData) {
@@ -2347,12 +2267,10 @@ func (s *Server) booksToViewWithFilters(ctx context.Context, books []database.Bo
 	genreMap := make(map[int64]string)
 
 	for _, b := range books {
-		authors, _ := s.svc.GetBookAuthors(ctx, b.ID)
-		genres, _ := s.svc.GetBookGenres(ctx, b.ID)
-		series, _ := s.svc.GetBookSeries(ctx, b.ID)
+		links := s.getBookLinks(ctx, b.ID)
 
 		var authorLinks []LinkedItem
-		for _, a := range authors {
+		for _, a := range links.Authors {
 			authorLinks = append(authorLinks, LinkedItem{ID: a.ID, Name: a.FullName()})
 			// Collect unique first/last names
 			if a.FirstName != "" {
@@ -2364,7 +2282,7 @@ func (s *Server) booksToViewWithFilters(ctx context.Context, books []database.Bo
 		}
 
 		var genreLinks []LinkedItem
-		for _, g := range genres {
+		for _, g := range links.Genres {
 			name := g.Subsection
 			if name == "" {
 				name = g.Genre
@@ -2375,7 +2293,7 @@ func (s *Server) booksToViewWithFilters(ctx context.Context, books []database.Bo
 		}
 
 		var seriesLinks []LinkedItem
-		for _, ser := range series {
+		for _, ser := range links.Series {
 			seriesLinks = append(seriesLinks, LinkedItem{ID: ser.SeriesID, Name: ser.Name})
 		}
 

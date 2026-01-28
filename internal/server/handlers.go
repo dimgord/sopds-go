@@ -149,10 +149,8 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 				Cover:        item.Cover,
 				CoverType:    item.CoverType,
 			}
-			authors, _ := s.svc.GetBookAuthors(ctx, item.ID)
-			genres, _ := s.svc.GetBookGenres(ctx, item.ID)
-			series, _ := s.svc.GetBookSeries(ctx, item.ID)
-			entry := builder.AcquisitionEntry(book, authors, genres, series)
+			links := s.getBookLinks(ctx, item.ID)
+			entry := builder.AcquisitionEntry(book, links.Authors, links.Genres, links.Series)
 			feed.Entries = append(feed.Entries, entry)
 		}
 	}
@@ -206,7 +204,7 @@ func (s *Server) handleAuthors(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add pagination links
-	totalPages := int((pagination.TotalCount + int64(pagination.Limit) - 1) / int64(pagination.Limit))
+	totalPages := getTotalPages(pagination)
 	builder.Pagination(feed, fmt.Sprintf("/authors?letter=%s", url.QueryEscape(letter)), page, totalPages)
 
 	s.writeOPDS(w, feed)
@@ -234,15 +232,13 @@ func (s *Server) handleAuthor(w http.ResponseWriter, r *http.Request) {
 
 	feed := builder.NewFeedWithPath("Author's Books", fmt.Sprintf("author:%d", authorID), fmt.Sprintf("/authors/%d", authorID), "/authors")
 	for _, book := range books {
-		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
-		series, _ := s.svc.GetBookSeries(ctx, book.ID)
-		entry := builder.AcquisitionEntry(&book, authors, genres, series)
+		links := s.getBookLinks(ctx, book.ID)
+		entry := builder.AcquisitionEntry(&book, links.Authors, links.Genres, links.Series)
 		feed.Entries = append(feed.Entries, entry)
 	}
 
 	// Add pagination links
-	totalPages := int((pagination.TotalCount + int64(pagination.Limit) - 1) / int64(pagination.Limit))
+	totalPages := getTotalPages(pagination)
 	builder.Pagination(feed, fmt.Sprintf("/authors/%d", authorID), page, totalPages)
 
 	s.writeOPDS(w, feed)
@@ -283,15 +279,13 @@ func (s *Server) handleTitles(w http.ResponseWriter, r *http.Request) {
 
 	feed := builder.NewFeedWithPath(fmt.Sprintf("Titles: %s", letter), fmt.Sprintf("titles:letter:%s", letter), fmt.Sprintf("/titles?letter=%s", url.QueryEscape(letter)), "/titles")
 	for _, book := range books {
-		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
-		series, _ := s.svc.GetBookSeries(ctx, book.ID)
-		entry := builder.AcquisitionEntry(&book, authors, genres, series)
+		links := s.getBookLinks(ctx, book.ID)
+		entry := builder.AcquisitionEntry(&book, links.Authors, links.Genres, links.Series)
 		feed.Entries = append(feed.Entries, entry)
 	}
 
 	// Add pagination links
-	totalPages := int((pagination.TotalCount + int64(pagination.Limit) - 1) / int64(pagination.Limit))
+	totalPages := getTotalPages(pagination)
 	builder.Pagination(feed, fmt.Sprintf("/titles?letter=%s", url.QueryEscape(letter)), page, totalPages)
 
 	s.writeOPDS(w, feed)
@@ -368,15 +362,13 @@ func (s *Server) handleGenre(w http.ResponseWriter, r *http.Request) {
 
 	feed := builder.NewFeedWithPath("Genre Books", fmt.Sprintf("genre:%d", genreID), fmt.Sprintf("/genres/%d", genreID), "/genres")
 	for _, book := range books {
-		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
-		series, _ := s.svc.GetBookSeries(ctx, book.ID)
-		entry := builder.AcquisitionEntry(&book, authors, genres, series)
+		links := s.getBookLinks(ctx, book.ID)
+		entry := builder.AcquisitionEntry(&book, links.Authors, links.Genres, links.Series)
 		feed.Entries = append(feed.Entries, entry)
 	}
 
 	// Add pagination links
-	totalPages := int((pagination.TotalCount + int64(pagination.Limit) - 1) / int64(pagination.Limit))
+	totalPages := getTotalPages(pagination)
 	builder.Pagination(feed, fmt.Sprintf("/genres/%d", genreID), page, totalPages)
 
 	s.writeOPDS(w, feed)
@@ -427,7 +419,7 @@ func (s *Server) handleSeriesList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add pagination links
-	totalPages := int((pagination.TotalCount + int64(pagination.Limit) - 1) / int64(pagination.Limit))
+	totalPages := getTotalPages(pagination)
 	builder.Pagination(feed, fmt.Sprintf("/series?letter=%s", url.QueryEscape(letter)), page, totalPages)
 
 	s.writeOPDS(w, feed)
@@ -455,15 +447,13 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 
 	feed := builder.NewFeedWithPath("Series Books", fmt.Sprintf("series:%d", seriesID), fmt.Sprintf("/series/%d", seriesID), "/series")
 	for _, book := range books {
-		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
-		series, _ := s.svc.GetBookSeries(ctx, book.ID)
-		entry := builder.AcquisitionEntry(&book, authors, genres, series)
+		links := s.getBookLinks(ctx, book.ID)
+		entry := builder.AcquisitionEntry(&book, links.Authors, links.Genres, links.Series)
 		feed.Entries = append(feed.Entries, entry)
 	}
 
 	// Add pagination links
-	totalPages := int((pagination.TotalCount + int64(pagination.Limit) - 1) / int64(pagination.Limit))
+	totalPages := getTotalPages(pagination)
 	builder.Pagination(feed, fmt.Sprintf("/series/%d", seriesID), page, totalPages)
 
 	s.writeOPDS(w, feed)
@@ -482,10 +472,8 @@ func (s *Server) handleNew(w http.ResponseWriter, r *http.Request) {
 
 	feed := builder.NewFeedWithPath("New Books", "new", "/new", "/")
 	for _, book := range books {
-		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
-		series, _ := s.svc.GetBookSeries(ctx, book.ID)
-		entry := builder.AcquisitionEntry(&book, authors, genres, series)
+		links := s.getBookLinks(ctx, book.ID)
+		entry := builder.AcquisitionEntry(&book, links.Authors, links.Genres, links.Series)
 		feed.Entries = append(feed.Entries, entry)
 	}
 
@@ -526,15 +514,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	feed := builder.NewFeedWithPath(fmt.Sprintf("Search: %s", query), fmt.Sprintf("search:%s", query), fmt.Sprintf("/search?q=%s", url.QueryEscape(query)), "/")
 	for _, book := range books {
-		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
-		series, _ := s.svc.GetBookSeries(ctx, book.ID)
-		entry := builder.AcquisitionEntry(&book, authors, genres, series)
+		links := s.getBookLinks(ctx, book.ID)
+		entry := builder.AcquisitionEntry(&book, links.Authors, links.Genres, links.Series)
 		feed.Entries = append(feed.Entries, entry)
 	}
 
 	// Add pagination links
-	totalPages := int((pagination.TotalCount + int64(pagination.Limit) - 1) / int64(pagination.Limit))
+	totalPages := getTotalPages(pagination)
 	builder.Pagination(feed, fmt.Sprintf("/search?q=%s", url.QueryEscape(query)), page, totalPages)
 
 	s.writeOPDS(w, feed)
@@ -559,7 +545,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	// Construct file path
 	var filePath string
 	if book.CatType == database.CatNormal {
-		filePath = filepath.Join(s.config.Library.Root, book.Path, book.Filename)
+		filePath = s.getBookPath(book)
 	} else {
 		// Book is in ZIP archive
 		s.serveFromZip(w, r, book)
@@ -574,48 +560,14 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveFromZip(w http.ResponseWriter, r *http.Request, book *database.Book) {
-	// The path format is: zipfile.zip/internal/path/to/file
-	// Split the path to find the ZIP file
-	fullPath := filepath.Join(s.config.Library.Root, book.Path)
-	parts := strings.Split(book.Path, string(filepath.Separator))
+	pathInfo := s.parseBookPath(book)
 
-	if len(parts) == 0 {
-		s.writeError(w, http.StatusNotFound, "Invalid book path")
+	if !pathInfo.IsInArchive && pathInfo.ArchiveType != "zip" {
+		s.writeError(w, http.StatusNotFound, "Book not in ZIP")
 		return
 	}
 
-	// Find where the .zip extension is in the path
-	idx := -1
-	for i, part := range parts {
-		if strings.HasSuffix(strings.ToLower(part), ".zip") {
-			idx = i
-			break
-		}
-	}
-
-	if idx < 0 {
-		// Try treating the whole path as the ZIP file path
-		if strings.HasSuffix(strings.ToLower(book.Path), ".zip") {
-			idx = len(parts) - 1
-		} else {
-			s.writeError(w, http.StatusNotFound, "Book not in ZIP")
-			return
-		}
-	}
-
-	// Reconstruct paths
-	zipFilePath := filepath.Join(s.config.Library.Root, filepath.Join(parts[:idx+1]...))
-	var internalPath string
-	if idx+1 < len(parts) {
-		internalPath = filepath.Join(append(parts[idx+1:], book.Filename)...)
-	} else {
-		internalPath = book.Filename
-	}
-
-	// Use fullPath for debugging if needed
-	_ = fullPath
-
-	zr, err := zip.OpenReader(zipFilePath)
+	zr, err := zip.OpenReader(pathInfo.ArchivePath)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, "ZIP not found")
 		return
@@ -623,7 +575,7 @@ func (s *Server) serveFromZip(w http.ResponseWriter, r *http.Request, book *data
 	defer zr.Close()
 
 	for _, f := range zr.File {
-		if f.Name == internalPath || f.Name == book.Filename {
+		if f.Name == pathInfo.InternalPath || f.Name == book.Filename {
 			rc, err := f.Open()
 			if err != nil {
 				s.writeError(w, http.StatusInternalServerError, "Failed to open file in ZIP")
@@ -736,7 +688,7 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 	// Read the FB2 file
 	var fb2Data []byte
 	if book.CatType == database.CatNormal {
-		filePath := filepath.Join(s.config.Library.Root, book.Path, book.Filename)
+		filePath := s.getBookPath(book)
 		fb2Data, err = os.ReadFile(filePath)
 		if err != nil {
 			s.servePlaceholderCover(w)
@@ -852,7 +804,7 @@ func (s *Server) serveAudioCover(w http.ResponseWriter, r *http.Request, book *d
 	// Handle folder-based audiobooks differently
 	if strings.ToLower(book.Format) == "folder" {
 		// For folder audiobooks, full path includes book.Filename (which is the folder name)
-		folderPath := filepath.Join(s.config.Library.Root, book.Path, book.Filename)
+		folderPath := s.getBookPath(book)
 
 		// Parse tracks from chapters JSON
 		var trackPaths []string
@@ -865,15 +817,7 @@ func (s *Server) serveAudioCover(w http.ResponseWriter, r *http.Request, book *d
 			if err := json.Unmarshal([]byte(book.Chapters), &structure); err == nil {
 				for _, track := range structure.Tracks {
 					trackPath := track.Path
-					// Construct full track path (handles various storage formats)
-					var fullPath string
-					if strings.HasPrefix(trackPath, "/") {
-						fullPath = trackPath
-					} else if strings.Contains(trackPath, string(filepath.Separator)) || strings.Contains(trackPath, "/") {
-						fullPath = filepath.Join(s.config.Library.Root, book.Path, trackPath)
-					} else {
-						fullPath = filepath.Join(folderPath, trackPath)
-					}
+					fullPath := s.getTrackPath(book, trackPath)
 					trackPaths = append(trackPaths, fullPath)
 				}
 			}
@@ -925,7 +869,7 @@ func (s *Server) serveAudioCover(w http.ResponseWriter, r *http.Request, book *d
 	}
 
 	// Regular audio file or archive
-	audioPath = filepath.Join(s.config.Library.Root, book.Path, book.Filename)
+	audioPath = s.getBookPath(book)
 
 	// First, try @eaDir (Synology NAS pre-generated thumbnails)
 	if coverData, coverType := s.getEaDirCover(audioPath); len(coverData) > 0 {
@@ -1097,24 +1041,23 @@ func (s *Server) getFolderCoverInDir(dir string) ([]byte, string) {
 
 // extractAudioCoverFromArchive extracts cover from first audio file in archive
 func (s *Server) extractAudioCoverFromArchive(book *database.Book) ([]byte, string, error) {
-	// For standalone archives, the filename is the archive itself
-	// For books inside archives, the path contains the archive
-	var archivePath string
-	ext := strings.ToLower(filepath.Ext(book.Filename))
-	if ext == ".7z" || ext == ".zip" {
-		// Standalone archive file
-		archivePath = filepath.Join(s.config.Library.Root, book.Path, book.Filename)
-	} else {
-		// Book inside an archive - path contains the archive
-		archivePath = filepath.Join(s.config.Library.Root, book.Path)
+	pathInfo := s.parseBookPath(book)
+	archivePath := pathInfo.ArchivePath
+	if archivePath == "" {
+		archivePath = s.getBookPath(book)
 	}
 
-	// Try ZIP first
+	switch pathInfo.ArchiveType {
+	case "zip":
+		return s.extractAudioCoverFromZip(archivePath)
+	case "7z":
+		return s.extractAudioCoverFrom7z(archivePath)
+	}
+
+	// Fallback: check by extension
 	if strings.HasSuffix(strings.ToLower(archivePath), ".zip") {
 		return s.extractAudioCoverFromZip(archivePath)
 	}
-
-	// Try 7z
 	if strings.HasSuffix(strings.ToLower(archivePath), ".7z") {
 		return s.extractAudioCoverFrom7z(archivePath)
 	}
@@ -1255,7 +1198,7 @@ func (s *Server) handleConvert(w http.ResponseWriter, r *http.Request, format st
 	// Read the FB2 file content
 	var fb2Data []byte
 	if book.CatType == database.CatNormal {
-		filePath := filepath.Join(s.config.Library.Root, book.Path, book.Filename)
+		filePath := s.getBookPath(book)
 		fb2Data, err = os.ReadFile(filePath)
 		if err != nil {
 			s.writeError(w, http.StatusNotFound, "Book file not found")
@@ -1311,52 +1254,9 @@ func (s *Server) handleConvert(w http.ResponseWriter, r *http.Request, format st
 }
 
 // readFromZip reads a book file from a ZIP archive
+// Deprecated: Use readFromArchive instead
 func (s *Server) readFromZip(book *database.Book) ([]byte, error) {
-	parts := strings.Split(book.Path, string(filepath.Separator))
-
-	// Find where the .zip extension is in the path
-	idx := -1
-	for i, part := range parts {
-		if strings.HasSuffix(strings.ToLower(part), ".zip") {
-			idx = i
-			break
-		}
-	}
-
-	if idx < 0 {
-		if strings.HasSuffix(strings.ToLower(book.Path), ".zip") {
-			idx = len(parts) - 1
-		} else {
-			return nil, fmt.Errorf("book not in ZIP")
-		}
-	}
-
-	zipFilePath := filepath.Join(s.config.Library.Root, filepath.Join(parts[:idx+1]...))
-	var internalPath string
-	if idx+1 < len(parts) {
-		internalPath = filepath.Join(append(parts[idx+1:], book.Filename)...)
-	} else {
-		internalPath = book.Filename
-	}
-
-	zr, err := zip.OpenReader(zipFilePath)
-	if err != nil {
-		return nil, err
-	}
-	defer zr.Close()
-
-	for _, f := range zr.File {
-		if f.Name == internalPath || f.Name == book.Filename {
-			rc, err := f.Open()
-			if err != nil {
-				return nil, err
-			}
-			defer rc.Close()
-			return io.ReadAll(rc)
-		}
-	}
-
-	return nil, fmt.Errorf("file not found in ZIP")
+	return s.readFromArchive(book)
 }
 
 // Bookshelf handlers
@@ -1383,10 +1283,8 @@ func (s *Server) handleBookshelf(w http.ResponseWriter, r *http.Request) {
 	feed := builder.NewFeedWithPath("My Bookshelf", "bookshelf", "/bookshelf", "/")
 
 	for _, book := range books {
-		authors, _ := s.svc.GetBookAuthors(ctx, book.ID)
-		genres, _ := s.svc.GetBookGenres(ctx, book.ID)
-		series, _ := s.svc.GetBookSeries(ctx, book.ID)
-		entry := builder.AcquisitionEntry(&book, authors, genres, series)
+		links := s.getBookLinks(ctx, book.ID)
+		entry := builder.AcquisitionEntry(&book, links.Authors, links.Genres, links.Series)
 		feed.Entries = append(feed.Entries, entry)
 	}
 
