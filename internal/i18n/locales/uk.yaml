@@ -172,3 +172,22 @@ reader:
   not_supported: "Цей формат не підтримується для читання"
   conversion_failed: "Не вдалося конвертувати книгу"
   loading: "Завантаження..."
+
+# TTS (Text-to-Speech)
+tts:
+  listen: "Слухати"
+  generate: "Створити аудіо"
+  generating: "Створення аудіо..."
+  queued: "У черзі"
+  queued_desc: "Ваша книга в черзі на створення аудіо."
+  waiting: "Очікування в черзі..."
+  not_generated: "Аудіо не створено"
+  not_generated_desc: "Натисніть кнопку нижче, щоб створити аудіо для цієї книги."
+  chapters: "Розділи"
+  chapter: "Розділ"
+  progress: "Прогрес"
+  play: "Відтворити"
+  pause: "Пауза"
+  download: "Завантажити аудіо"
+  not_available: "TTS недоступний"
+  failed: "Помилка створення"

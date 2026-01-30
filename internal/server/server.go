@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -15,6 +17,7 @@ import (
 	"github.com/sopds/sopds-go/internal/i18n"
 	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
 	"github.com/sopds/sopds-go/internal/opds"
+	"github.com/sopds/sopds-go/internal/tts"
 )
 
 // Server represents the HTTP server
@@ -25,6 +28,7 @@ type Server struct {
 	userRepo     repository.UserRepository
 	emailService *EmailService
 	authHandlers *AuthHandlers
+	ttsGenerator *tts.Generator
 	httpServer   *http.Server
 	router       chi.Router
 }
@@ -54,6 +58,11 @@ func New(cfg *config.Config, svc *persistence.Service) *Server {
 		converter:    converter.New(ebookConvertPath),
 		userRepo:     svc.Repos().Users,
 		emailService: NewEmailService(&cfg.SMTP, cfg.Site.Title, baseURL),
+	}
+
+	// Initialize TTS generator if enabled
+	if cfg.TTS.Enabled {
+		s.ttsGenerator = tts.NewGenerator(&cfg.TTS, s.getBookDataForTTS)
 	}
 
 	s.authHandlers = NewAuthHandlers(s)
@@ -162,6 +171,12 @@ func (s *Server) setupRouter() chi.Router {
 		r.Get("/duplicates/{id}", s.handleWebDuplicates)
 		r.Get("/help", s.handleWebHelp)
 		r.Get("/read/{id}", s.handleWebReader)
+
+		// TTS routes (text-to-speech)
+		r.Post("/book/{id}/tts/generate", s.handleTTSGenerate)
+		r.Get("/book/{id}/tts/status", s.handleTTSStatus)
+		r.Get("/book/{id}/tts", s.handleTTSPlayer)
+		r.Get("/book/{id}/tts/chunk/{idx}", s.handleTTSChunk)
 	})
 
 		// Health check (inside auth group)
@@ -176,6 +191,11 @@ func (s *Server) setupRouter() chi.Router {
 
 // Start starts the HTTP server
 func (s *Server) Start() error {
+	// Start TTS workers if enabled
+	if s.ttsGenerator != nil {
+		s.ttsGenerator.Start(context.Background())
+	}
+
 	log.Printf("Starting HTTP server on %s", s.httpServer.Addr)
 	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
@@ -185,7 +205,38 @@ func (s *Server) Start() error {
 
 // Shutdown gracefully shuts down the server
 func (s *Server) Shutdown(ctx context.Context) error {
+	// Stop TTS workers
+	if s.ttsGenerator != nil {
+		s.ttsGenerator.Stop()
+	}
 	return s.httpServer.Shutdown(ctx)
+}
+
+// getBookDataForTTS returns book data for TTS processing
+func (s *Server) getBookDataForTTS(bookID int64) ([]byte, string, error) {
+	ctx := context.Background()
+
+	book, err := s.svc.GetBook(ctx, bookID)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Read book content based on storage type
+	var data []byte
+	if strings.Contains(book.Path, ".zip") {
+		data, err = s.readFromZip(book)
+	} else if strings.Contains(book.Path, ".7z") {
+		data, err = s.readFromArchive(book)
+	} else {
+		filePath := s.getBookPath(book)
+		data, err = os.ReadFile(filePath)
+	}
+
+	if err != nil {
+		return nil, "", err
+	}
+
+	return data, book.Title, nil
 }
 
 // basicAuth middleware for HTTP Basic Authentication

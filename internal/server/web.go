@@ -2204,6 +2204,668 @@ func (s *Server) renderReaderTemplate(w http.ResponseWriter, data ReaderData) {
 	}
 }
 
+// ============================================================================
+// TTS (Text-to-Speech) Handlers
+// ============================================================================
+
+// handleTTSGenerate queues a book for TTS generation
+func (s *Server) handleTTSGenerate(w http.ResponseWriter, r *http.Request) {
+	if s.ttsGenerator == nil {
+		http.Error(w, "TTS not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid book ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	book, err := s.svc.GetBook(ctx, id)
+	if err != nil || book == nil {
+		http.Error(w, "Book not found", http.StatusNotFound)
+		return
+	}
+
+	// Only FB2 books can be converted to TTS
+	if strings.ToLower(book.Format) != "fb2" {
+		http.Error(w, "Only FB2 books are supported for TTS", http.StatusBadRequest)
+		return
+	}
+
+	// Queue the job
+	job, err := s.ttsGenerator.QueueBook(id, book.Title, book.Lang)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to queue TTS job: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Return JSON response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"job_id":  job.ID,
+		"book_id": job.BookID,
+		"status":  job.Status,
+	})
+}
+
+// handleTTSStatus returns the status of TTS generation for a book
+func (s *Server) handleTTSStatus(w http.ResponseWriter, r *http.Request) {
+	if s.ttsGenerator == nil {
+		http.Error(w, "TTS not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid book ID", http.StatusBadRequest)
+		return
+	}
+
+	// Check for active job
+	job := s.ttsGenerator.GetJobByBook(id)
+
+	// Check cache
+	cache := s.ttsGenerator.Cache()
+	hasCached := cache.HasBook(id)
+	isComplete := cache.IsComplete(id)
+
+	response := map[string]interface{}{
+		"book_id":     id,
+		"has_cached":  hasCached,
+		"is_complete": isComplete,
+	}
+
+	if job != nil {
+		response["job"] = map[string]interface{}{
+			"id":           job.ID,
+			"status":       job.Status,
+			"progress":     job.Progress,
+			"chunks_done":  job.ChunksDone,
+			"chunks_total": job.ChunksTotal,
+			"error":        job.Error,
+		}
+	}
+
+	if hasCached {
+		if meta, err := cache.GetMetadata(id); err == nil {
+			response["cache"] = map[string]interface{}{
+				"voice":       meta.Voice,
+				"lang":        meta.Lang,
+				"chunk_count": meta.ChunkCount,
+				"status":      meta.Status,
+				"created_at":  meta.CreatedAt,
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleTTSPlayer renders the TTS player page
+func (s *Server) handleTTSPlayer(w http.ResponseWriter, r *http.Request) {
+	if s.ttsGenerator == nil {
+		http.Error(w, "TTS not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid book ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	book, err := s.svc.GetBook(ctx, id)
+	if err != nil || book == nil {
+		http.Error(w, "Book not found", http.StatusNotFound)
+		return
+	}
+
+	// Get authors
+	authors, _ := s.svc.GetBookAuthors(ctx, id)
+	var authorNames []string
+	for _, a := range authors {
+		authorNames = append(authorNames, a.FullName())
+	}
+
+	// Check cache status
+	cache := s.ttsGenerator.Cache()
+	hasCached := cache.HasBook(id)
+	isComplete := cache.IsComplete(id)
+
+	var chunks []ttsChunkData
+	var voice, lang string
+
+	if hasCached {
+		if meta, err := cache.GetMetadata(id); err == nil {
+			voice = meta.Voice
+			lang = meta.Lang
+			for _, c := range meta.Chunks {
+				chunks = append(chunks, ttsChunkData{
+					Index: c.Index,
+					Title: c.Title,
+					File:  fmt.Sprintf("%s/book/%d/tts/chunk/%d", s.config.Server.WebPrefix, id, c.Index),
+				})
+			}
+		}
+	}
+
+	// Check for active job
+	var jobStatus string
+	var jobProgress float64
+	if job := s.ttsGenerator.GetJobByBook(id); job != nil {
+		jobStatus = string(job.Status)
+		jobProgress = job.Progress
+	}
+
+	pd := s.newPageData(r, book.Title+" - TTS")
+	data := struct {
+		PageData
+		BookID      int64
+		BookTitle   string
+		Authors     string
+		Voice       string
+		Lang        string
+		HasCached   bool
+		IsComplete  bool
+		Chunks      []ttsChunkData
+		JobStatus   string
+		JobProgress float64
+		BackURL     string
+		TTSEnabled  bool
+	}{
+		PageData:    pd,
+		BookID:      id,
+		BookTitle:   book.Title,
+		Authors:     strings.Join(authorNames, ", "),
+		Voice:       voice,
+		Lang:        lang,
+		HasCached:   hasCached,
+		IsComplete:  isComplete,
+		Chunks:      chunks,
+		JobStatus:   jobStatus,
+		JobProgress: jobProgress,
+		BackURL:     fmt.Sprintf("%s/", s.config.Server.WebPrefix),
+		TTSEnabled:  true,
+	}
+
+	s.renderTTSPlayerTemplate(w, data)
+}
+
+type ttsChunkData struct {
+	Index int
+	Title string
+	File  string
+}
+
+// handleTTSChunk serves a cached TTS audio chunk
+func (s *Server) handleTTSChunk(w http.ResponseWriter, r *http.Request) {
+	if s.ttsGenerator == nil {
+		http.Error(w, "TTS not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid book ID", http.StatusBadRequest)
+		return
+	}
+
+	idxStr := chi.URLParam(r, "idx")
+	idx, err := strconv.Atoi(idxStr)
+	if err != nil {
+		http.Error(w, "Invalid chunk index", http.StatusBadRequest)
+		return
+	}
+
+	cache := s.ttsGenerator.Cache()
+	chunkPath := cache.GetChunkPath(id, idx)
+
+	// Check if file exists
+	stat, err := os.Stat(chunkPath)
+	if err != nil {
+		http.Error(w, "Chunk not found", http.StatusNotFound)
+		return
+	}
+
+	// Open and serve
+	f, err := os.Open(chunkPath)
+	if err != nil {
+		http.Error(w, "Failed to open chunk", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	w.Header().Set("Content-Type", "audio/wav")
+	w.Header().Set("Accept-Ranges", "bytes")
+	http.ServeContent(w, r, fmt.Sprintf("chunk_%03d.wav", idx), stat.ModTime(), f)
+}
+
+func (s *Server) renderTTSPlayerTemplate(w http.ResponseWriter, data interface{}) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	// Use reflection to get Lang field
+	lang := "en"
+	if pd, ok := data.(struct {
+		PageData
+		BookID      int64
+		BookTitle   string
+		Authors     string
+		Voice       string
+		Lang        string
+		HasCached   bool
+		IsComplete  bool
+		Chunks      []ttsChunkData
+		JobStatus   string
+		JobProgress float64
+		BackURL     string
+		TTSEnabled  bool
+	}); ok {
+		lang = pd.PageData.Lang
+	}
+
+	tmpl, err := template.New("tts_player").Funcs(template.FuncMap{
+		"t": func(key string) string {
+			return i18n.T(lang, key)
+		},
+	}).Parse(ttsPlayerTemplate)
+	if err != nil {
+		log.Printf("TTS player template parse error: %v", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tmpl.Execute(w, data); err != nil {
+		log.Printf("TTS player template execute error: %v", err)
+	}
+}
+
+// TTS player template
+var ttsPlayerTemplate = `<!DOCTYPE html>
+<html lang="{{.Lang}}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.BookTitle}} - TTS</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-color: #f5f5f5;
+            --text-color: #333;
+            --card-bg: #fff;
+            --border-color: #ddd;
+            --primary-color: #007bff;
+            --hover-color: #0056b3;
+        }
+        body.dark-mode {
+            --bg-color: #1a1a2e;
+            --text-color: #eee;
+            --card-bg: #16213e;
+            --border-color: #0f3460;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .back-btn {
+            color: var(--text-color);
+            text-decoration: none;
+            font-size: 1.5em;
+        }
+        .book-info h1 {
+            font-size: 1.5em;
+            margin-bottom: 5px;
+        }
+        .book-info .authors {
+            color: #666;
+            font-size: 0.9em;
+        }
+        .player-card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .player-controls {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .player-btn {
+            width: 60px;
+            height: 60px;
+            border: none;
+            border-radius: 50%;
+            background: var(--primary-color);
+            color: white;
+            font-size: 1.5em;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .player-btn:hover { background: var(--hover-color); }
+        .player-btn.small {
+            width: 40px;
+            height: 40px;
+            font-size: 1em;
+            background: var(--border-color);
+            color: var(--text-color);
+        }
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            cursor: pointer;
+        }
+        .progress-fill {
+            height: 100%;
+            background: var(--primary-color);
+            width: 0%;
+            transition: width 0.1s;
+        }
+        .time-display {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 5px;
+        }
+        .chunk-list {
+            list-style: none;
+        }
+        .chunk-item {
+            padding: 12px 15px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .chunk-item:hover { background: var(--border-color); }
+        .chunk-item.active {
+            background: var(--primary-color);
+            color: white;
+        }
+        .chunk-item .index {
+            min-width: 30px;
+            text-align: center;
+            font-weight: bold;
+        }
+        .status-card {
+            text-align: center;
+            padding: 40px;
+        }
+        .status-card .icon { font-size: 3em; margin-bottom: 15px; }
+        .status-card h2 { margin-bottom: 10px; }
+        .generate-btn {
+            display: inline-block;
+            padding: 12px 30px;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1em;
+            cursor: pointer;
+            margin-top: 15px;
+        }
+        .generate-btn:hover { background: var(--hover-color); }
+        .progress-container {
+            margin-top: 20px;
+        }
+        .progress-text {
+            text-align: center;
+            margin-top: 10px;
+        }
+        .dark-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
+</head>
+<body>
+    <button class="dark-toggle" onclick="toggleDarkMode()">
+        <i class="fas fa-moon"></i>
+    </button>
+
+    <div class="container">
+        <div class="header">
+            <a href="{{.BackURL}}" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="book-info">
+                <h1>{{.BookTitle}}</h1>
+                <div class="authors">{{.Authors}}</div>
+            </div>
+        </div>
+
+        {{if .IsComplete}}
+        <div class="player-card">
+            <div class="player-controls">
+                <button class="player-btn small" onclick="prevChunk()"><i class="fas fa-step-backward"></i></button>
+                <button class="player-btn" id="playBtn" onclick="togglePlay()"><i class="fas fa-play"></i></button>
+                <button class="player-btn small" onclick="nextChunk()"><i class="fas fa-step-forward"></i></button>
+            </div>
+            <div class="progress-bar" onclick="seek(event)">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="time-display">
+                <span id="currentTime">0:00</span>
+                <span id="totalTime">0:00</span>
+            </div>
+        </div>
+
+        <div class="player-card">
+            <h3 style="margin-bottom: 15px;">{{t "tts.chapters"}}</h3>
+            <ul class="chunk-list" id="chunkList">
+                {{range .Chunks}}
+                <li class="chunk-item" data-index="{{.Index}}" data-src="{{.File}}" onclick="playChunk({{.Index}})">
+                    <span class="index">{{.Index}}</span>
+                    <span class="title">{{if .Title}}{{.Title}}{{else}}{{t "tts.chapter"}} {{.Index}}{{end}}</span>
+                </li>
+                {{end}}
+            </ul>
+        </div>
+
+        {{else if eq .JobStatus "queued"}}
+        <div class="player-card status-card">
+            <div class="icon"><i class="fas fa-clock"></i></div>
+            <h2>{{t "tts.queued"}}</h2>
+            <p>{{t "tts.queued_desc"}}</p>
+            <div class="progress-container">
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: 5%"></div>
+                </div>
+                <div class="progress-text">{{t "tts.waiting"}}</div>
+            </div>
+        </div>
+
+        {{else if eq .JobStatus "processing"}}
+        <div class="player-card status-card">
+            <div class="icon"><i class="fas fa-cog fa-spin"></i></div>
+            <h2>{{t "tts.generating"}}</h2>
+            <div class="progress-container">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="genProgress" style="width: {{printf "%.0f" (mul .JobProgress 100)}}%"></div>
+                </div>
+                <div class="progress-text" id="genText">{{printf "%.0f" (mul .JobProgress 100)}}%</div>
+            </div>
+        </div>
+
+        {{else}}
+        <div class="player-card status-card">
+            <div class="icon"><i class="fas fa-headphones"></i></div>
+            <h2>{{t "tts.not_generated"}}</h2>
+            <p>{{t "tts.not_generated_desc"}}</p>
+            <button class="generate-btn" onclick="generateTTS()">
+                <i class="fas fa-magic"></i> {{t "tts.generate"}}
+            </button>
+        </div>
+        {{end}}
+    </div>
+
+    <script>
+    const bookID = {{.BookID}};
+    const webPrefix = '{{.WebPrefix}}';
+    let audio = new Audio();
+    let currentChunkIndex = 0;
+    let chunks = [];
+
+    // Populate chunks array
+    document.querySelectorAll('.chunk-item').forEach(item => {
+        chunks.push({
+            index: parseInt(item.dataset.index),
+            src: item.dataset.src
+        });
+    });
+
+    // Dark mode
+    if (localStorage.getItem('ttsDarkMode') === 'true') {
+        document.body.classList.add('dark-mode');
+    }
+    function toggleDarkMode() {
+        document.body.classList.toggle('dark-mode');
+        localStorage.setItem('ttsDarkMode', document.body.classList.contains('dark-mode'));
+    }
+
+    // Player functions
+    function playChunk(index) {
+        if (index < 0 || index >= chunks.length) return;
+
+        currentChunkIndex = index;
+        audio.src = chunks[index].src;
+        audio.play();
+
+        // Update UI
+        document.querySelectorAll('.chunk-item').forEach((item, i) => {
+            item.classList.toggle('active', i === index);
+        });
+        document.getElementById('playBtn').innerHTML = '<i class="fas fa-pause"></i>';
+    }
+
+    function togglePlay() {
+        if (audio.paused) {
+            if (!audio.src && chunks.length > 0) {
+                playChunk(0);
+            } else {
+                audio.play();
+            }
+            document.getElementById('playBtn').innerHTML = '<i class="fas fa-pause"></i>';
+        } else {
+            audio.pause();
+            document.getElementById('playBtn').innerHTML = '<i class="fas fa-play"></i>';
+        }
+    }
+
+    function prevChunk() {
+        if (currentChunkIndex > 0) {
+            playChunk(currentChunkIndex - 1);
+        }
+    }
+
+    function nextChunk() {
+        if (currentChunkIndex < chunks.length - 1) {
+            playChunk(currentChunkIndex + 1);
+        }
+    }
+
+    function seek(event) {
+        const bar = event.currentTarget;
+        const percent = event.offsetX / bar.offsetWidth;
+        audio.currentTime = audio.duration * percent;
+    }
+
+    function formatTime(seconds) {
+        const m = Math.floor(seconds / 60);
+        const s = Math.floor(seconds % 60);
+        return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    // Audio events
+    audio.addEventListener('timeupdate', () => {
+        const progress = (audio.currentTime / audio.duration) * 100;
+        document.getElementById('progressFill').style.width = progress + '%';
+        document.getElementById('currentTime').textContent = formatTime(audio.currentTime);
+    });
+
+    audio.addEventListener('loadedmetadata', () => {
+        document.getElementById('totalTime').textContent = formatTime(audio.duration);
+    });
+
+    audio.addEventListener('ended', () => {
+        if (currentChunkIndex < chunks.length - 1) {
+            playChunk(currentChunkIndex + 1);
+        } else {
+            document.getElementById('playBtn').innerHTML = '<i class="fas fa-play"></i>';
+        }
+    });
+
+    // Generate TTS
+    function generateTTS() {
+        fetch(webPrefix + '/book/' + bookID + '/tts/generate', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.job_id) {
+                    location.reload();
+                }
+            })
+            .catch(err => alert('Failed to start generation: ' + err));
+    }
+
+    // Poll status if generating
+    {{if or (eq .JobStatus "queued") (eq .JobStatus "processing")}}
+    setInterval(() => {
+        fetch(webPrefix + '/book/' + bookID + '/tts/status')
+            .then(r => r.json())
+            .then(data => {
+                if (data.is_complete) {
+                    location.reload();
+                } else if (data.job && data.job.status === 'processing') {
+                    const pct = Math.round(data.job.progress * 100);
+                    document.getElementById('genProgress').style.width = pct + '%';
+                    document.getElementById('genText').textContent = pct + '%';
+                }
+            });
+    }, 2000);
+    {{end}}
+    </script>
+</body>
+</html>`
+
 // Helper functions for prefix-based navigation
 
 func (s *Server) getAuthorPrefixes(ctx context.Context, prefix string, length int) []string {

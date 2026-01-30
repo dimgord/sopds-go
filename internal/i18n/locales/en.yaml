@@ -172,3 +172,22 @@ reader:
   not_supported: "This format is not supported for reading"
   conversion_failed: "Failed to convert book"
   loading: "Loading..."
+
+# TTS (Text-to-Speech)
+tts:
+  listen: "Listen"
+  generate: "Generate Audio"
+  generating: "Generating audio..."
+  queued: "Queued"
+  queued_desc: "Your book is in the queue for audio generation."
+  waiting: "Waiting in queue..."
+  not_generated: "Audio Not Generated"
+  not_generated_desc: "Click the button below to generate audio for this book."
+  chapters: "Chapters"
+  chapter: "Chapter"
+  progress: "Progress"
+  play: "Play"
+  pause: "Pause"
+  download: "Download Audio"
+  not_available: "TTS not available"
+  failed: "Generation failed"
