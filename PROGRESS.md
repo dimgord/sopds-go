@@ -5,6 +5,85 @@
 
 ---
 
+### Revision 41 - 2026-01-30
+**Feature: TTS (Text-to-Speech) with Piper:**
+- Added text-to-speech capability for FB2 ebooks using piper TTS engine
+- Background generation with configurable worker pool
+- Cached audio files per book for instant playback
+
+**New Package: `internal/tts/`**
+- `extractor.go` - Extract plain text from FB2 XML for TTS input
+  - Strips markup, preserves paragraph breaks
+  - Splits text into chunks at sentence/paragraph boundaries
+- `cache.go` - Manage cached audio files per book
+  - Directory structure: `{cache_dir}/{book_id}/chunk_NNN.wav`
+  - Metadata JSON tracks voice, language, chunk count, status
+- `queue.go` - Job queue for background generation
+  - In-memory queue with book lookup
+  - Status tracking: queued, processing, completed, failed
+  - Progress tracking per chunk
+- `generator.go` - Piper integration and worker pool
+  - Configurable number of workers
+  - Language-specific voice selection
+  - Graceful start/stop
+
+**New Routes:**
+- `POST /web/book/{id}/tts/generate` - Queue TTS generation
+- `GET /web/book/{id}/tts/status` - Get generation status (JSON)
+- `GET /web/book/{id}/tts` - TTS player page
+- `GET /web/book/{id}/tts/chunk/{idx}` - Stream audio chunk
+
+**TTS Player Features:**
+- Chapter navigation with clickable list
+- Play/pause, prev/next track controls
+- Progress bar with seek
+- Dark mode toggle
+- Auto-play next chunk
+- Status polling during generation
+
+**Configuration (config.yaml):**
+```yaml
+tts:
+  enabled: true
+  piper_path: "/usr/bin/piper"
+  models_dir: "/var/lib/piper/models"
+  voices:
+    en: "en_US-lessac-medium"
+    uk: "uk_UA-lada-x_low"
+  default_voice: "en_US-lessac-medium"
+  cache_dir: "/var/lib/sopds/tts_cache"
+  workers: 2
+  chunk_size: 5000
+```
+
+**Files Created:**
+- `internal/tts/extractor.go` - FB2 text extraction
+- `internal/tts/cache.go` - Cache management
+- `internal/tts/queue.go` - Job queue
+- `internal/tts/generator.go` - Piper integration
+- `internal/tts/tts_test.go` - Unit tests (15 tests)
+
+**Files Modified:**
+- `internal/config/config.go` - Added TTSConfig struct
+- `internal/server/server.go` - TTS generator init, routes, book data callback
+- `internal/server/web.go` - TTS handlers and player template
+- `internal/i18n/locales/en.yaml` - English TTS translations
+- `internal/i18n/locales/uk.yaml` - Ukrainian TTS translations
+
+**i18n Keys Added:**
+- `tts.listen`, `tts.generate`, `tts.generating`
+- `tts.queued`, `tts.queued_desc`, `tts.waiting`
+- `tts.not_generated`, `tts.not_generated_desc`
+- `tts.chapters`, `tts.chapter`, `tts.progress`
+- `tts.play`, `tts.pause`, `tts.download`
+- `tts.not_available`, `tts.failed`
+
+**Requirements:**
+- piper binary (https://github.com/rhasspy/piper)
+- Voice model files (.onnx) in models_dir
+
+---
+
 ### Revision 40 - 2026-01-28
 **DRY Refactoring - Server Helpers:**
 - Created `internal/server/helpers.go` (208 lines) with consolidated helper functions
