@@ -18,6 +18,19 @@ type Config struct {
 	Logging    LoggingConfig    `yaml:"logging"`
 	Converters ConvertersConfig `yaml:"converters"`
 	SMTP       SMTPConfig       `yaml:"smtp"`
+	TTS        TTSConfig        `yaml:"tts"`
+}
+
+// TTSConfig holds text-to-speech settings
+type TTSConfig struct {
+	Enabled      bool              `yaml:"enabled"`
+	PiperPath    string            `yaml:"piper_path"`    // Path to piper binary
+	ModelsDir    string            `yaml:"models_dir"`    // Directory with .onnx voice models
+	Voices       map[string]string `yaml:"voices"`        // lang code -> model name
+	DefaultVoice string            `yaml:"default_voice"` // Fallback voice model
+	CacheDir     string            `yaml:"cache_dir"`     // Generated audio storage
+	Workers      int               `yaml:"workers"`       // Parallel generation jobs
+	ChunkSize    int               `yaml:"chunk_size"`    // Characters per audio chunk
 }
 
 // SMTPConfig holds email sending settings
@@ -177,6 +190,16 @@ func DefaultConfig() *Config {
 			Host:        "smtp.example.com",
 			Port:        587,
 			UseSTARTTLS: true,
+		},
+		TTS: TTSConfig{
+			Enabled:      false,
+			PiperPath:    "piper",
+			ModelsDir:    "/var/lib/piper/models",
+			Voices:       map[string]string{},
+			DefaultVoice: "",
+			CacheDir:     "/var/lib/sopds/tts_cache",
+			Workers:      2,
+			ChunkSize:    5000,
 		},
 	}
 }
