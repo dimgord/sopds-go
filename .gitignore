@@ -10,7 +10,7 @@ sopds_backup.dump*
 tags
 .task/
 .claude/
-
-.task/
-.claude/
+.claude/*
+.claude/settings.local.json
 *.swp
+fetch/
