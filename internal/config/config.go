@@ -24,7 +24,6 @@ type Config struct {
 // TTSConfig holds text-to-speech settings
 type TTSConfig struct {
 	Enabled      bool              `yaml:"enabled"`
-	PiperPath    string            `yaml:"piper_path"`    // Path to piper binary
 	ModelsDir    string            `yaml:"models_dir"`    // Directory with .onnx voice models
 	Voices       map[string]string `yaml:"voices"`        // lang code -> model name
 	DefaultVoice string            `yaml:"default_voice"` // Fallback voice model
@@ -193,7 +192,6 @@ func DefaultConfig() *Config {
 		},
 		TTS: TTSConfig{
 			Enabled:      false,
-			PiperPath:    "piper",
 			ModelsDir:    "/var/lib/piper/models",
 			Voices:       map[string]string{},
 			DefaultVoice: "",
