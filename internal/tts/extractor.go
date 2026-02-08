@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // TextChunk represents a chunk of text for TTS processing
@@ -230,9 +231,28 @@ func splitIntoChunks(sections []sectionText, chunkSize int) []TextChunk {
 }
 
 // findSplitPoint finds a good place to split text (sentence or paragraph boundary)
+// Ensures the split point is at a valid UTF-8 boundary
 func findSplitPoint(text string, maxLen int) int {
 	if maxLen >= len(text) {
 		return len(text)
+	}
+
+	// Ensure maxLen is at a valid UTF-8 boundary
+	// Back up to the start of any incomplete UTF-8 sequence
+	originalMaxLen := maxLen
+	for maxLen > 0 && !utf8.RuneStart(text[maxLen]) {
+		maxLen--
+	}
+	if maxLen == 0 {
+		// Couldn't find a valid boundary in first maxLen bytes
+		// Find the first valid rune start after original position
+		for i := originalMaxLen; i < len(text); i++ {
+			if utf8.RuneStart(text[i]) {
+				return i
+			}
+		}
+		// Fallback: return original maxLen (should not happen with valid UTF-8)
+		return originalMaxLen
 	}
 
 	// Look for paragraph break first (preferred)
@@ -265,7 +285,7 @@ func findSplitPoint(text string, maxLen int) int {
 		return idx + 1
 	}
 
-	// Give up and split at maxLen
+	// Give up and split at maxLen (already at UTF-8 boundary)
 	return maxLen
 }
 

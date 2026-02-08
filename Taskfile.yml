@@ -12,13 +12,15 @@ tasks:
       - task --list
 
   build:
-    desc: Build the sopds binary
+    desc: Build all binaries (sopds and sopds-tts)
     cmds:
       - go build -o {{.BINARY}} ./cmd/sopds
+      - go build -o sopds-tts ./cmd/sopds-tts
     sources:
       - "**/*.go"
     generates:
       - "{{.BINARY}}"
+      - "sopds-tts"
 
   init:
     desc: Create default config.yaml
@@ -160,6 +162,7 @@ tasks:
     desc: Remove build artifacts
     cmds:
       - rm -f {{.BINARY}}
+      - rm -f sopds-tts
       - rm -f *.dump
       - rm -f *.log
 

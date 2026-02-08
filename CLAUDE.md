@@ -70,7 +70,10 @@ sopds-go/
 
 ```bash
 cd sopds-go
-go build -o sopds ./cmd/sopds   # Always use -o sopds
+task build                      # Builds both sopds and sopds-tts
+# Or manually:
+go build -o sopds ./cmd/sopds
+go build -o sopds-tts ./cmd/sopds-tts  # TTS subprocess helper
 
 # Server management (systemd service - production)
 sudo systemctl start sopds.service

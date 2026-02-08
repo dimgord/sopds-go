@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sopds/sopds-go/internal/config"
@@ -48,20 +49,32 @@ func (g *Generator) Cache() *Cache {
 	return g.cache
 }
 
-// IsAvailable checks if piper is available
+// IsAvailable checks if TTS is available (sopds-tts binary exists)
 func (g *Generator) IsAvailable() bool {
-	if g.config.PiperPath == "" {
+	// Check if sopds-tts binary exists
+	ttsBinary := getTTSBinaryPath()
+	if _, err := os.Stat(ttsBinary); err != nil {
 		return false
 	}
-	_, err := exec.LookPath(g.config.PiperPath)
-	return err == nil
+	// Check if models directory exists
+	if _, err := os.Stat(g.config.ModelsDir); err != nil {
+		return false
+	}
+	return true
 }
 
 // GetVoice returns the voice model for a language
 func (g *Generator) GetVoice(lang string) string {
-	// Check configured voices
+	// Check configured voices (exact match)
 	if voice, ok := g.config.Voices[lang]; ok {
 		return voice
+	}
+	// Try base language code (e.g., "uk-UA" -> "uk", "en-US" -> "en")
+	if idx := strings.IndexAny(lang, "-_"); idx > 0 {
+		base := lang[:idx]
+		if voice, ok := g.config.Voices[base]; ok {
+			return voice
+		}
 	}
 	// Fall back to default
 	if g.config.DefaultVoice != "" {
@@ -253,30 +266,83 @@ func (g *Generator) processJob(ctx context.Context, job *Job) {
 
 	g.queue.UpdateProgress(job.ID, 0, len(chunks))
 
-	// Process each chunk
+	// Process chunks in parallel using subprocess workers
+	numWorkers := g.config.Workers
+	if numWorkers <= 0 {
+		numWorkers = 2
+	}
+	if numWorkers > len(chunks) {
+		numWorkers = len(chunks)
+	}
+
+	type chunkTask struct {
+		index int
+		chunk TextChunk
+	}
+
+	taskChan := make(chan chunkTask, len(chunks))
+	errChan := make(chan error, 1) // buffered to avoid blocking
+	var completed int64
+	var wg sync.WaitGroup
+
+	// Start workers
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for task := range taskChan {
+				// Check for cancellation
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+
+				outputPath := g.cache.GetChunkPath(job.BookID, task.index)
+				if err := g.generateChunk(task.chunk.Text, modelPath, outputPath); err != nil {
+					select {
+					case errChan <- fmt.Errorf("chunk %d: %w", task.index, err):
+					default:
+					}
+					return
+				}
+
+				done := atomic.AddInt64(&completed, 1)
+				g.queue.UpdateProgress(job.ID, int(done), len(chunks))
+				log.Printf("TTS: Book %d chunk %d/%d completed", job.BookID, done, len(chunks))
+			}
+		}()
+	}
+
+	// Send tasks
 	for i, chunk := range chunks {
-		select {
-		case <-ctx.Done():
-			g.queue.UpdateStatus(job.ID, JobStatusFailed, "Cancelled")
-			meta.Status = "failed"
-			meta.Error = "Cancelled"
-			g.cache.SaveMetadata(job.BookID, meta)
-			return
-		default:
-		}
+		taskChan <- chunkTask{index: i, chunk: chunk}
+	}
+	close(taskChan)
 
-		outputPath := g.cache.GetChunkPath(job.BookID, i)
+	// Wait for completion
+	wg.Wait()
 
-		if err := g.generateChunk(chunk.Text, modelPath, outputPath); err != nil {
-			g.queue.UpdateStatus(job.ID, JobStatusFailed, fmt.Sprintf("Failed to generate chunk %d: %v", i, err))
-			meta.Status = "failed"
-			meta.Error = fmt.Sprintf("Failed at chunk %d: %v", i, err)
-			g.cache.SaveMetadata(job.BookID, meta)
-			return
-		}
+	// Check for errors
+	select {
+	case err := <-errChan:
+		g.queue.UpdateStatus(job.ID, JobStatusFailed, fmt.Sprintf("Failed to generate: %v", err))
+		meta.Status = "failed"
+		meta.Error = err.Error()
+		g.cache.SaveMetadata(job.BookID, meta)
+		return
+	default:
+	}
 
-		g.queue.UpdateProgress(job.ID, i+1, len(chunks))
-		log.Printf("TTS: Book %d chunk %d/%d completed", job.BookID, i+1, len(chunks))
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		g.queue.UpdateStatus(job.ID, JobStatusFailed, "Cancelled")
+		meta.Status = "failed"
+		meta.Error = "Cancelled"
+		g.cache.SaveMetadata(job.BookID, meta)
+		return
+	default:
 	}
 
 	// Mark as completed
@@ -288,28 +354,45 @@ func (g *Generator) processJob(ctx context.Context, job *Job) {
 	log.Printf("TTS: Book %d completed (%d chunks)", job.BookID, len(chunks))
 }
 
-// generateChunk generates audio for a single text chunk using piper
+// getTTSBinaryPath finds the sopds-tts binary
+func getTTSBinaryPath() string {
+	// First, try next to the main executable
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		candidate := filepath.Join(dir, "sopds-tts")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	// Fall back to PATH
+	if path, err := exec.LookPath("sopds-tts"); err == nil {
+		return path
+	}
+	// Default - assume it's in current directory or PATH
+	return "sopds-tts"
+}
+
+// generateChunk generates audio for a single text chunk using sopds-tts subprocess
+// Each chunk runs in a separate process, guaranteeing complete memory release
 func (g *Generator) generateChunk(text, modelPath, outputPath string) error {
 	// Ensure output directory exists
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
+		return fmt.Errorf("failed to create output dir: %w", err)
 	}
 
-	// Build piper command
-	// piper --model <model> --output_file <output> < text
-	cmd := exec.Command(g.config.PiperPath,
-		"--model", modelPath,
-		"--output_file", outputPath,
-	)
+	// Run sopds-tts as subprocess
+	// Usage: sopds-tts <model_path> <output_path> (text via stdin)
+	ttsBinary := getTTSBinaryPath()
+	log.Printf("TTS: Spawning subprocess: %s %s %s (text len: %d)", ttsBinary, modelPath, outputPath, len(text))
 
-	// Pass text via stdin
+	cmd := exec.Command(ttsBinary, modelPath, outputPath)
 	cmd.Stdin = strings.NewReader(text)
 
-	// Capture stderr for error messages
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("piper failed: %v, output: %s", err, string(output))
+		return fmt.Errorf("sopds-tts failed: %w, output: %s", err, string(output))
 	}
+	log.Printf("TTS: Subprocess completed: %s", outputPath)
 
 	// Verify output file was created
 	if _, err := os.Stat(outputPath); err != nil {
