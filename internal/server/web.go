@@ -80,6 +80,7 @@ type PageData struct {
 	CurrentPath string
 	HasEPUB     bool
 	HasMOBI     bool
+	HasTTS      bool // TTS enabled and available
 	// Search scope - if set, search only within this context
 	ScopeAuthorID  int64
 	ScopeGenreID   int64
@@ -110,6 +111,7 @@ func (s *Server) newPageData(r *http.Request, title string) PageData {
 		OPDSPrefix: s.config.Server.OPDSPrefix,
 		HasEPUB:    true, // Internal converter always available
 		HasMOBI:    checkEbookConvert(s.config.Converters.FB2ToMOBI),
+		HasTTS:     s.ttsGenerator != nil,
 		Lang:       lang,
 		Languages:  i18n.GetSupportedLanguages(),
 		Auth:       GetAuthInfo(r),
@@ -121,6 +123,7 @@ func (s *Server) addI18n(pd *PageData, r *http.Request) {
 	pd.Lang = getLang(r)
 	pd.Languages = i18n.GetSupportedLanguages()
 	pd.Auth = GetAuthInfo(r)
+	pd.HasTTS = s.ttsGenerator != nil
 }
 
 func getPageSize(r *http.Request) int {
@@ -2359,9 +2362,12 @@ func (s *Server) handleTTSPlayer(w http.ResponseWriter, r *http.Request) {
 	// Check for active job
 	var jobStatus string
 	var jobProgress float64
+	var chunksDone, chunksTotal int
 	if job := s.ttsGenerator.GetJobByBook(id); job != nil {
 		jobStatus = string(job.Status)
 		jobProgress = job.Progress
+		chunksDone = job.ChunksDone
+		chunksTotal = job.ChunksTotal
 	}
 
 	pd := s.newPageData(r, book.Title+" - TTS")
@@ -2377,6 +2383,8 @@ func (s *Server) handleTTSPlayer(w http.ResponseWriter, r *http.Request) {
 		Chunks      []ttsChunkData
 		JobStatus   string
 		JobProgress float64
+		ChunksDone  int
+		ChunksTotal int
 		BackURL     string
 		TTSEnabled  bool
 	}{
@@ -2391,6 +2399,8 @@ func (s *Server) handleTTSPlayer(w http.ResponseWriter, r *http.Request) {
 		Chunks:      chunks,
 		JobStatus:   jobStatus,
 		JobProgress: jobProgress,
+		ChunksDone:  chunksDone,
+		ChunksTotal: chunksTotal,
 		BackURL:     fmt.Sprintf("%s/", s.config.Server.WebPrefix),
 		TTSEnabled:  true,
 	}
@@ -2474,6 +2484,9 @@ func (s *Server) renderTTSPlayerTemplate(w http.ResponseWriter, data interface{}
 	tmpl, err := template.New("tts_player").Funcs(template.FuncMap{
 		"t": func(key string) string {
 			return i18n.T(lang, key)
+		},
+		"mul": func(a, b float64) float64 {
+			return a * b
 		},
 	}).Parse(ttsPlayerTemplate)
 	if err != nil {
@@ -2722,7 +2735,15 @@ var ttsPlayerTemplate = `<!DOCTYPE html>
                 <div class="progress-bar">
                     <div class="progress-fill" id="genProgress" style="width: {{printf "%.0f" (mul .JobProgress 100)}}%"></div>
                 </div>
-                <div class="progress-text" id="genText">{{printf "%.0f" (mul .JobProgress 100)}}%</div>
+                <div class="progress-text">
+                    <span id="genText">{{printf "%.0f" (mul .JobProgress 100)}}%</span>
+                    {{if gt .ChunksTotal 0}}
+                    <span id="genChunks" style="margin-left: 10px; opacity: 0.7;">({{.ChunksDone}}/{{.ChunksTotal}} chunks)</span>
+                    {{else}}
+                    <span id="genChunks" style="margin-left: 10px; opacity: 0.7;"></span>
+                    {{end}}
+                </div>
+                <div class="progress-text" id="genETA" style="font-size: 0.9em; opacity: 0.6; margin-top: 5px;"></div>
             </div>
         </div>
 
@@ -2815,7 +2836,8 @@ var ttsPlayerTemplate = `<!DOCTYPE html>
         return m + ':' + (s < 10 ? '0' : '') + s;
     }
 
-    // Audio events
+    // Audio events (only if player elements exist)
+    {{if .IsComplete}}
     audio.addEventListener('timeupdate', () => {
         const progress = (audio.currentTime / audio.duration) * 100;
         document.getElementById('progressFill').style.width = progress + '%';
@@ -2833,6 +2855,7 @@ var ttsPlayerTemplate = `<!DOCTYPE html>
             document.getElementById('playBtn').innerHTML = '<i class="fas fa-play"></i>';
         }
     });
+    {{end}}
 
     // Generate TTS
     function generateTTS() {
@@ -2848,16 +2871,64 @@ var ttsPlayerTemplate = `<!DOCTYPE html>
 
     // Poll status if generating
     {{if or (eq .JobStatus "queued") (eq .JobStatus "processing")}}
+    let genStartTime = Date.now();
+    let lastChunksDone = 0;
+    let chunkTimes = [];
+    const initialStatus = '{{.JobStatus}}';
+
     setInterval(() => {
         fetch(webPrefix + '/book/' + bookID + '/tts/status')
             .then(r => r.json())
             .then(data => {
                 if (data.is_complete) {
                     location.reload();
+                } else if (data.job && data.job.status !== initialStatus) {
+                    // Status changed (e.g., queued -> processing), reload to show new UI
+                    location.reload();
                 } else if (data.job && data.job.status === 'processing') {
                     const pct = Math.round(data.job.progress * 100);
-                    document.getElementById('genProgress').style.width = pct + '%';
-                    document.getElementById('genText').textContent = pct + '%';
+                    const done = data.job.chunks_done || 0;
+                    const total = data.job.chunks_total || 0;
+
+                    const progressEl = document.getElementById('genProgress');
+                    const textEl = document.getElementById('genText');
+                    if (progressEl) progressEl.style.width = pct + '%';
+                    if (textEl) textEl.textContent = pct + '%';
+
+                    // Show chunks done/total
+                    const chunksEl = document.getElementById('genChunks');
+                    if (chunksEl && total > 0) {
+                        chunksEl.textContent = '(' + done + '/' + total + ' chunks)';
+                    }
+
+                    // Track chunk completion times for ETA
+                    if (done > lastChunksDone) {
+                        const now = Date.now();
+                        if (lastChunksDone > 0) {
+                            const elapsed = now - genStartTime;
+                            chunkTimes.push(elapsed / done);
+                        }
+                        lastChunksDone = done;
+                        genStartTime = now - (chunkTimes.length > 0 ? chunkTimes[chunkTimes.length-1] * done : 0);
+                    }
+
+                    // Calculate and show ETA
+                    const etaEl = document.getElementById('genETA');
+                    if (etaEl && done > 0 && total > done) {
+                        const elapsed = Date.now() - genStartTime;
+                        const avgTimePerChunk = elapsed / done;
+                        const remaining = (total - done) * avgTimePerChunk;
+                        const mins = Math.ceil(remaining / 60000);
+                        if (mins > 60) {
+                            const hours = Math.floor(mins / 60);
+                            const remMins = mins % 60;
+                            etaEl.textContent = 'ETA: ~' + hours + 'h ' + remMins + 'm';
+                        } else {
+                            etaEl.textContent = 'ETA: ~' + mins + ' min';
+                        }
+                    } else if (etaEl && done === total && total > 0) {
+                        etaEl.textContent = 'Finalizing...';
+                    }
                 }
             });
     }, 2000);
@@ -4051,6 +4122,7 @@ function goToPage(page) {
         <div class="book-actions">
             {{if .IsAudiobook}}<a href="{{$.WebPrefix}}/audio/{{.ID}}" class="btn btn-primary"><i class="fas fa-headphones"></i> {{if gt .TrackCount 1}}{{.TrackCount}} {{t "audio.tracks"}}{{else}}{{t "audio.book"}}{{end}}</a>{{else}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/download" class="btn btn-primary"><i class="fas fa-download"></i> {{.Format}}</a>{{end}}
             {{if or (eq .Format "FB2") (eq .Format "EPUB") (eq .Format "MOBI")}}<a href="{{$.WebPrefix}}/read/{{.ID}}" class="btn btn-info"><i class="fas fa-book-open"></i> {{t "reader.read"}}</a>{{end}}
+            {{if and $.HasTTS (eq .Format "FB2")}}<a href="{{$.WebPrefix}}/book/{{.ID}}/tts" class="btn btn-info"><i class="fas fa-volume-up"></i> {{t "tts.listen"}}</a>{{end}}
             {{if and $.HasEPUB .CanEPUB}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/epub" class="btn btn-success"><i class="fas fa-file-arrow-down"></i> EPUB</a>{{end}}
             {{if and $.HasMOBI .CanMOBI}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/mobi" class="btn btn-warning"><i class="fas fa-file-arrow-down"></i> MOBI</a>{{end}}
             {{if .OnBookshelf}}<span class="btn btn-secondary disabled"><i class="fas fa-check"></i> Added</span>{{else}}<a href="#" onclick="return bookshelfAction(this, '{{$.WebPrefix}}/bookshelf/add/{{.ID}}')" class="btn btn-secondary"><i class="fas fa-bookmark"></i> {{t "books.addshelf"}}</a>{{end}}
@@ -5190,6 +5262,7 @@ function downloadSelected() {
         <div class="book-actions">
             {{if .IsAudiobook}}<a href="{{$.WebPrefix}}/audio/{{.ID}}" class="btn btn-primary"><i class="fas fa-headphones"></i> {{if gt .TrackCount 1}}{{.TrackCount}} {{t "audio.tracks"}}{{else}}{{t "audio.book"}}{{end}}</a>{{else}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/download" class="btn btn-primary"><i class="fas fa-download"></i> {{.Format}}</a>{{end}}
             {{if or (eq .Format "FB2") (eq .Format "EPUB") (eq .Format "MOBI")}}<a href="{{$.WebPrefix}}/read/{{.ID}}" class="btn btn-info"><i class="fas fa-book-open"></i> {{t "reader.read"}}</a>{{end}}
+            {{if and $.HasTTS (eq .Format "FB2")}}<a href="{{$.WebPrefix}}/book/{{.ID}}/tts" class="btn btn-info"><i class="fas fa-volume-up"></i> {{t "tts.listen"}}</a>{{end}}
             {{if and $.HasEPUB .CanEPUB}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/epub" class="btn btn-success"><i class="fas fa-file-arrow-down"></i> EPUB</a>{{end}}
             {{if and $.HasMOBI .CanMOBI}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/mobi" class="btn btn-warning"><i class="fas fa-file-arrow-down"></i> MOBI</a>{{end}}
             {{if or (gt .DuplicateCount 0) (gt .DuplicateOf 0)}}<a href="{{$.WebPrefix}}/duplicates/{{.ID}}" class="btn btn-secondary"><i class="fas fa-copy"></i> {{t "books.duplicates"}}{{if gt .DuplicateCount 0}} ({{.DuplicateCount}}){{end}}</a>{{end}}

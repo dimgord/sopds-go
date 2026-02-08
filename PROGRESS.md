@@ -5,6 +5,181 @@
 
 ---
 
+### Revision 51 - 2026-02-08
+**Bugfix: Ukrainian TTS - Multi-Speaker Model & Language Code Matching:**
+
+Three issues fixed for Ukrainian book TTS generation:
+
+1. **Multi-speaker ONNX model support** (`Missing Input: sid` error)
+   - `uk_UA-ukrainian_tts-medium` has 3 speakers (lada, mykyta, tetiana)
+   - ONNX model requires `sid` input tensor but we only sent 3 inputs
+   - Added `sid` tensor to `runInference()` when `num_speakers > 1`
+   - Added `SpeakerIDMap` and `speakerID` field to Piper struct
+   - ONNX session now includes "sid" in input names for multi-speaker models
+
+2. **Text phoneme type support** (model uses raw text, not IPA)
+   - `uk_UA-ukrainian_tts-medium` has `phoneme_type: "text"`
+   - Its `phoneme_id_map` contains Ukrainian letters directly, not IPA symbols
+   - `textToPhonemes()` now skips espeak-ng for "text" type models
+   - Returns lowercase text directly for phoneme ID mapping
+
+3. **Language code normalization** (`uk-UA` not matching config key `uk`)
+   - Book 211236 had lang `uk-UA` in FB2 metadata, config key was `uk`
+   - `GetVoice()` now tries base language code (strips `-UA`, `-US` etc.)
+   - Ukrainian books no longer fall back to English voice
+
+**Files Modified:**
+- `internal/tts/piper.go`:
+  - Added `PhonemeType`, `SpeakerIDMap` to PiperConfig
+  - Added `speakerID` field to Piper struct
+  - `NewPiper()` configures "sid" input name and default speaker ID for multi-speaker models
+  - `textToPhonemes()` returns raw lowercase text for "text" phoneme type
+  - `runInference()` adds `sid` tensor when `num_speakers > 1`
+- `internal/tts/generator.go`:
+  - `GetVoice()` tries base language code when exact match fails
+
+---
+
+### Revision 50 - 2026-01-30
+**Bugfix: Text Chunk Splitting UTF-8 Bug (Root Cause of OOM):**
+- Found root cause: chunk 7 was 16,551 chars instead of 5,000 due to UTF-8 split bug
+- Bug in `findSplitPoint()`: when UTF-8 boundary search backed up to 0, returned `len(text)` (entire remaining text)
+- Fix: Instead of returning entire text, find first valid rune start after original position
+- This was causing ONNX to allocate massive memory for oversized chunks, leading to OOM
+
+**Files Modified:**
+- `internal/tts/extractor.go`:
+  - Fixed `findSplitPoint()` to not return entire text length on UTF-8 boundary failure
+  - Now finds next valid rune start instead of returning all remaining text
+- `internal/tts/generator.go`:
+  - Reverted to normal chunk ordering
+  - Re-enabled parallel processing
+
+---
+
+### Revision 49 - 2026-01-30
+**TTS Debug Logging and ONNX Isolation:**
+- Added debug logging to generateChunk to trace subprocess execution
+- Removed ONNX initialization from main sopds process entirely
+- IsAvailable() now just checks for sopds-tts binary and models dir
+- Main sopds process has zero ONNX/native TTS code loaded
+
+**Files Modified:**
+- `internal/tts/generator.go`:
+  - Added log statements in generateChunk for subprocess tracking
+  - IsAvailable() no longer calls initORT()
+
+---
+
+### Revision 48 - 2026-01-30
+**TTS Subprocess Architecture (Memory Leak Fix):**
+- Created separate `sopds-tts` binary for TTS chunk generation
+- Each chunk runs in its own subprocess, guaranteeing complete memory release
+- Re-enabled parallel chunk processing (subprocesses are independent)
+- Supports multiple simultaneous users (each request spawns separate processes)
+
+**New Files:**
+- `cmd/sopds-tts/main.go`: Standalone TTS binary
+  - Takes model path and output path as args, text via stdin
+  - Creates Piper, generates audio, exits (releasing all memory)
+
+**Files Modified:**
+- `internal/tts/generator.go`:
+  - Added `getTTSBinaryPath()` to locate sopds-tts binary
+  - `generateChunk()` now spawns sopds-tts subprocess instead of native Piper
+  - Re-enabled parallel processing with configurable workers
+- `Taskfile.yml`: Build task now builds both sopds and sopds-tts
+
+---
+
+### Revision 47 - 2026-01-30
+**TTS Memory Leak Investigation:**
+- Reverted parallel chunk processing to single-threaded (numWorkers=1)
+- Added `debug.FreeOSMemory()` for aggressive memory release
+- Added explicit nil assignments in `Piper.Close()` to help GC
+- Issue: ONNX runtime (onnxruntime_go) appears to leak native memory
+- TODO: If memory issues persist, implement subprocess-based TTS worker
+
+**Files Modified:**
+- `internal/tts/generator.go`: Single worker, added debug.FreeOSMemory()
+- `internal/tts/piper.go`: Clear all references in Close()
+
+---
+
+### Revision 46 - 2026-01-30
+**Bugfix: TTS Status Transition Not Updating UI:**
+- Fixed page not updating when TTS status changes from "queued" to "processing"
+- Added `initialStatus` variable to track page's initial state
+- Page now reloads when polled status differs from initial status
+
+**Files Modified:**
+- `internal/server/web.go`: Added status change detection in TTS polling JavaScript
+
+---
+
+### Revision 45 - 2026-01-30
+**Enhancement: Parallel TTS Chunk Generation:**
+- Chunk generation now runs in parallel using worker pool pattern
+- Number of parallel workers controlled by `tts.workers` config (default: 2)
+- Uses atomic counter for thread-safe progress tracking
+- Graceful cancellation support - workers check context and exit early
+- First error stops all workers and reports failure
+
+**Files Modified:**
+- `internal/tts/generator.go`:
+  - Added `sync/atomic` import
+  - Replaced sequential chunk loop with parallel worker pool
+  - Workers pull from task channel, process independently
+  - Progress updated atomically as each chunk completes
+
+---
+
+### Revision 44 - 2026-01-30
+**Bugfix: TTS Memory Leak (OOM Kill):**
+- Fixed massive memory leak causing OOM kill after ~7 chunks (58GB memory usage)
+- Root cause: Cached ONNX/Piper sessions accumulate memory across inference runs
+- Solution: Create fresh Piper instance for each chunk, close immediately after use
+- Added explicit `runtime.GC()` call after closing each Piper to release ONNX memory
+- Removed unused Piper caching code (`getPiper`, `closePipers`, pipers map)
+
+**Files Modified:**
+- `internal/tts/generator.go`:
+  - Removed `pipers` map and `pipersMu` mutex from Generator struct
+  - Removed `getPiper()` and `closePipers()` methods
+  - `generateChunk()` now creates fresh Piper per chunk with Close() + GC after each
+
+---
+
+### Revision 43 - 2026-01-30
+**Bugfix: TTS Player JavaScript Errors:**
+- Fixed "style is undefined" errors in TTS player page
+- Root cause: JavaScript runs unconditionally but DOM elements only exist in specific template branches
+- Fix 1: Added null checks for `genProgress`/`genText` in status polling (queued→processing transition)
+- Fix 2: Wrapped audio event listeners in `{{if .IsComplete}}` template condition
+  - `timeupdate`, `loadedmetadata`, `ended` listeners now only register when player exists
+
+**Files Modified:**
+- `internal/server/web.go`:
+  - Added element existence checks in TTS polling JavaScript
+  - Wrapped audio event listeners in IsComplete template condition
+
+---
+
+### Revision 42 - 2026-01-30
+**Enhancement: TTS Player Progress Display:**
+- Added chunk progress display to TTS generation status bar
+- Shows "X/Y chunks" alongside percentage during generation
+- Added ETA calculation based on average chunk processing time
+- ETA displays minutes or hours format depending on remaining time
+
+**Files Modified:**
+- `internal/server/web.go`:
+  - Added `ChunksDone`, `ChunksTotal` fields to TTS player template data
+  - Updated HTML template to show initial chunk counts
+  - Enhanced JavaScript polling to update chunks and calculate ETA
+
+---
+
 ### Revision 41 - 2026-01-30
 **Feature: TTS (Text-to-Speech) with Piper:**
 - Added text-to-speech capability for FB2 ebooks using piper TTS engine
