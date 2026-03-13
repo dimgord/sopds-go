@@ -67,6 +67,10 @@ sopds-go/
 │   └── server/            # HTTP server with chi router
 │       ├── server.go      # Router setup, middleware
 │       ├── handlers.go    # OPDS API handlers
+├── sopds-tts-rs/              # Rust TTS subprocess (GPU via CUDA)
+│   ├── src/main.rs            # ONNX inference + espeak-ng + WAV encoding
+│   ├── Cargo.toml             # ort 2.0.0-rc.10, serde, hound
+│   └── flake.nix              # Nix dev shell (ORT 1.22 + cuDNN 9.8 + sm_61)
 │       └── web.go         # Web UI handlers and templates
 └── config.yaml            # Main configuration file
 ```
@@ -379,6 +383,20 @@ tts:
 - ONNX Runtime shared library (`libonnxruntime.so`)
 - espeak-ng (for IPA-based voice models)
 - Piper voice model files (`.onnx` + `.onnx.json`)
+
+**Rust TTS alternative** (`sopds-tts-rs/`):
+
+Drop-in replacement for `sopds-tts` with CUDA GPU acceleration. Same CLI
+interface (`sopds-tts-rs <model> <output>`, text on stdin).
+
+```bash
+cd sopds-tts-rs
+TMPDIR=/home/dimgord/tmp nix develop ./   # first time: ~15-30 min (ORT source build)
+cargo build --release
+```
+
+Nix flake uses two nixpkgs: latest (Rust toolchain) + pinned June 2025 (cuDNN 9.8
+for Pascal/sm_61 GPU support). See `sopds-tts-rs/README.md` for details.
 
 ---
 
