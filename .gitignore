@@ -1,11 +1,13 @@
 config.yaml
 fb2converters
-go.mod
-go.sum
 *.lst
-zipdupes
+/target
+**/target/
 /sopds
 /sopds-tts
+/sopds-tts-rs
+/zipdupes
+/zipdupes-rs
 sopds_backup.dump*
 tags
 .task/
