@@ -4,34 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Rules
 
-**CRITICAL: ALWAYS DOCUMENT CHANGES IMMEDIATELY!**
-- After ANY code changes, update PROGRESS.md with what was changed
-- Update CLAUDE.md if architecture or major features change
-- Do NOT wait for user to ask - document IMMEDIATELY after implementation
-- Include: files modified, new methods/functions, bug fixes, performance changes
-- NO EXCUSES - if you wrote code, document it in the same response
-- This is NON-NEGOTIABLE - user should NEVER have to remind you
+**Always update PROGRESS.md in the same response as any code change.** Don't wait to be asked.
+
+**Why:** PROGRESS.md is the canonical change log for this project — revision-numbered, dated, append-only. It's what the maintainer reads to reconstruct *why* code looks the way it does months later. Git history alone is too coarse; commit messages don't carry the diagnostic detail (root-cause analysis, what was tried, which files moved). If you skip the entry, that context is lost.
+
+**Format** (see `PROGRESS.md` revisions 48–51 for good templates):
+- New entry at the **top** of the file, numbered `### Revision N - YYYY-MM-DD` with a bold one-line title
+- A short prose summary of *what changed and why*, including root cause if it was a bug
+- A `**Files Modified:**` section listing each touched file with bullet points naming the specific functions/fields changed
+- For multi-issue changes, number them (1, 2, 3) with a short heading per issue
+
+**Also update CLAUDE.md** when architecture, route layout, config schema, or major features change — not for ordinary bug fixes.
 
 ---
 
 ## Project Overview
 
-Simple OPDS Catalog (SOPDS) is an OPDS (Open Publication Distribution System) server for managing and serving e-book collections. It provides OPDS/Web catalog access, automatic book scanning, metadata extraction from FB2 files, and format conversion.
+Simple OPDS Catalog (SOPDS) is an OPDS (Open Publication Distribution System) server for managing and serving e-book collections. It provides OPDS/Web catalog access, automatic book scanning, metadata extraction from FB2 files, and format conversion. Backed by PostgreSQL.
 
-**Two implementations exist:**
-- **Python version** (`py/`) - Original, uses MySQL
-- **Go version** (`sopds-go/`) - Rewrite, uses PostgreSQL
-
----
-
-## Go Version (`sopds-go/`)
-
-### Architecture
+## Architecture
 
 ```
 sopds-go/
 ├── cmd/sopds/main.go      # CLI entry point with cobra
 ├── cmd/sopds-tts/main.go  # TTS subprocess (ONNX memory isolation)
+├── cmd/zipdupes/main.go   # Standalone utility: find duplicate ZIPs in library
 ├── internal/
 │   ├── config/            # YAML configuration parser
 │   ├── converter/         # FB2 to EPUB/MOBI conversion (pure Go)
@@ -42,7 +39,11 @@ sopds-go/
 │   │   ├── genre/         # Genre entity
 │   │   ├── series/        # Series entity
 │   │   ├── catalog/       # Catalog entity
+│   │   ├── user/          # User entity
 │   │   └── repository/    # Repository interfaces
+│   ├── i18n/              # Internationalization
+│   │   ├── i18n.go        # Loader, language detection, supportedLanguages list
+│   │   └── locales/       # Per-language YAML translation files
 │   ├── infrastructure/
 │   │   └── persistence/   # GORM implementations
 │   │       ├── database.go      # GORM connection + migrations
@@ -57,7 +58,8 @@ sopds-go/
 │   │   ├── scanner.go     # Main scanner logic
 │   │   ├── fb2parser.go   # FB2 metadata extraction
 │   │   ├── audioparser.go # Audio metadata extraction (ID3, M4A, FLAC, OGG)
-│   │   └── audiobookgrouper.go # Multi-file audiobook grouping
+│   │   ├── audiobookgrouper.go # Multi-file audiobook grouping
+│   │   └── inxparser.go   # Nokia INX index parser (AWB audiobook durations)
 │   ├── tts/               # Text-to-speech with piper ONNX models
 │   │   ├── piper.go       # ONNX inference, espeak-ng phonemization, WAV encoding
 │   │   ├── extractor.go   # FB2 text extraction and chunking
@@ -75,7 +77,7 @@ sopds-go/
 └── config.yaml            # Main configuration file
 ```
 
-### Build & Run
+## Build & Run
 
 **IMPORTANT: The executable name is `sopds`, NOT `sopdsgo`!**
 
@@ -99,7 +101,46 @@ sudo systemctl status sopds.service
 ./sopds migrate       # Run database migrations
 ```
 
-### Taskfile (Recommended)
+## Testing
+
+```bash
+# Run everything
+go test ./...
+task test                                   # equivalent
+
+# Single package
+go test ./internal/scanner/
+go test -v ./internal/scanner/              # with per-test output
+
+# Single test by name (uses Go regex against TestXxx names)
+go test -run TestFB2DataToEPUB ./internal/converter/
+go test -run TestParseFB2 -v ./internal/scanner/
+
+# Race detector (recommended when touching scanner, tts, or queue code)
+go test -race ./...
+
+# Benchmarks
+go test -bench=. ./internal/converter/
+```
+
+Test files live next to the code (`*_test.go` in each package). `test_baseline.txt` at repo root is a snapshot of expected output from `go test ./...` — diff against it to spot regressions in test suite shape (e.g., a test silently disappearing).
+
+## Utility: zipdupes
+
+`cmd/zipdupes/` is a standalone diagnostic CLI for the book library. It scans directories of `.zip` archives and reports overlap between them — useful when triaging duplicate book collections before deciding what to delete.
+
+```bash
+go build -o zipdupes ./cmd/zipdupes
+
+zipdupes <dir1> [dir2]...        # Summary of duplicate file counts per ZIP
+zipdupes -l <dir>                # List all files inside each ZIP
+zipdupes -l -o <dir>             # List only the files that are duplicates
+zipdupes -d <dir>                # Show only ZIPs fully covered by others (safe to delete)
+```
+
+Duplicates are matched by `(filename, size)` tuples across all ZIPs in the scanned directories. Not built by default — build manually when needed. Does not touch the database.
+
+## Taskfile (Recommended)
 
 Install [Task](https://taskfile.dev) and use `Taskfile.yml` for common operations:
 
@@ -132,7 +173,7 @@ task lint             # Run vet and fmt
 task clean            # Remove artifacts
 ```
 
-### Database Setup
+## Database Setup
 
 ```bash
 # Create PostgreSQL database
@@ -146,7 +187,7 @@ psql -U postgres -f init.sql
 ./sopds migrate
 ```
 
-### Database Backup & Restore
+## Database Backup & Restore
 
 ```bash
 # Backup (custom format - recommended)
@@ -168,7 +209,7 @@ psql -U sopds -h localhost -d sopds < sopds_backup.sql
 dropdb -U sopds sopds && createdb -U sopds sopds && pg_restore -U sopds -d sopds sopds_backup.dump
 ```
 
-### MySQL to PostgreSQL Migration
+## MySQL to PostgreSQL Migration
 
 Import data from existing MySQL SOPDS database:
 
@@ -180,7 +221,7 @@ Import data from existing MySQL SOPDS database:
 ./sopds import-mysql --mysql-host localhost --mysql-user sopds --mysql-password sopds --mysql-db sopds --clear
 ```
 
-### Database Maintenance
+## Database Maintenance
 
 ```bash
 # Check table statistics (dead tuples indicate need for vacuum)
@@ -212,7 +253,7 @@ PGPASSWORD=sopds psql -U sopds -h localhost -d sopds -c "\di+ books*"
 - Run `VACUUM ANALYZE` after large imports or scans if queries become slow
 - Keep `scanner.workers` at 4-8; more workers cause I/O saturation and lock contention
 
-### Configuration
+## Configuration
 
 Main config: `config.yaml`
 
@@ -275,7 +316,7 @@ converters:
   temp_dir: /tmp
 ```
 
-### Web Interface
+## Web Interface
 
 Access at `http://localhost:8081/web/`
 
@@ -311,7 +352,7 @@ Features:
 4. Add display name to `languageNames` map in same file
 5. Rebuild the application
 
-### OPDS Interface
+## OPDS Interface
 
 Access at `http://localhost:8081/opds/`
 
@@ -321,7 +362,7 @@ Compatible with OPDS readers like:
 - Aldiko
 - Calibre
 
-### Format Conversion
+## Format Conversion
 
 **FB2 to EPUB** - Pure Go implementation (no external dependencies)
 - Parses FB2 XML structure
@@ -336,7 +377,7 @@ sudo dnf install calibre    # Fedora
 sudo apt install calibre    # Ubuntu/Debian
 ```
 
-### Text-to-Speech (TTS)
+## Text-to-Speech (TTS)
 
 Generates audio from FB2 ebooks using [piper](https://github.com/rhasspy/piper) ONNX voice models.
 
@@ -400,7 +441,7 @@ for Pascal/sm_61 GPU support). See `sopds-tts-rs/README.md` for details.
 
 ---
 
-### Audiobook Support
+## Audiobook Support
 
 Supports audio formats: MP3, M4B, M4A, FLAC, OGG, OPUS, AWB
 
@@ -476,82 +517,37 @@ Supports audio formats: MP3, M4B, M4A, FLAC, OGG, OPUS, AWB
 - Requires ffmpeg with libmp3lame; path configurable via `converters.ffmpeg`
 - INX parser: `internal/scanner/inxparser.go`
 
-### API Endpoints
+## API Endpoints
 
-**OPDS (Atom feeds):**
-- `GET /opds/` - Main menu
-- `GET /opds/catalogs` - Browse by folders
-- `GET /opds/catalogs/{id}` - Folder contents
-- `GET /opds/authors` - Authors list
-- `GET /opds/authors/{id}` - Author's books
-- `GET /opds/genres` - Genres list
-- `GET /opds/genres/{id}` - Genre's books
-- `GET /opds/series` - Series list
-- `GET /opds/series/{id}` - Series books
-- `GET /opds/new` - New books
-- `GET /opds/search?q=query` - Search
-- `GET /opds/book/{id}/download` - Download book
-- `GET /opds/book/{id}/cover` - Book cover
-- `GET /opds/book/{id}/epub` - Convert to EPUB
-- `GET /opds/book/{id}/mobi` - Convert to MOBI
+The full route table lives in `internal/server/server.go` — grep `r.Get(`, `r.Post(`, `r.Route(` there for the source of truth. The notes below cover the parts that aren't obvious from reading the routes.
 
-**Authentication API (rate-limited):**
-- `GET /api/auth/check-username?username=x` - Check username availability (150/min)
-- `GET /api/auth/check-email?email=x` - Check email availability (150/min)
-- `GET /api/auth/check-password?password=x` - Validate password strength (no limit)
+**`GET /web/search` query parameters** (the language/scope distinction is the trap):
+- `q=title` — search in book title
+- `author=name` — search in author first+last name
+- `desc=1` — also search inside annotation text
+- `lang=uk` — **exact** language match (used for scoped search within a language page)
+- `lang_pattern=uk` — language **ILIKE pattern** match (used by the free filter dropdown)
+- `genre_pattern=comedy`, `series_pattern=Silo` — ILIKE patterns
+- `author_id=…`, `genre_id=…`, `series_id=…`, `catalog_id=…` — hidden fields injected when searching from a scoped page (e.g. an author's detail page); restrict results to that entity
 
-**Auth Pages:**
-- `GET /web/landing` - Landing page (unauthenticated)
-- `GET|POST /web/login` - Login page
-- `GET|POST /web/register` - Registration page
-- `GET /web/logout` - Logout (clears JWT cookie)
-- `GET|POST /web/forgot-password` - Forgot password (5/hour limit)
-- `GET|POST /web/reset-password?token=x` - Reset password with token
-- `GET /web/verify-email?token=x` - Verify email
-- `POST /web/guest` - Continue as guest
+**Auth API rate limits** (defined in `server.go`, may surprise you):
+- `GET /api/auth/check-username` — 150/min
+- `GET /api/auth/check-email` — 150/min
+- `GET /api/auth/check-password` — no limit (no DB lookup)
+- `POST /web/forgot-password` — 5/hour per IP
 
-**Web UI:**
-- `GET /web/` - Home page
-- `GET /web/search` - Search with parameters:
-  - `q=title` - Search in book title
-  - `author=name` - Search in author first+last name
-  - `desc=1` - Include annotation in title search
-  - `lang=uk` - Filter by language (exact match, for scoped search)
-  - `lang_pattern=uk` - Filter by language pattern (ILIKE)
-  - `genre_pattern=comedy` - Filter by genre name pattern
-  - `series_pattern=Silo` - Filter by series name pattern
-  - `author_id=123` - Scope to author (hidden field)
-  - `genre_id=456` - Scope to genre (hidden field)
-  - `series_id=789` - Scope to series (hidden field)
-  - `catalog_id=101` - Scope to catalog (hidden field)
-- `GET /web/authors` - Authors
-- `GET /web/authors/{id}` - Author's books
-- `GET /web/genres` - Genres
-- `GET /web/genres/{id}` - Genre's books
-- `GET /web/series` - Series
-- `GET /web/series/{id}` - Series books
-- `GET /web/languages` - Languages
-- `GET /web/languages/{lang}` - Language's books
-- `GET /web/new` - New books
-- `GET /web/audio` - Audiobooks browser with filters
-- `GET /web/audio/{id}` - Audiobook detail with track list, checkboxes for selection
-- `GET /web/audio/{id}/track?file=path` - Download individual track from archive
-- `GET /web/catalogs` - Catalogs
-- `GET /web/catalogs/{id}` - Catalog contents
-- `GET /web/duplicates/{id}` - View all duplicates of a book
-- `GET /web/bookshelf` - User's bookshelf
-- `POST /web/bookshelf/add/{id}` - Add book to bookshelf
-- `POST /web/bookshelf/remove/{id}` - Remove book from bookshelf
-- `GET /web/read/{id}` - Web-based reader for FB2/EPUB/MOBI books
-- `GET /web/help` - Help page (supports `?lang=en|uk`)
+**Other route conventions:**
+- `/opds/...` and `/web/...` are parallel: any browse view (authors, genres, series, catalogs, languages, new, search, audio) exists at both prefixes
+- `/web/audio/{id}/track?file=path` streams a single track *out of an archive* without extracting it; `path` is the archive-internal path
+- `/web/duplicates/{id}` shows every book that links to the given book via `duplicate_of`
 
-### Requirements
+## Requirements
 
 - Go 1.21+
 - PostgreSQL 12+
 - Calibre (optional, for MOBI conversion)
 
-### Dependencies
+## Dependencies
 
 ```
 github.com/go-chi/chi/v5      # HTTP router
@@ -566,42 +562,3 @@ github.com/golang-jwt/jwt/v5  # JWT authentication
 github.com/bodgit/sevenzip    # 7z archive support
 github.com/yalue/onnxruntime_go # ONNX Runtime bindings (TTS inference)
 ```
-
----
-
-## Python Version (`py/`) - Legacy
-
-### Core Components
-- **sopdsd.py** - Main daemon entry point
-- **sopdscfg.py** - Configuration parser (`conf/sopds.conf`)
-- **sopdsdb.py** - MySQL database layer
-- **sopdscan.py** - Book collection scanner
-- **sopdsparse.py** / **fb2parse.py** - FB2 metadata extraction
-- **sopdserve.py** - Built-in HTTP OPDS server
-- **sopds.cgi** / **sopds.wsgi** - CGI/WSGI entry points
-
-### Commands
-
-```bash
-cd py
-./sopdsd.py start     # Start daemon
-./sopdsd.py stop      # Stop daemon
-./sopdsd.py restart   # Restart daemon
-./sopdsd.py status    # Check status
-./sopds-scan.py       # Manual scan
-```
-
-### MySQL Database Setup
-
-```bash
-mysql -uroot -p mysql
-> CREATE DATABASE IF NOT EXISTS sopds DEFAULT CHARSET=utf8;
-> GRANT ALL ON sopds.* TO 'sopds'@'localhost' IDENTIFIED BY 'sopds';
-mysql -usopds -psopds sopds < db/tables.sql
-mysql -usopds -psopds sopds < db/genres.sql
-```
-
-### Requirements
-- Python 3.3+
-- MySQL 5+
-- mysql-connector-python3
