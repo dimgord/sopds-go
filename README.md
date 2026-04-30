@@ -2,7 +2,7 @@
 
 Go implementation of Simple OPDS Catalog Server for managing and serving e-book collections.
 
-**Version: 0.31**
+**Version: 1.1.0**
 
 ## Features
 
@@ -26,22 +26,22 @@ Go implementation of Simple OPDS Catalog Server for managing and serving e-book 
 
 ```bash
 # Build
-go build -o sopdsgo ./cmd/sopds
+go build -o sopds ./cmd/sopds
 
 # Initialize database (as postgres superuser)
 psql -U postgres -f init.sql
 
 # Create config file
-./sopdsgo init
+./sopds init
 
 # Edit config.yaml with your settings
 vim config.yaml
 
 # Run migrations
-./sopdsgo migrate
+./sopds migrate
 
 # Start server
-./sopdsgo start
+./sopds start
 ```
 
 Access the interfaces:
@@ -61,7 +61,7 @@ Access the interfaces:
 ```bash
 git clone <repository>
 cd sopds-go
-go build -o sopdsgo ./cmd/sopds
+go build -o sopds ./cmd/sopds
 ```
 
 ### Database Setup
@@ -71,7 +71,7 @@ go build -o sopdsgo ./cmd/sopds
 psql -U postgres -f init.sql
 
 # Run migrations
-./sopdsgo migrate
+./sopds migrate
 ```
 
 ### Install Calibre (for MOBI conversion)
@@ -86,7 +86,7 @@ sudo apt install calibre
 
 ## Configuration
 
-Create `config.yaml` (or run `./sopdsgo init`):
+Create `config.yaml` (or run `./sopds init`):
 
 ```yaml
 database:
@@ -138,14 +138,14 @@ converters:
 
 | Command | Description |
 |---------|-------------|
-| `./sopdsgo start` | Start the server |
-| `./sopdsgo stop` | Stop the server |
-| `./sopdsgo status` | Check server status |
-| `./sopdsgo scan` | Run manual library scan |
-| `./sopdsgo migrate` | Run database migrations |
-| `./sopdsgo init` | Create default config.yaml |
-| `./sopdsgo import-mysql` | Import from MySQL SOPDS database |
-| `./sopdsgo version` | Show version |
+| `./sopds start` | Start the server |
+| `./sopds stop` | Stop the server |
+| `./sopds status` | Check server status |
+| `./sopds scan` | Run manual library scan |
+| `./sopds migrate` | Run database migrations |
+| `./sopds init` | Create default config.yaml |
+| `./sopds import-mysql` | Import from MySQL SOPDS database |
+| `./sopds version` | Show version |
 
 ## Database Backup & Restore
 
@@ -165,7 +165,7 @@ dropdb -U sopds sopds && createdb -U sopds sopds && pg_restore -U sopds -d sopds
 Import data from existing MySQL SOPDS database:
 
 ```bash
-./sopdsgo import-mysql \
+./sopds import-mysql \
   --mysql-host localhost \
   --mysql-user sopds \
   --mysql-password sopds \
