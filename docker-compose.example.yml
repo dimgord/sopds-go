@@ -1,0 +1,53 @@
+# Example docker-compose.yml for sopds-go — copy to your stack directory,
+# adjust paths/passwords/SSL, then `docker compose up -d`.
+#
+# Stack layout:
+#   sopds          — the OPDS server (ghcr.io/dimgord/sopds-go)
+#   postgres       — PostgreSQL 18 backing store (sibling container)
+#
+# Required files in the same directory as this compose file:
+#   config.yaml    — sopds-go config (see config.yaml.example in the repo)
+#   init.sql       — initial DB schema; download with:
+#                      curl -O https://raw.githubusercontent.com/dimgord/sopds-go/main/init.sql
+#
+# Required edits before first `up -d`:
+#   - Replace `/path/to/your/books` with the actual library path on the host.
+#   - Set SOPDS_PG_PASSWORD via .env or shell env (or hard-code below).
+#   - Match `database.password` in your config.yaml to the same value.
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: sopds-pg
+    environment:
+      POSTGRES_USER: sopds
+      POSTGRES_PASSWORD: ${SOPDS_PG_PASSWORD:-sopds-change-me}
+      POSTGRES_DB: sopds
+    volumes:
+      - sopds-pg-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sopds -d sopds"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  sopds:
+    image: ghcr.io/dimgord/sopds-go:latest
+    container_name: sopds
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    volumes:
+      # ↓ change this to your real book library path on the host
+      - /path/to/your/books:/library:ro
+      - ./config.yaml:/etc/sopds/config.yaml:ro
+    restart: unless-stopped
+
+volumes:
+  sopds-pg-data:
+    # Named volume keeps Postgres data across `docker compose down`. To
+    # nuke the DB and start fresh: `docker compose down -v`.

@@ -5,6 +5,36 @@
 
 ---
 
+### Revision 71 - 2026-05-10
+**`docker-compose.example.yml` + README compose-stack instructions:**
+
+The single-container `docker run` example in README assumes the user already has PostgreSQL running somewhere — which is true for some deployments but not the common "spin up a fresh stack in `~/dockers/sopds/`" pattern. Dmitry hit this on dvg-nixos: copied the binary-install commands by mistake, then asked for a proper docker-compose recipe.
+
+**This Rev adds:**
+
+1. **`docker-compose.example.yml`** at repo root: two services (sopds + postgres:18-alpine), named volume for PG data, healthcheck-gated `depends_on`, init.sql mounted into `/docker-entrypoint-initdb.d/`, configurable PG password via `SOPDS_PG_PASSWORD` env var. Comments document required edits before first `up -d` (library path, password sync between compose env and config.yaml).
+
+2. **README Docker section expansion**: split into "Single container" (existing curl-like example) and "Compose stack" (new — three-curl bootstrap of compose+config+init.sql, plus the first-scan command). End-user gets a 5-command path from zero to running stack.
+
+**Why postgres:18-alpine specifically:**
+- Matches the bumped `recommended` dep from Rev 69 (Homebrew formula's `postgresql@18`).
+- Alpine variant is lean (~80MB vs ~150MB Debian-based) — appropriate since we don't need OS-level tooling, just `postgres`.
+- PostgreSQL 18 is current stable as of 2026-05.
+
+**Compose semantics:**
+- `depends_on.postgres.condition: service_healthy` makes sopds wait for `pg_isready` before starting, eliminating the "first start fails because DB isn't up yet" footgun common in naive sopds+pg stacks.
+- Named volume `sopds-pg-data` (not bind-mount) — Postgres data lives in Docker-managed storage; survives `compose down`, nuked by `compose down -v`.
+- `restart: unless-stopped` for both services — survives host reboot but respects manual `docker stop`.
+
+**Pre-publication checklist update:**
+- Add `docker-compose.example.yml` to GoReleaser archive bundles? Not done in this Rev — the file is small and easily curl-able from raw.githubusercontent. Could be added later if download-traffic patterns justify it.
+
+**Files Modified:**
+- `docker-compose.example.yml` (new, ~55 lines including comments).
+- `README.md`: Docker section expanded ~15 lines.
+
+---
+
 ### Revision 70 - 2026-05-10
 **v1.3.2 patch — push Rev 68/69 fixes through to Homebrew formula:**
 
