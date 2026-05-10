@@ -1,7 +1,25 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.3.0
+## Current Version: 1.3.1
+
+---
+
+### Revision 66 - 2026-05-10
+**v1.3.1 patch — re-publish release archives with Rev 64+65 fixes baked in:**
+
+v1.3.0 release archives (linux/macos × x86_64/arm64 tar.gz) shipped with the Rev-54/55 mis-attribution in the bundled NOTICE.md and an unhelpful `sopds status` error message. Both fixed in Rev 64+65 on main; this Rev re-tags as v1.3.1 to push corrected docs and the status UX fix into the GitHub Release / Docker image / Homebrew formula.
+
+**What's different vs. v1.3.0:**
+- NOTICE.md: correct upstream attribution (Dmitry V. Shelepnev, © 2014, admin@sopds.ru) instead of hallucinated "V.A. Onishchenko"; dead `www.sopds.ru` and `sergey-dryabzhinsky/sopds` links removed.
+- README.md: same attribution fixes + new "Related projects" section linking to fbe-go.
+- `sopds` binary: `status` command distinguishes ESRCH/EPERM and shows PID file path (Rev 65).
+- No new features. Pure patch-level release.
+
+**Auto-triggered on tag push:**
+- GoReleaser builds 4 archives + sha256 checksums.
+- Docker image republished as `ghcr.io/dimgord/sopds-go:1.3.1` and `:latest`.
+- Homebrew formula auto-updated in `dimgord/homebrew-tap/Formula/sopds-go.rb`.
 
 ---
 
