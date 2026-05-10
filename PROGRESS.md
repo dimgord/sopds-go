@@ -5,6 +5,31 @@
 
 ---
 
+### Revision 57 - 2026-05-10
+**CI workflow — `.github/workflows/ci.yml`:**
+
+Added GitHub Actions CI that runs on push to `main`/`dev` and PRs to `main`. Patterns adapted from fbe-go's CI but trimmed — sopds-go has no frontend, no Wails, no XSD-tag matrix.
+
+**Three jobs:**
+
+1. **`lint`** (Linux only): `golangci-lint v1.61` with default linter set (govet, ineffassign, staticcheck, errcheck, unused). 5-min timeout. No `.golangci.yml` in repo yet — using action's defaults; can tune later.
+
+2. **`test`** (Linux + macOS matrix): `go vet ./...` then `go test -race -timeout 5m ./...`. Hermetic — no PostgreSQL service container needed because `internal/database/*_test.go` only tests model structs (struct-roundtrip, constants, pagination math), not actual SQL queries. The `-race` detector catches goroutine misuse early.
+
+3. **`build`** (Linux + macOS matrix): builds all three CLI binaries — `sopds`, `sopds-tts`, `zipdupes` — to confirm they link on each target. Catches build-tag / CGo issues that pure-Go tests don't (e.g. if a future change adds a Linux-only syscall import that breaks macOS).
+
+**Why no PostgreSQL service:** verified by inspection — `find internal -name '*_test.go' -exec grep -l 'sql\|gorm\|database/sql' {}` only matches `internal/config/config_test.go` (uses gorm types but doesn't open a connection), `internal/database/models_test.go` (tests model structs), and a couple of domain-layer tests (use repository interfaces, no real connection). If actual integration tests are added later, add a `services.postgres` block to the `test` job.
+
+**Cancel-in-progress** is on for the same workflow+ref so successive pushes don't pile up runs. **`permissions: contents: read`** — minimum scope, avoids CodeQL warning, follows the principle that CI is read-only (only reads code, doesn't comment back or push).
+
+**Files Modified:**
+- `.github/workflows/ci.yml` (new): 3 jobs, ~85 lines.
+
+**Pre-publication checklist update:**
+- [x] CI workflow
+
+---
+
 ### Revision 56 - 2026-05-10
 **Rename Go module path: `github.com/sopds/sopds-go` → `github.com/dimgord/sopds-go`:**
 
@@ -96,13 +121,13 @@ Significant rewrite preparing the repo for public release on GitHub. Goals: orie
 **Pre-publication checklist** (work in progress; not blocking this Rev):
 - [x] Rev 53 — license switch to AGPL-3.0
 - [x] Rev 54 — README polish
-- [ ] NOTICE.md — third-party attributions audit (deps + bundled assets)
-- [ ] CI workflow (.github/workflows/ci.yml) — go test + golangci-lint
-- [ ] Release automation (.github/workflows/release.yml) + GoReleaser config
+- [x] Rev 55 — NOTICE.md third-party attributions audit
+- [x] Rev 56 — Module-path rename to `github.com/dimgord/sopds-go`
+- [x] Rev 57 — CI workflow (`.github/workflows/ci.yml`)
+- [ ] Release automation (`.github/workflows/release.yml`) + GoReleaser config
 - [ ] Dockerfile + GHCR publish
 - [ ] Root `flake.nix` packaging the binary for `nix run github:dimgord/sopds-go`
 - [ ] Optional: Homebrew tap (`dimgord/homebrew-tap`)
-- [x] Module-path mismatch — **resolved in Rev 56**: renamed `github.com/sopds/sopds-go` → `github.com/dimgord/sopds-go`
 
 ---
 
