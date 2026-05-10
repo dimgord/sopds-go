@@ -24,9 +24,11 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
-# `contents: write` lets GoReleaser create the GitHub Release.
+# `contents: write` lets GoReleaser create the GitHub Release;
+# `packages: write` lets it push to ghcr.io/dimgord/sopds-go.
 permissions:
   contents: write
+  packages: write
 
 jobs:
   goreleaser:
@@ -44,6 +46,23 @@ jobs:
           go-version: '1.24.x'
           cache: true
           cache-dependency-path: go.sum
+
+      # QEMU lets the amd64 GitHub runner build the linux/arm64 image.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      # Buildx is required for `--platform` flag and manifest lists.
+      - uses: docker/setup-buildx-action@v3
+
+      # Login to GitHub Container Registry. Uses the auto-provided
+      # GITHUB_TOKEN scoped via `permissions.packages: write` above —
+      # no PAT needed.
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: GoReleaser
         uses: goreleaser/goreleaser-action@v6
