@@ -25,6 +25,11 @@ var (
 	cfgFile string
 	cfg     *config.Config
 	logFile *os.File
+
+	// version is overridden at link time by GoReleaser via
+	// `-ldflags "-X main.version=<tag>"`. "dev" is the default for
+	// `go run`/`go install` from a source tree.
+	version = "dev"
 )
 
 func main() {
@@ -95,7 +100,7 @@ func main() {
 		Use:   "version",
 		Short: "Print version information",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("SOPDS v1.2.0 (Go rewrite)")
+			fmt.Printf("SOPDS %s (Go rewrite)\n", version)
 		},
 	}
 
