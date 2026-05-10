@@ -265,4 +265,13 @@ The web interface features:
 
 ## License
 
-Same as original SOPDS project.
+**[GNU Affero General Public License v3.0](LICENSE)** (AGPL-3.0).
+
+AGPL extends GPL with one important provision: if you run a modified version
+of sopds-go as a network-accessible service (e.g. a public OPDS catalog or
+web UI), you must offer the modified source to your users. Self-hosting for
+personal use is unrestricted.
+
+Original SOPDS project (Python implementation by V.A. Onishchenko) is also
+GPL-licensed; this Go rewrite follows the same copyleft principle, upgraded
+to AGPL specifically because OPDS catalogs are inherently network services.

@@ -5,6 +5,36 @@
 
 ---
 
+### Revision 53 - 2026-05-09
+**License switch: GPL-3.0 → AGPL-3.0:**
+
+Replaced the LICENSE file with the canonical AGPL-3.0 text from gnu.org. README's License section rewritten to explain the rationale and the practical difference for network-deployed instances.
+
+**Why AGPL specifically (not staying on GPL):**
+
+- sopds-go is **inherently a network service** — its primary interface is the OPDS XML feed served over HTTP, plus the HTML web UI. Most users will deploy it as a public/intranet catalog, not run it as a local CLI.
+- GPL-3.0 has the well-known "SaaS loophole": a hosting provider can take GPL code, modify it, run it as a public service, and never release the modifications because the software isn't *distributed* to users in the GPL sense — only its *output* (XML, HTML) is.
+- AGPL-3.0 closes this loophole via §13: *"if you modify the Program, your modified version must prominently offer all users interacting with it remotely through a computer network ... an opportunity to receive the Corresponding Source"*.
+- For an OPDS catalog, this is the correct ethical default: someone running a forked sopds-go for their book community should share their improvements back, not silently keep them.
+- Self-hosting for personal use remains unrestricted under both GPL and AGPL.
+
+**Practical impact for users:**
+
+- Personal home server: zero change — you already have the source.
+- Forking + deploying as a community service: must publish your fork's source.
+- Embedding sopds-go logic in another network application: that application must be AGPL-licensed (strong copyleft).
+
+**Practical impact for contributors:**
+
+- Patches submitted via PR are accepted under AGPL-3.0 (CONTRIBUTING.md will spell this out when added).
+- Contributors retain copyright; sopds-go does not require CLA assignment.
+
+**Files Modified:**
+- `LICENSE`: replaced GPL-3.0 text with AGPL-3.0 (canonical from https://www.gnu.org/licenses/agpl-3.0.txt; sha1 4c665f87b5dc2e7d26279c4b48968d085e1ace32, 661 lines).
+- `README.md`: License section rewritten — explicit AGPL-3.0 link, network-deployment note, attribution to original SOPDS project (V.A. Onishchenko's Python implementation, also GPL-family).
+
+---
+
 ### Revision 52 - 2026-03-12
 **Rust ports of `sopds-tts` and `zipdupes` for performance + GPU acceleration:**
 
