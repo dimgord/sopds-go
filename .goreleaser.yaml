@@ -73,6 +73,64 @@ checksum:
   name_template: 'checksums.txt'
   algorithm: sha256
 
+# Docker images — multi-arch (linux/amd64 + linux/arm64) published to
+# GitHub Container Registry. Each arch builds separately (so GoReleaser
+# can copy the right binary into context), then a manifest list aliases
+# them under a single tag.
+#
+# Login is handled by .github/workflows/release.yml's docker/login-action
+# step before goreleaser runs.
+dockers:
+  - image_templates:
+      - "ghcr.io/dimgord/sopds-go:{{ .Version }}-amd64"
+      - "ghcr.io/dimgord/sopds-go:latest-amd64"
+    use: buildx
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile
+    extra_files:
+      - config.yaml.example
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.description=Self-hosted OPDS catalog server"
+      - "--label=org.opencontainers.image.url=https://github.com/dimgord/sopds-go"
+      - "--label=org.opencontainers.image.source=https://github.com/dimgord/sopds-go"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.licenses=AGPL-3.0"
+
+  - image_templates:
+      - "ghcr.io/dimgord/sopds-go:{{ .Version }}-arm64"
+      - "ghcr.io/dimgord/sopds-go:latest-arm64"
+    use: buildx
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile
+    extra_files:
+      - config.yaml.example
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.description=Self-hosted OPDS catalog server"
+      - "--label=org.opencontainers.image.url=https://github.com/dimgord/sopds-go"
+      - "--label=org.opencontainers.image.source=https://github.com/dimgord/sopds-go"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.licenses=AGPL-3.0"
+
+docker_manifests:
+  - name_template: "ghcr.io/dimgord/sopds-go:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/dimgord/sopds-go:{{ .Version }}-amd64"
+      - "ghcr.io/dimgord/sopds-go:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/dimgord/sopds-go:latest"
+    image_templates:
+      - "ghcr.io/dimgord/sopds-go:latest-amd64"
+      - "ghcr.io/dimgord/sopds-go:latest-arm64"
+
 snapshot:
   version_template: '{{ incpatch .Version }}-next'
 

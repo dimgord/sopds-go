@@ -1,0 +1,46 @@
+# Build context exclusions for `docker build` / GoReleaser docker context.
+# Keep the context small — irrelevant for COPY-only Dockerfile but useful
+# defense if the build ever switches to multi-stage Go-inside builds.
+
+.git/
+.github/
+.task/
+.claude/
+.vscode/
+.idea/
+
+# Editor / OS noise
+*.swp
+.DS_Store
+*.bak
+
+# Local build artifacts
+sopds
+sopds-tts
+zipdupes
+sopds-tts-rs/target/
+zipdupes-rs/target/
+dist/
+
+# Local config / DB dumps (in case they reappear)
+config.yaml
+sopds_backup.dump*
+*.lst
+tags
+test_baseline.txt
+
+# Documentation that ships in the GitHub Release archives but doesn't
+# need to live inside the runtime image.
+PROGRESS.md
+NOTICE.md
+LICENSE
+README.md
+
+# Subprojects with their own ecosystems
+sopds-tts-rs/
+zipdupes-rs/
+fb2converters/
+fetch/
+
+# Tests
+*_test.go

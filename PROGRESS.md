@@ -5,6 +5,43 @@
 
 ---
 
+### Revision 59 - 2026-05-10
+**Docker image build + GHCR publish on tag (Phase 7):**
+
+Multi-arch (linux/amd64 + linux/arm64) Docker image automatically built and pushed to `ghcr.io/dimgord/sopds-go` on each `v*` tag, integrated into the existing GoReleaser pipeline (Rev 58). Users can now `docker run -d ghcr.io/dimgord/sopds-go:latest` for self-hosting without compiling anything.
+
+**1. `Dockerfile`** at repo root, ~30 lines:
+- Base: `gcr.io/distroless/base-debian12:nonroot` — minimal Google distroless image with glibc + CA certs + `nonroot` user, no shell, no package manager. ~25MB before binaries; ~75MB after.
+- Strategy: GoReleaser builds the binaries outside the image (cross-platform via Go's native cross-compile, way faster than QEMU-emulated `go build` inside arm64 image), then COPYs them into the runtime image. Dockerfile has no Go toolchain — pure runtime.
+- COPYs `sopds`, `sopds-tts`, `zipdupes` to `/usr/local/bin/`. Bundles `config.yaml.example` to `/etc/sopds/config.yaml.example` as reference; users mount their actual config over `/etc/sopds/config.yaml`.
+- Exposes 8081, runs as `nonroot:nonroot` (no privileged daemon needed for the OPDS server).
+- ENTRYPOINT/CMD: `sopds start -c /etc/sopds/config.yaml`. Override CMD for one-shot ops (`migrate`, `scan`, `import-mysql`).
+- Comments explicitly call out **what's NOT included**: PostgreSQL (run separately as a sibling container), Calibre (~500MB, build a derivative if MOBI conversion needed), espeak-ng + Piper voices (same logic — build a derivative for TTS). README will document this for users.
+
+**2. `.dockerignore`** — excludes `.git/`, `.github/`, `.task/`, editor files, build artifacts, the Rust subprojects, fb2converters/, fetch/, test files, plus historical noise (`*.lst`, `tags`, `sopds_backup.dump*`). Keeps the build context tight.
+
+**3. `.goreleaser.yaml` extended** with two `dockers:` blocks (one per arch) and `docker_manifests:` (manifest list aliasing both archs under `:{{ .Version }}` and `:latest`):
+- Image tags: `ghcr.io/dimgord/sopds-go:<arch>` for arch-specific, plus manifest list at `ghcr.io/dimgord/sopds-go:{{ .Version }}` and `ghcr.io/dimgord/sopds-go:latest`.
+- OCI labels: `org.opencontainers.image.{title,description,url,source,version,created,revision,licenses}` populated from GoReleaser context — registries that read these (Docker Hub, GHCR's own UI) display them as image metadata.
+
+**4. `.github/workflows/release.yml` extended** with three new steps before goreleaser:
+- `docker/setup-qemu-action@v3` — registers binfmt for arm64 emulation on the amd64 GitHub runner. Needed only because GoReleaser still does a `docker build` (even though the binary is pre-cross-compiled, the FROM base layer needs to be unpacked for the target arch).
+- `docker/setup-buildx-action@v3` — buildx is required for `--platform=linux/arm64` flag GoReleaser passes to `docker build`.
+- `docker/login-action@v3` to `ghcr.io` using the workflow's auto-provided `GITHUB_TOKEN`. **Permissions extended: `packages: write`** added next to existing `contents: write` so the token can push to GHCR.
+
+**Pre-publication checklist update:**
+- [x] Dockerfile + GHCR publish
+
+**Files Modified:**
+- `Dockerfile` (new): ~30 lines.
+- `.dockerignore` (new): ~30 lines.
+- `.goreleaser.yaml`: +75 lines (`dockers` × 2 + `docker_manifests`).
+- `.github/workflows/release.yml`: +14 lines (qemu + buildx + login + permissions: packages:write).
+
+**First Docker image will be built and pushed automatically on the next `v*` tag.** No tag needs to be bumped; current `v1.2.0` was pre-Docker. Either re-trigger the existing tag via `workflow_dispatch` (Actions tab → Release → Run workflow → tag: v1.2.0) or wait for the next semver tag (`v1.3.0` when Phase 8/9 ship).
+
+---
+
 ### Revision 58 - 2026-05-10
 **Release automation: GoReleaser + `.github/workflows/release.yml`:**
 
@@ -164,7 +201,7 @@ Significant rewrite preparing the repo for public release on GitHub. Goals: orie
 - [x] Rev 56 — Module-path rename to `github.com/dimgord/sopds-go`
 - [x] Rev 57 — CI workflow (`.github/workflows/ci.yml`)
 - [x] Rev 58 — Release automation (`.github/workflows/release.yml`) + GoReleaser config
-- [ ] Dockerfile + GHCR publish
+- [x] Rev 59 — Dockerfile + GHCR multi-arch publish
 - [ ] Root `flake.nix` packaging the binary for `nix run github:dimgord/sopds-go`
 - [ ] Optional: Homebrew tap (`dimgord/homebrew-tap`)
 
