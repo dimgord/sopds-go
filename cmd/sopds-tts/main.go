@@ -1,3 +1,13 @@
+// cmd/sopds-tts is the standalone TTS subprocess invoked by sopds when
+// audio generation is requested. It depends on `internal/tts/piper.go`
+// which transitively imports `github.com/yalue/onnxruntime_go` (CGO).
+// Under CGO_ENABLED=0 this file is excluded from the build (the
+// release/Docker/Homebrew matrices); under CGO_ENABLED=1 (default for
+// `go install` / source builds) it compiles normally. Use the Rust
+// port (`sopds-tts-rs/`) for CUDA-accelerated TTS.
+//
+//go:build cgo
+
 package main
 
 import (
