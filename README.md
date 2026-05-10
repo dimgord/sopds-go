@@ -91,6 +91,8 @@ sudo install sopds /usr/local/bin/
 sudo install zipdupes /usr/local/bin/    # optional: FB2 dedup tool
 ```
 
+**On NixOS:** `/usr/local/bin/` doesn't exist (FHS-violating); use the [Nix flake](#nix-flake) below instead, or drop binaries into `~/.local/bin/` (and make sure that's in your `$PATH`).
+
 ### Docker
 
 ```bash
