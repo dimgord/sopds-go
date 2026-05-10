@@ -5,6 +5,34 @@
 
 ---
 
+### Revision 55 - 2026-05-10
+**NOTICE.md — third-party attributions audit:**
+
+Added `NOTICE.md` at the repo root listing every third-party work that ships with sopds-go (bundled), is linked at build time (Go modules / Rust crates), or is invoked as a subprocess at runtime, with license + AGPL-compatibility verified for each.
+
+**Sections:**
+
+1. **Original SOPDS attribution** — V.A. Onishchenko's Python implementation, GPL-licensed, source for sopds-go's architecture / config schema / MySQL DB layout.
+2. **Bundled converters** (`fb2converters/fb2mobi/`, `fb2converters/fb2epub/`) — both MIT-licensed, called as subprocesses (not linked). Originally based on dnkorpushov's `fb2conv` + eBook .NET respectively.
+3. **Go module direct deps** — 14 modules: chi (MIT), gorm (MIT), cobra (Apache-2.0), pgx via driver/postgres (MIT), mysql driver (MPL-2.0), golang.org/x/* (BSD-3), yaml.v3 (MIT/Apache-2.0), etc. AGPL-compatibility verified for each. Notable: MPL-2.0 (mysql driver) is AGPL-compatible per FSF list because MPL §3.3 explicitly permits combination.
+4. **Rust crates** for sopds-tts-rs + zipdupes-rs — `ort`, `serde`, `serde_json`, `hound`, `clap`, `walkdir`. All Apache-2.0/MIT dual or compatible.
+5. **CUDA / cuDNN** — proprietary NVIDIA libraries linked dynamically by ORT at build time on GPU systems. Not redistributed — sourced from user's NVIDIA installation. Binary remains AGPL-distributable.
+6. **External subprocess tools** — Calibre (GPL-3.0), espeak-ng (GPL-3.0), Piper TTS (MIT), PostgreSQL (BSD-like). GPL-3.0 tools called via `exec.Command` do not impose GPL on sopds-go.
+7. **Voice models** — NOT bundled, user-downloaded from rhasspy/piper-voices. Mostly MIT/CC-BY per model author.
+8. **Web UI assets** — Font Awesome via CDN (SIL OFL / CC BY / MIT), not bundled.
+
+**Why this matters at OSS publication time:**
+
+- AGPL-3.0 places strict requirements on derivative works and combined works. NOTICE.md documents that each link/bundle/subprocess relationship has been classified correctly (linked vs. invoked) so license obligations transfer cleanly.
+- Apache-2.0 deps (cobra, hound, ort, serde) require attribution preservation under §4(c); listing them here satisfies that.
+- Subprocess invocation (Calibre, espeak-ng, ebook-convert) does not propagate GPL to sopds-go — but users need to know these are GPL tools they're installing alongside, especially if they redistribute prebuilt sopds-go bundles with these tools included (Docker image needs this disclaimer).
+- Voice models are user-provided, no bundling concern, but README and NOTICE both clarify each model has its own license.
+
+**Files Modified:**
+- `NOTICE.md` (new): ~140 lines covering all categories above.
+
+---
+
 ### Revision 54 - 2026-05-09
 **README polish for OSS publication:**
 
