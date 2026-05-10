@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sopds/sopds-go/internal/domain/user"
+	"github.com/dimgord/sopds-go/internal/domain/user"
 	"gorm.io/gorm"
 )
 

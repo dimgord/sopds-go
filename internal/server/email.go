@@ -7,7 +7,7 @@ import (
 	"net/smtp"
 	"strings"
 
-	"github.com/sopds/sopds-go/internal/config"
+	"github.com/dimgord/sopds-go/internal/config"
 )
 
 // EmailService handles sending emails

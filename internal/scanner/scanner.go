@@ -19,9 +19,9 @@ import (
 
 	"github.com/bodgit/sevenzip"
 	"github.com/robfig/cron/v3"
-	"github.com/sopds/sopds-go/internal/config"
-	"github.com/sopds/sopds-go/internal/database"
-	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
+	"github.com/dimgord/sopds-go/internal/config"
+	"github.com/dimgord/sopds-go/internal/database"
+	"github.com/dimgord/sopds-go/internal/infrastructure/persistence"
 )
 
 // bookWithMeta holds a book and its parsed FB2 metadata for batch processing

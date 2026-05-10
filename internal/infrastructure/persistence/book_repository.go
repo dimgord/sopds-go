@@ -8,8 +8,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"github.com/sopds/sopds-go/internal/domain/book"
-	"github.com/sopds/sopds-go/internal/domain/repository"
+	"github.com/dimgord/sopds-go/internal/domain/book"
+	"github.com/dimgord/sopds-go/internal/domain/repository"
 )
 
 // BookRepository implements repository.BookRepository using GORM

@@ -1,4 +1,4 @@
-module github.com/sopds/sopds-go
+module github.com/dimgord/sopds-go
 
 go 1.24.0
 

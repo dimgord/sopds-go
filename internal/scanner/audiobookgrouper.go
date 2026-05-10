@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sopds/sopds-go/internal/database"
+	"github.com/dimgord/sopds-go/internal/database"
 )
 
 // AudioTrack represents a single audio file in a multi-file audiobook

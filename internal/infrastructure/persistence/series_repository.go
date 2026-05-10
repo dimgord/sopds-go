@@ -9,8 +9,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"github.com/sopds/sopds-go/internal/domain/repository"
-	"github.com/sopds/sopds-go/internal/domain/series"
+	"github.com/dimgord/sopds-go/internal/domain/repository"
+	"github.com/dimgord/sopds-go/internal/domain/series"
 )
 
 // SeriesRepository implements repository.SeriesRepository using GORM

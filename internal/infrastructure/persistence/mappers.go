@@ -1,11 +1,11 @@
 package persistence
 
 import (
-	"github.com/sopds/sopds-go/internal/domain/author"
-	"github.com/sopds/sopds-go/internal/domain/book"
-	"github.com/sopds/sopds-go/internal/domain/catalog"
-	"github.com/sopds/sopds-go/internal/domain/genre"
-	"github.com/sopds/sopds-go/internal/domain/series"
+	"github.com/dimgord/sopds-go/internal/domain/author"
+	"github.com/dimgord/sopds-go/internal/domain/book"
+	"github.com/dimgord/sopds-go/internal/domain/catalog"
+	"github.com/dimgord/sopds-go/internal/domain/genre"
+	"github.com/dimgord/sopds-go/internal/domain/series"
 )
 
 // --- Book Mappers ---

@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/sopds/sopds-go/internal/domain/catalog"
+	"github.com/dimgord/sopds-go/internal/domain/catalog"
 )
 
 // CatalogRepository defines the interface for catalog persistence

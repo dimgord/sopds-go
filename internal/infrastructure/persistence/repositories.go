@@ -1,7 +1,7 @@
 package persistence
 
 import (
-	"github.com/sopds/sopds-go/internal/domain/repository"
+	"github.com/dimgord/sopds-go/internal/domain/repository"
 )
 
 // Repositories holds all repository implementations

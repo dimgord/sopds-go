@@ -1,7 +1,7 @@
 package repository
 
 import (
-	"github.com/sopds/sopds-go/internal/domain/book"
+	"github.com/dimgord/sopds-go/internal/domain/book"
 )
 
 // SortField defines what field to sort by

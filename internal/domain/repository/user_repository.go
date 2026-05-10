@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/sopds/sopds-go/internal/domain/user"
+	"github.com/dimgord/sopds-go/internal/domain/user"
 )
 
 // UserRepository defines operations for user persistence

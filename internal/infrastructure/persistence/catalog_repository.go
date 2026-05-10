@@ -8,8 +8,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"github.com/sopds/sopds-go/internal/domain/catalog"
-	"github.com/sopds/sopds-go/internal/domain/repository"
+	"github.com/dimgord/sopds-go/internal/domain/catalog"
+	"github.com/dimgord/sopds-go/internal/domain/repository"
 )
 
 // CatalogRepository implements repository.CatalogRepository using GORM

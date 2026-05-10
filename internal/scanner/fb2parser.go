@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/sopds/sopds-go/internal/database"
+	"github.com/dimgord/sopds-go/internal/database"
 )
 
 // FB2Metadata holds extracted FB2 book metadata

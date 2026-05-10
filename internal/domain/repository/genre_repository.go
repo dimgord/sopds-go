@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/sopds/sopds-go/internal/domain/genre"
+	"github.com/dimgord/sopds-go/internal/domain/genre"
 )
 
 // GenreWithCount represents a genre with book count

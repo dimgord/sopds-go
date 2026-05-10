@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/sopds/sopds-go/internal/domain/author"
+	"github.com/dimgord/sopds-go/internal/domain/author"
 )
 
 // AuthorWithCount represents an author with book count

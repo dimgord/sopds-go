@@ -6,8 +6,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/sopds/sopds-go/internal/domain/book"
-	"github.com/sopds/sopds-go/internal/domain/repository"
+	"github.com/dimgord/sopds-go/internal/domain/book"
+	"github.com/dimgord/sopds-go/internal/domain/repository"
 )
 
 // --- Book Scopes ---

@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/bodgit/sevenzip"
-	"github.com/sopds/sopds-go/internal/database"
+	"github.com/dimgord/sopds-go/internal/database"
 )
 
 // BookPathInfo contains parsed path information for a book

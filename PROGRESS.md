@@ -5,6 +5,35 @@
 
 ---
 
+### Revision 56 - 2026-05-10
+**Rename Go module path: `github.com/sopds/sopds-go` → `github.com/dimgord/sopds-go`:**
+
+The original module path declared in `go.mod` referenced a non-existent GitHub organization (`sopds/`), while the actual repo lives at `github.com/dimgord/sopds-go`. This mismatch wouldn't matter for `go build` but would break `go install github.com/dimgord/sopds-go/cmd/sopds@latest` for users — Go's module proxy expects the path to match the hosted location.
+
+**Why rename instead of creating a `sopds/` org:**
+
+- sopds-go is an application, not a library — nobody is importing it as a Go package, so the rename has zero external blast radius.
+- Renaming aligns the module path with the actual repo location, making `go install` work for users who want to build from source without cloning.
+- Creating an empty `sopds` org just to host one repo is administrative overhead with no upside.
+
+**Mechanism:**
+
+```bash
+find . -type f \( -name '*.go' -o -name 'go.mod' \) ! -path './.git/*' ! -path '*/target/*' \
+  -exec sed -i '' 's|github.com/sopds/sopds-go|github.com/dimgord/sopds-go|g' {} +
+```
+
+Replaced 78 occurrences across 38 files (37 Go files + go.mod). PROGRESS.md was deliberately excluded from sed — historical entries that mention the old path remain as factual snapshots.
+
+**Verification:**
+
+- `go build ./...` — clean (no errors).
+- `go test ./...` — all 14 internal packages pass (converter, database, domain/{author,book,catalog,genre,repository,series,user}, i18n, opds, scanner, tts).
+
+**Files Modified:** 37 `.go` files + `go.mod` — all internal imports rewritten consistently.
+
+---
+
 ### Revision 55 - 2026-05-10
 **NOTICE.md — third-party attributions audit:**
 
@@ -73,7 +102,7 @@ Significant rewrite preparing the repo for public release on GitHub. Goals: orie
 - [ ] Dockerfile + GHCR publish
 - [ ] Root `flake.nix` packaging the binary for `nix run github:dimgord/sopds-go`
 - [ ] Optional: Homebrew tap (`dimgord/homebrew-tap`)
-- [ ] Module-path mismatch (`module github.com/sopds/sopds-go` in go.mod vs. real repo URL `github.com/dimgord/sopds-go`) — **decision needed**: rename module, create org, or keep as documentation-only
+- [x] Module-path mismatch — **resolved in Rev 56**: renamed `github.com/sopds/sopds-go` → `github.com/dimgord/sopds-go`
 
 ---
 
