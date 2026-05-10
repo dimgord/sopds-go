@@ -5,6 +5,56 @@
 
 ---
 
+### Revision 65 - 2026-05-10
+**`sopds status` UX fix — distinguish ESRCH from EPERM, show PID file path:**
+
+Symptom: on dvg-fedya, `ps -ef | grep sopds` shows `sopds 2260 1 0 May05 ? /opt/sopds/sopds start` (running for 5 days). But `/opt/sopds/sopds status` reports "SOPDS server is not running (process not found)". Same with explicit `-c ~/sopds-go/config.yaml`.
+
+**Root causes (two separate issues, both surfacing through the same symptom):**
+
+1. **Process is running under user `sopds`; status invoked as `dimgord` lacks permission to signal it.** `os.FindProcess` on Linux always succeeds (it just constructs a `os.Process` struct); the actual liveness check is `process.Signal(syscall.Signal(0))`, which on Linux returns `EPERM` (permission denied) when the process exists but is owned by another user, and `ESRCH` (no such process) when the PID is stale. The pre-Rev-65 code lumped both into "process not found", erasing the diagnostic distinction.
+
+2. **PID file path differs between configs.** When dimgord runs `sopds status` without `-c`, the binary loads default config which has empty `Scanner.PIDFile` → falls back to `/tmp/sopds.pid`. The production sopds (started by user `sopds` with its own config) writes its PID file elsewhere (likely `/opt/sopds/sopds.pid` or similar). The two-config situation is correct architecture; the bug is that the error message gives no hint which PID file path was being read, leaving the user to guess.
+
+**Fix in `cmd/sopds/main.go::runStatus`:**
+- Distinguish `ESRCH` (stale PID) vs `EPERM` (running but not yours) vs other errors via `errors.Is(err, syscall.ESRCH/EPERM)`.
+- Print the PID file *path* in every "not running" branch so the user immediately sees where status was looking.
+- `strings.TrimSpace` the PID file content before `strconv.Atoi` — some pid files have trailing newline.
+
+**New status outputs:**
+| Condition | Pre-Rev-65 message | Post-Rev-65 message |
+|---|---|---|
+| PID file absent | `not running (no PID file)` | `not running (no PID file at <path>)` |
+| PID file unparseable | `status unknown (invalid PID file)` | `status unknown (invalid PID file content: %q)` |
+| PID file has stale PID | `not running (process not found)` | `not running (stale PID N in <path>)` |
+| Process exists but owned by other user | `not running (process not found)` | `running (PID: N) — owned by another user; run as that user or root to control it` |
+| Process exists, signaled OK | `running (PID: N)` | `running (PID: N)` (unchanged) |
+| Other syscall error | `not running (process not found)` | `status check failed: <err>` |
+
+**Files Modified:**
+- `cmd/sopds/main.go`: imports `errors` (new); `runStatus` rewritten as switch on `signal(0)` error class. ~25 lines net.
+
+---
+
+### Revision 64 - 2026-05-10
+**Fix incorrect upstream attribution + drop dead links:**
+
+In Rev 54 (README) and Rev 55 (NOTICE.md) I attributed the original Simple OPDS Python project to "V.A. Onishchenko" — that was a hallucination. The actual author per the LICENSE header (Russian text, shared by Dmitry from his local copy of upstream Python source) is **Dmitry V. Shelepnev** (Дмитрий Шелепнёв), © 2014, contact `admin@sopds.ru`, version 0.23.
+
+I also linked to a `sergey-dryabzhinsky/sopds` GitHub repo as an "active fork" — that link returns 404 (verified with curl). The upstream homepage `www.sopds.ru` referenced in the LICENSE / README headers also doesn't resolve in 2026. Both removed from sopds-go's docs to avoid promising users dead resources.
+
+**License clause noted**: original Python SOPDS is under "GPL-3.0 or, at your option, any later version" — the "any later version" clause is what permits an AGPL-3.0 downstream (per GNU's license compatibility matrix). Worth documenting because if it were strict GPL-3.0-only, our AGPL upgrade would be more delicate.
+
+**Files Modified:**
+- `README.md`: opening paragraph attribution corrected (English transliteration `Dmitry V. Shelepnev` + Cyrillic `Дмитрий Шелепнёв` + version 0.23 + email). Dead links to sopds.ru and the GitHub fork removed; replaced with "appears to be offline as of 2026" note. License section attribution corrected likewise.
+- `NOTICE.md`: "Original SOPDS — Python implementation" section rewritten with correct author block, the "any later version" license-clause note, and a list of upstream conventions carried over (OPDS feed structure, MySQL schema for import-mysql tool, sopds.conf-style ini-to-YAML mapping, CLI shape).
+- `README.md`: new "Related projects" section before License — links to fbe-go (sister project, same author, complementary FB2 *editor* role: edit metadata in fbe-go, serve from sopds-go).
+- `PROGRESS.md`: this entry.
+
+**No code changes** — pure metadata correction. v1.3.0 release artifacts still ship the original (mis-attributed) NOTICE.md; users who already downloaded v1.3.0 archives have the wrong text baked in. If bundled-doc accuracy matters, re-tag v1.3.1 to push corrected archives. Decision deferred — GitHub-Release-page README/NOTICE will reflect the fix immediately as part of the next push.
+
+---
+
 ### Revision 63 - 2026-05-10
 **v1.3.0 milestone — OSS-publication ready:**
 
