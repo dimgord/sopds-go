@@ -1,7 +1,58 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.2.0
+## Current Version: 1.3.0
+
+---
+
+### Revision 63 - 2026-05-10
+**v1.3.0 milestone — OSS-publication ready:**
+
+Bump version 1.2.0 → 1.3.0 marking the first publicly-installable release. Nothing functional changed since v1.2.0 (Rust ports remained); this Rev wraps up the OSS-publication track that was Revs 53-62.
+
+**What's new for end-users at v1.3.0:**
+
+- **License clarity** — AGPL-3.0 with a README section explaining what it means for self-hosters vs. forks-deployed-as-services (Rev 53).
+- **NOTICE.md attribution** — clean third-party-licenses audit, including the AGPL-compatibility verdict for each dep (Rev 55).
+- **Module path** — `github.com/dimgord/sopds-go` matches the repo URL, so `go install github.com/dimgord/sopds-go/cmd/sopds@latest` actually works (Rev 56).
+- **CI** — every push to main runs lint + test + build on Linux & macOS (Rev 57).
+- **GitHub Releases** — cross-platform binaries (linux/darwin × amd64/arm64) auto-built via GoReleaser on each `v*` tag, with SHA-256 checksums and conventional-commits-grouped changelog (Rev 58).
+- **Docker images** — `ghcr.io/dimgord/sopds-go:latest` (multi-arch via manifest list, distroless base, ~75MB) auto-published on each release (Rev 59).
+- **Nix** — `nix run github:dimgord/sopds-go -- start` works directly; `nix develop .#tts-rs` for the CUDA Rust workflow (Rev 60).
+- **Homebrew** — `brew tap dimgord/tap && brew install sopds-go` after the first release ships the formula auto-update (Rev 61).
+- **Go 1.25** — toolchain bumped to match the rest of dvg-mac's stack (Rev 62).
+
+**Install matrix (post-v1.3.0):**
+
+```sh
+# Pre-built binary
+curl -LO https://github.com/dimgord/sopds-go/releases/download/v1.3.0/sopds-go_1.3.0_linux_x86_64.tar.gz
+
+# Docker
+docker run -d ghcr.io/dimgord/sopds-go:latest
+
+# Nix
+nix run github:dimgord/sopds-go -- start
+
+# Homebrew
+brew tap dimgord/tap && brew install sopds-go
+
+# Source
+go install github.com/dimgord/sopds-go/cmd/sopds@v1.3.0
+```
+
+**v1.3.0 release pipeline test plan:**
+
+Tag `v1.3.0` will trigger `.github/workflows/release.yml`. First release reveals what's brittle in the pipeline. Known pre-flight risks:
+- GoReleaser docker step needs amd64 + arm64 cross-compile — should work but no prior validation.
+- Homebrew formula push — `HOMEBREW_TAP_GITHUB_TOKEN` set as repo secret; first auto-formula commit goes to `dimgord/homebrew-tap`.
+- GHCR multi-arch manifest — first push to `ghcr.io/dimgord/sopds-go`; package needs to be created (likely auto on first push under `dimgord` namespace).
+- Changelog generation — pulls from git commits since previous tag (v1.2.0); should pick up Rev 53-62 commits and group by Conventional Commits prefix.
+
+If any step fails, that's diagnostic data for follow-up Revs. Either re-run with `gh workflow run release.yml -f tag=v1.3.0` after the fix, or move forward with v1.3.1.
+
+**Files Modified:**
+- `PROGRESS.md`: header `Current Version` 1.2.0 → 1.3.0; Rev 63 entry.
 
 ---
 
