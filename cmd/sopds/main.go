@@ -95,7 +95,7 @@ func main() {
 		Use:   "version",
 		Short: "Print version information",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("SOPDS v1.1.0 (Go rewrite)")
+			fmt.Println("SOPDS v1.2.0 (Go rewrite)")
 		},
 	}
 

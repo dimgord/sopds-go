@@ -1,7 +1,43 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.1.0
+## Current Version: 1.2.0
+
+---
+
+### Revision 52 - 2026-03-12
+**Rust ports of `sopds-tts` and `zipdupes` for performance + GPU acceleration:**
+
+Two CLI utilities rewritten in Rust as drop-in replacements for the Go versions, primarily to recover GPU acceleration on the Pascal-class GTX 1070 (sm_61) on dvg-fedya and squeeze more throughput out of the audiobook-generation pipeline. Both Rust subprojects ship as separate crates under the sopds-go monorepo and remain CLI-compatible with their Go predecessors so callers don't change.
+
+**1. `sopds-tts-rs/` — CUDA-accelerated TTS (drop-in for `sopds-tts`):**
+- Same CLI: `sopds-tts-rs <model> <output>`, text on stdin, WAV on `<output>`. Identical interface to Go version, so the audiobook generator's subprocess plumbing stays unchanged.
+- Stack: `ort 2.0.0-rc.10` (ONNX Runtime Rust binding, CUDA execution provider) + `serde` (model metadata) + `hound` (WAV encoding) + `espeak-ng` (IPA phonemizer for non-"text" Piper models).
+- Why Rust: Go's `onnxruntime-go` has limited CUDA-EP support and trails upstream. ORT-rs binds against the C API directly, gets the full CUDA EP, and the executable is dramatically faster than the Go path for typical chapter-length inputs.
+- **Pascal + Nix bring-up was the hard part** — most of the engineering hours on this Rev. Current nixpkgs-unstable bundles cuDNN 9.x but not in a sm_61-compatible build (newer cuDNN dropped Pascal compute capability). Solution: `flake.nix` pulls TWO nixpkgs inputs:
+  - `nixpkgs` (latest) — Rust toolchain (`rustc`, `cargo`, `pkg-config`).
+  - `nixpkgs-pinned` (June 2025 snapshot) — `cudaPackages.cudnn = 9.8` which still ships sm_61. Linked at build time via `LD_LIBRARY_PATH` overlay.
+- ORT itself is built from source (CUDA-EP enabled, sm_61 added explicitly to `CMAKE_CUDA_ARCHITECTURES`). First `nix develop` is 15-30 min on cold cache; subsequent builds are trivial.
+- Files: `sopds-tts-rs/src/main.rs` (291 lines: ONNX inference + speaker-id + phoneme map + WAV write), `sopds-tts-rs/Cargo.toml`, `sopds-tts-rs/Cargo.lock`, `sopds-tts-rs/flake.nix`, `sopds-tts-rs/flake.lock`, `sopds-tts-rs/run-gpu.sh`.
+
+**2. `zipdupes-rs/` — Rust port of the FB2 archive de-duplicator:**
+- Same CLI as Go `zipdupes`. Walks a directory tree of `.fb2.zip` archives, hashes their entries, identifies duplicates across archives.
+- Why Rust: rip-grep-style speed for I/O-heavy walking + hashing on the 1TB book corpus on `/1TB`. Go version was acceptable but visibly slow on cold-cache full corpus scans.
+- Files: `zipdupes-rs/src/main.rs` (455 lines), `zipdupes-rs/Cargo.toml`, `zipdupes-rs/Cargo.lock`.
+
+**Status:**
+- Both ports landed in production at this Rev — `sopds-tts-rs` is the active TTS backend on dvg-fedya whenever GPU TTS is needed; `zipdupes-rs` replaces the Go `zipdupes` for batch corpus scans. Neither has been heavily exercised since (no major book imports / TTS jobs in the recent month), so any subtle bugs are still latent. The Go versions remain in-tree as fallbacks (not deleted).
+
+**Files Modified:**
+- `sopds-tts-rs/` (new directory, 7 files): `Cargo.toml`, `Cargo.lock`, `flake.nix`, `flake.lock`, `run-gpu.sh`, `src/main.rs`. Total: 1547 lines.
+- `zipdupes-rs/` (new directory, 3 files): `Cargo.toml`, `Cargo.lock`, `src/main.rs`. Total: 682 lines.
+- `go.mod`, `go.sum`: dependency churn from co-landed Go-side cleanups (49 + 322 lines added).
+- `.gitignore`: added Rust target/ patterns.
+- `CLAUDE.md` (commit `7e0c83d`, follow-up): documents the Rust subprojects in the architecture tree and adds a "Rust TTS alternative" section under "Audiobook Support" describing the Nix CUDA build flow.
+
+**Commits covered (retroactively documented 2026-05-09 — original landing skipped PROGRESS.md):**
+- `9f6e1e5` Add rust versions of zipdupes and sopds-tts.
+- `7e0c83d` Add Rust TTS (sopds-tts-rs) documentation to CLAUDE.md
 
 ---
 
