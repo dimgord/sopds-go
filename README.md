@@ -1,26 +1,43 @@
 # SOPDS-Go
 
-Go implementation of Simple OPDS Catalog Server for managing and serving e-book collections.
+[![Latest Release](https://img.shields.io/github/v/release/dimgord/sopds-go?display_name=tag&sort=semver)](https://github.com/dimgord/sopds-go/releases)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/dimgord/sopds-go)](go.mod)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/dimgord/sopds-go/ci.yml?branch=main)](https://github.com/dimgord/sopds-go/actions)
 
-**Version: 1.1.0**
+Go implementation of **Simple OPDS Catalog Server** — manage and serve large e-book collections via OPDS feeds and a modern web UI. Designed for self-hosted home libraries: scans nested ZIP archives of FB2 books, extracts metadata, generates EPUB/MOBI on the fly, and even produces audiobooks via local TTS.
+
+A modernized Go rewrite of [V.A. Onishchenko's original Python SOPDS](https://github.com/sergey-dryabzhinsky/sopds), with PostgreSQL persistence, parallel scanning, GPU-accelerated TTS, and a redesigned responsive UI.
 
 ## Features
 
-- **OPDS 1.2** catalog server compatible with Moon+ Reader, FBReader, Aldiko, Calibre
-- **Modern Web UI** with responsive design, Font Awesome icons, search, and navigation
-- **FB2 to EPUB/MOBI conversion** - EPUB is pure Go, MOBI uses Calibre
-- **Parallel library scanning** with configurable workers and progress tracking
-- **FB2 metadata extraction** (title, authors, genres, series, annotations, covers)
-- **ZIP archive scanning** for compressed book collections
-- **PostgreSQL database** with embedded migrations
-- **MySQL migration tool** - import existing SOPDS MySQL database
+### Catalog & Browsing
+- **OPDS 1.2** catalog server, compatible with Moon+ Reader, FBReader, Aldiko, Calibre
+- **Modern Web UI** with responsive design, Font Awesome icons, full-text search
+- **Hierarchical navigation** — letter-based drill-down (1→2→3 chars) for large author/series lists
+- **Browse by language**, by genre, by series, by new arrivals (last 7 days)
+- **Personal bookshelf** — save books to a reading list
+- **Duplicate detection + viewer** — automatic marking + side-by-side comparison
+
+### Library Management
+- **Parallel scanning** with configurable workers + progress tracking
+- **FB2 metadata extraction** — title, authors, genres, series, annotations, covers
+- **Nested ZIP archive scanning** — common format for book corpora
+- **PostgreSQL** persistence with embedded migrations
+- **Scheduled rescans** in cron format
+- **MySQL migration tool** — drop-in import from the original Python SOPDS database
+
+### Conversion & TTS
+- **FB2 → EPUB** — pure Go, no external dependencies
+- **FB2 → MOBI** — via Calibre (`ebook-convert`)
+- **FB2 → MP3 audiobook** — via Piper TTS, with optional CUDA GPU acceleration through the [Rust subproject](#rust-subprojects)
+- **Multi-speaker / multi-language voices** — Ukrainian, Russian, English, more
+
+### Operations
 - **Basic HTTP authentication** support
-- **Scheduled automatic scanning** (cron format)
-- **Hierarchical navigation** - letter-based drill-down for large collections
-- **Personal bookshelf** - save books to your reading list
-- **Duplicate detection** - automatic marking of duplicate books during scan
-- **Duplicates viewer** - browse all versions of a book to compare formats/sizes
-- **Browse by language** - filter books by language
+- **Static binaries** for Linux + macOS, amd64/arm64 (see [Releases](https://github.com/dimgord/sopds-go/releases))
+- **Docker image** at `ghcr.io/dimgord/sopds-go`
+- **Nix flake** — `nix run github:dimgord/sopds-go`
 
 ## Quick Start
 
@@ -50,16 +67,50 @@ Access the interfaces:
 
 ## Requirements
 
-- Go 1.21+
-- PostgreSQL 12+
-- Calibre (optional, for MOBI conversion)
+- **Go 1.24+** for building from source
+- **PostgreSQL 14+** for persistence
+- **Calibre** (`ebook-convert`) — optional, for MOBI conversion
+- **Espeak-ng** + Piper voice models — optional, for TTS / audiobooks
+- **NVIDIA GPU + CUDA 12** — optional, for accelerated TTS via [`sopds-tts-rs`](sopds-tts-rs/)
 
 ## Installation
 
-### From Source
+### Pre-built binaries (recommended)
+
+Grab the latest release for your platform from [GitHub Releases](https://github.com/dimgord/sopds-go/releases) — Linux/macOS, amd64/arm64.
 
 ```bash
-git clone <repository>
+# Linux x86_64 example
+curl -LO https://github.com/dimgord/sopds-go/releases/latest/download/sopds-go_linux_amd64.tar.gz
+tar xzf sopds-go_linux_amd64.tar.gz
+sudo install sopds /usr/local/bin/
+```
+
+### Docker
+
+```bash
+docker run -d \
+  --name sopds \
+  -p 8081:8081 \
+  -v /path/to/your/books:/library:ro \
+  -v /path/to/config.yaml:/etc/sopds/config.yaml:ro \
+  ghcr.io/dimgord/sopds-go:latest
+```
+
+### Nix flake
+
+```bash
+# Run directly without installing
+nix run github:dimgord/sopds-go -- start
+
+# Add to a flake.nix
+inputs.sopds-go.url = "github:dimgord/sopds-go";
+```
+
+### From source
+
+```bash
+git clone https://github.com/dimgord/sopds-go.git
 cd sopds-go
 go build -o sopds ./cmd/sopds
 ```
@@ -222,46 +273,56 @@ Import data from existing MySQL SOPDS database:
 
 ```
 sopds-go/
-├── cmd/sopds/
-│   └── main.go              # CLI entry point
+├── cmd/sopds/main.go         # CLI entry point (cobra)
 ├── internal/
-│   ├── config/
-│   │   └── config.go        # YAML configuration
-│   ├── converter/
-│   │   └── converter.go     # FB2 to EPUB/MOBI conversion
-│   ├── database/
-│   │   ├── postgres.go      # PostgreSQL connection
-│   │   ├── models.go        # Data models
-│   │   ├── queries.go       # SQL queries
-│   │   └── migrations/      # SQL migrations
-│   ├── scanner/
-│   │   ├── scanner.go       # Directory scanner
-│   │   └── fb2parser.go     # FB2 metadata parser
-│   ├── server/
-│   │   ├── server.go        # HTTP server setup
-│   │   ├── handlers.go      # OPDS handlers
-│   │   └── web.go           # Web UI handlers & templates
-│   └── opds/
-│       └── feed.go          # OPDS feed generation
-├── config.yaml              # Configuration
-├── init.sql                 # Database initialization
+│   ├── config/               # YAML configuration loader
+│   ├── converter/            # FB2 → EPUB (pure Go), FB2 → MOBI (Calibre)
+│   ├── database/             # PostgreSQL: connection, models, queries, migrations
+│   ├── scanner/              # Library walker, FB2 parser, ZIP-archive walker
+│   ├── server/               # HTTP server (chi), OPDS handlers, Web UI handlers
+│   ├── opds/                 # Atom-feed generator
+│   ├── tts/                  # Piper TTS integration (Go path)
+│   └── infrastructure/       # Persistence layer abstractions
+├── sopds-tts-rs/             # Rust port of TTS — CUDA-accelerated (see below)
+├── zipdupes-rs/              # Rust port of FB2-archive deduplicator
+├── fb2converters/            # Drop-in directory for additional converter binaries
+├── config.yaml.example       # Example configuration
+├── init.sql                  # Database initialization
+├── Taskfile.yml              # task-runner recipes (build / test / docker / etc.)
 ├── go.mod
 └── README.md
 ```
 
-## Web Interface Screenshots
+## Rust subprojects
 
-The web interface features:
-- Modern gradient design with Font Awesome icons
-- Library statistics (books, authors, genres, series)
-- Quick navigation menu
-- Search by title or author
-- Hierarchical letter navigation (1→2→3 characters) for large author/series lists
-- Download buttons for FB2, EPUB, MOBI formats
-- Personal bookshelf to save books for later
-- "Duplicates" button to view all versions of a book
-- Browse by language with book counts
-- Responsive layout for mobile devices
+Two CLI utilities have Rust ports for performance/GPU reasons. Both are CLI-compatible drop-in replacements; the Go originals remain in-tree as fallbacks.
+
+### `sopds-tts-rs/` — CUDA-accelerated TTS
+
+Drop-in for `sopds-tts`. Runs Piper ONNX models via [`ort`](https://github.com/pykeio/ort) (Rust ONNX Runtime binding) with the **CUDA execution provider** for dramatic speedup on systems with NVIDIA GPUs. Pascal-class GPUs (sm_61, e.g. GTX 1070) are explicitly supported via a pinned cuDNN 9.8 in the flake.
+
+```bash
+cd sopds-tts-rs
+nix develop ./       # first time: ~15-30 min (ORT source build with CUDA EP)
+cargo build --release
+./target/release/sopds-tts-rs <model> <output> < text.txt
+```
+
+Wire it into sopds-go's pipeline by setting `tts.binary: /path/to/sopds-tts-rs` in `config.yaml`.
+
+### `zipdupes-rs/` — Rust port of FB2-archive duplicate finder
+
+Same CLI as Go `zipdupes`. Significantly faster on cold-cache scans of large book corpora (tested on a 1TB+ FB2 ZIP archive collection). Use whichever you prefer.
+
+```bash
+cd zipdupes-rs
+cargo build --release
+./target/release/zipdupes /path/to/archive/dir
+```
+
+## Web UI
+
+Modern responsive layout with Font Awesome icons, gradient header, library statistics on the home page, full-text + hierarchical navigation, download buttons for all supported formats, personal bookshelf, duplicates browser, and language filtering. Optimized for both desktop and mobile screens.
 
 ## License
 

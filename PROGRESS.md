@@ -5,6 +5,50 @@
 
 ---
 
+### Revision 54 - 2026-05-09
+**README polish for OSS publication:**
+
+Significant rewrite preparing the repo for public release on GitHub. Goals: orient new readers, surface the Rust subprojects, replace placeholder `<repository>` references with real install paths, sync version + Go-version data with reality.
+
+**Changes:**
+
+1. **Header**: replaced bare `**Version: 1.1.0**` line with four shields.io badges — latest release, license (AGPL-3.0), Go version (read from go.mod), CI build status. Badges link to relevant pages so a curious visitor can land on any of them in one click.
+
+2. **Description rewrite**: opening paragraph now positions sopds-go as a Go rewrite of [Onishchenko's Python SOPDS](https://github.com/sergey-dryabzhinsky/sopds), with concrete value-prop language — "self-hosted home libraries", "scans nested ZIP archives", "even produces audiobooks via local TTS". Replaces the previous one-liner that didn't tell a stranger why they'd care.
+
+3. **Features section grouped into four subsections**: Catalog & Browsing / Library Management / Conversion & TTS / Operations. Adds previously-missing items: TTS (Piper), GPU-accelerated TTS (sopds-tts-rs), Docker image, Nix flake, prebuilt binaries.
+
+4. **Requirements bumped**: `Go 1.21+ → Go 1.24+` (go.mod actually pins 1.24.0). Added optional dependencies for TTS (espeak-ng, Piper) and CUDA. PostgreSQL 12+ → 14+ (more reasonable lower bound).
+
+5. **Installation section restructured** — four subsections in priority order:
+   - Pre-built binaries (curl + tar + install) — for users
+   - Docker (`docker run` with library + config volumes) — for self-hosters
+   - Nix flake (`nix run github:dimgord/sopds-go`) — for Nix users
+   - From source (`go build`) — for hackers
+   Replaces the previous single `git clone <repository>` placeholder.
+
+6. **New `## Rust subprojects` section** — explains `sopds-tts-rs/` (CUDA-accelerated, Pascal sm_61 supported, ORT 2.0 + cuDNN 9.8 dual-nixpkgs flake) and `zipdupes-rs/` (rip-grep-style speed for corpus scans). Both presented as CLI-drop-in replacements; Go originals retained as fallbacks. References Rev 52 for the engineering trail.
+
+7. **Project Structure refreshed** to reflect actual directory tree (added `internal/tts/`, `internal/infrastructure/`, both Rust subdirs, `fb2converters/`, `Taskfile.yml`).
+
+8. **Web Interface section** trimmed and renamed `## Web UI` (was `## Web Interface Screenshots` but had no actual screenshots — false promise).
+
+**Files Modified:**
+- `README.md`: ~120 lines added, ~30 removed; net +90 lines.
+
+**Pre-publication checklist** (work in progress; not blocking this Rev):
+- [x] Rev 53 — license switch to AGPL-3.0
+- [x] Rev 54 — README polish
+- [ ] NOTICE.md — third-party attributions audit (deps + bundled assets)
+- [ ] CI workflow (.github/workflows/ci.yml) — go test + golangci-lint
+- [ ] Release automation (.github/workflows/release.yml) + GoReleaser config
+- [ ] Dockerfile + GHCR publish
+- [ ] Root `flake.nix` packaging the binary for `nix run github:dimgord/sopds-go`
+- [ ] Optional: Homebrew tap (`dimgord/homebrew-tap`)
+- [ ] Module-path mismatch (`module github.com/sopds/sopds-go` in go.mod vs. real repo URL `github.com/dimgord/sopds-go`) — **decision needed**: rename module, create org, or keep as documentation-only
+
+---
+
 ### Revision 53 - 2026-05-09
 **License switch: GPL-3.0 → AGPL-3.0:**
 
