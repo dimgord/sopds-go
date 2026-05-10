@@ -1,8 +1,6 @@
 module github.com/dimgord/sopds-go
 
-go 1.24.0
-
-toolchain go1.24.10
+go 1.25.0
 
 require (
 	github.com/bodgit/sevenzip v1.6.1
@@ -14,6 +12,7 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/saracen/go7z v0.0.0-20191010121135-9c09b6bd7fda
 	github.com/spf13/cobra v1.8.0
+	github.com/yalue/onnxruntime_go v1.25.0
 	golang.org/x/crypto v0.31.0
 	golang.org/x/text v0.33.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -43,7 +42,6 @@ require (
 	github.com/spf13/afero v1.11.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/ulikunitz/xz v0.5.12 // indirect
-	github.com/yalue/onnxruntime_go v1.25.0 // indirect
 	go4.org v0.0.0-20200411211856-f5505b9728dd // indirect
 	golang.org/x/sync v0.19.0 // indirect
 )

@@ -133,7 +133,7 @@
           default = pkgs.mkShell {
             name = "sopds-go";
             packages = with pkgs; [
-              go_1_24
+              go_1_25
               gopls
               go-tools # staticcheck
               golangci-lint

@@ -5,6 +5,42 @@
 
 ---
 
+### Revision 62 - 2026-05-10
+**Go bump 1.24 → 1.25 + golangci-lint version unpinned (CI hotfix):**
+
+First push of Rev 57 (CI workflow) failed in the `lint` job with:
+```
+Error: can't load config: the Go language version (go1.23) used to build
+golangci-lint is lower than the targeted Go version (1.24.0)
+```
+
+`golangci-lint v1.61` (which I pinned in Rev 57) was itself built with Go 1.23, and golangci-lint's parser refuses to analyze code targeting a Go version newer than its own build version. So pinning the linter while the project tracks current-Go is a self-defeating maintenance trap — every Go bump silently breaks lint until the pin is bumped too.
+
+**Fix is twofold:**
+
+1. **Bump Go target 1.24 → 1.25.0** in `go.mod` to match the rest of dvg-mac's stack (fbe-go, fedora-managed boxes — all on Go 1.25 since fbe-go's CI workflow already uses `1.25.x`). Also dropped the `toolchain go1.24.10` line — Go's auto-downloader will fetch 1.25 on hosts without it.
+2. **Switch CI lint version from `v1.61` → `latest`** so the action grabs whatever golangci-lint release is current at run time. This eliminates the version-skew failure mode for good. Comment block in ci.yml documents the rationale so this doesn't get re-pinned by reflex on a future PR.
+
+**Other files touched to stay in sync:**
+
+- `.github/workflows/ci.yml` — `GO_VERSION: 1.24.x` → `1.25.x`; golangci-lint pin → `latest`.
+- `.github/workflows/release.yml` — `go-version: 1.24.x` → `1.25.x` (otherwise GoReleaser builds release binaries with stale Go).
+- `flake.nix` — devShell `go_1_24` → `go_1_25` so `nix develop` matches CI.
+- `go.mod` — direct + indirect deps re-tidied via `go mod tidy` (added a few transitively-needed packages: `go-internal`, `objx`, `pretty`, `mousetrap`, `randomstring`).
+
+**Verified locally:**
+- `go version` reports 1.26.1 (dvg-mac has Go newer than the floor — fine).
+- `go build ./...` clean.
+- `go test ./...` all 14 packages pass.
+
+**Files Modified:**
+- `go.mod`: `go 1.24.0 / toolchain go1.24.10` → `go 1.25.0`; tidy added indirect entries.
+- `.github/workflows/ci.yml`: 2 lines.
+- `.github/workflows/release.yml`: 1 line.
+- `flake.nix`: 1 line.
+
+---
+
 ### Revision 61 - 2026-05-10
 **Homebrew tap — `dimgord/homebrew-tap` + GoReleaser brews integration (Phase 9):**
 

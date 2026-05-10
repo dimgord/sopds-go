@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: '1.24.x'
+  GO_VERSION: '1.25.x'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
@@ -39,7 +39,13 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.61
+          # `latest` resolves to whatever's current at run time. Pinning
+          # to a specific version becomes a maintenance liability — every
+          # Go release bumps the minimum golangci-lint version that can
+          # parse it (v1.61 was built with Go 1.23 and fails to lint Go
+          # 1.24+ code; we hit that on the first push). `latest` is the
+          # right default for a project that tracks current Go.
+          version: latest
           # Defaults: govet, ineffassign, staticcheck, errcheck, unused.
           # No .golangci.yml in repo (yet) — use the action's defaults.
           args: --timeout=5m
