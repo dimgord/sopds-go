@@ -1,3 +1,14 @@
+// piper.go is the only CGO-dependent file in this package — it links
+// `github.com/yalue/onnxruntime_go` which uses `import "C"`. Under
+// CGO_ENABLED=0 (default for cross-compiled release binaries) this
+// file is excluded; the rest of internal/tts (generator.go, queue.go,
+// cache.go, extractor.go) compiles cleanly because Generator invokes
+// `sopds-tts` as a subprocess via exec.Command and never references
+// Piper types directly. cmd/sopds-tts is the only direct importer of
+// this file and carries the same `//go:build cgo` tag.
+//
+//go:build cgo
+
 package tts
 
 import (
