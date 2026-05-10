@@ -95,6 +95,8 @@ sudo install zipdupes /usr/local/bin/    # optional: FB2 dedup tool
 
 ### Docker
 
+**Single container** (you already have PostgreSQL running somewhere):
+
 ```bash
 docker run -d \
   --name sopds \
@@ -103,6 +105,24 @@ docker run -d \
   -v /path/to/config.yaml:/etc/sopds/config.yaml:ro \
   ghcr.io/dimgord/sopds-go:latest
 ```
+
+**Compose stack** (sopds-go + sibling PostgreSQL) — copy the template:
+
+```bash
+mkdir -p ~/dockers/sopds && cd ~/dockers/sopds
+curl -O https://raw.githubusercontent.com/dimgord/sopds-go/main/docker-compose.example.yml
+curl -O https://raw.githubusercontent.com/dimgord/sopds-go/main/config.yaml.example
+curl -O https://raw.githubusercontent.com/dimgord/sopds-go/main/init.sql
+mv docker-compose.example.yml docker-compose.yml
+mv config.yaml.example config.yaml
+# Edit config.yaml: set database.host=postgres, database.password=...
+# Edit docker-compose.yml: replace /path/to/your/books with real path
+docker compose up -d
+docker compose logs -f sopds      # watch it boot
+docker exec -it sopds sopds scan -c /etc/sopds/config.yaml   # first library scan
+```
+
+Access at `http://<host>:8081/web/` (web UI) and `http://<host>:8081/opds/` (OPDS feed).
 
 ### Nix flake
 
