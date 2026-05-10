@@ -1,0 +1,26 @@
+# golangci-lint v2.x config — see https://golangci-lint.run/usage/configuration/
+#
+# Core linter set: govet (compiler-style checks), ineffassign (unused
+# assignments), staticcheck (the largest static-analysis bundle), unused
+# (dead code), misspell (English misspellings — useful for OSS docs).
+#
+# `errcheck` is intentionally NOT enabled — Go has many idiomatic
+# patterns where Close/Remove/Write returns are deliberately ignored
+# (cleanup paths, test fixtures, bytes.Buffer.Write which never errors).
+# Re-enabling it would require ~50 specific excludes; not worth the
+# noise floor for an OSS project that already has 14 passing internal
+# packages and a clean static-analysis baseline from staticcheck.
+
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+
+run:
+  timeout: 5m
