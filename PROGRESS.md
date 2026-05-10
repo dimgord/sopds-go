@@ -5,6 +5,36 @@
 
 ---
 
+### Revision 67 - 2026-05-10
+**Fix `flake.nix` vendorHash — `nix run github:dimgord/sopds-go` now actually works:**
+
+Rev 60 introduced the root flake.nix but with `vendorHash = "sha256-AAAAA…AAAAA"` (lib.fakeHash placeholder), so any `nix build` would fail until the real Go-modules vendor hash was substituted. Resolved this Rev.
+
+**Mechanism:**
+- `nix build .#sopds --no-link` printed the expected hash:
+  ```
+  hash mismatch in fixed-output derivation '…sopds-go-modules.drv':
+      specified: sha256-AAAAA…
+            got: sha256-/Bws/W3fmXls7i+4GN26S4kJt/+cpf9sKIqLaWhIImA=
+  ```
+- Substituted into `commonGoArgs.vendorHash`. Re-ran `nix build .#sopds` → built clean.
+- Smoke test: `nix run .#sopds -- version` → `SOPDS dev-dirty (Go rewrite)` (the "dev-dirty" suffix is correct — it's `self.dirtyRev` because the working tree was uncommitted at build time).
+
+**`nix run github:dimgord/sopds-go` from any user is now functional.** The version string in their build will reflect the git rev they're tagging from, e.g. `v1.3.1` users get `SOPDS v1.3.1` (per the `${version}` substitution in commonGoArgs.ldflags).
+
+**Caveat — vendorHash drift:**
+- Hash is computed from `go.sum` + `go.mod`. Any dep change → must bump this hash again.
+- CI does not currently catch hash drift; would need a `nix flake check` step in `.github/workflows/ci.yml`. Filed as future work — when it surfaces (e.g. `dependabot` opens a Go-deps PR and `nix build` breaks for downstream users), add the CI step.
+- For human bumps: `nix build .#sopds 2>&1 | grep got:` extracts the new hash; copy it into `flake.nix` and commit.
+
+**Files Modified:**
+- `flake.nix`: 4-line comment block + 1-line hash. Net +1 line.
+
+**Pre-publication checklist update:**
+- [x] Nix flake fully working (vendorHash filled in)
+
+---
+
 ### Revision 66 - 2026-05-10
 **v1.3.1 patch — re-publish release archives with Rev 64+65 fixes baked in:**
 

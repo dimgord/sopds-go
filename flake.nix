@@ -46,10 +46,11 @@
           inherit version;
           src = ./.;
 
-          # First build will fail with the expected hash — copy that
-          # value here, then re-run. Or use `nix-prefetch` derivative
-          # tooling if vendoring drift is a concern.
-          vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+          # Filled in via `nix build .#sopds` (Rev 67) — Nix re-computes
+          # this hash from go.sum + go.mod every build, so it must be
+          # bumped whenever module deps change. CI doesn't cover this
+          # automatically; bump it locally and commit.
+          vendorHash = "sha256-/Bws/W3fmXls7i+4GN26S4kJt/+cpf9sKIqLaWhIImA=";
 
           ldflags = [
             "-s"
