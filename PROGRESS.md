@@ -5,6 +5,34 @@
 
 ---
 
+### Revision 69 - 2026-05-10
+**PostgreSQL bump 16 → 18 across all configs:**
+
+PG 18 was released 2025-09-25 and is the current stable major as of 2026-05. PG 16 is still supported upstream (until Nov 2028) but trails three majors behind; for an OSS project being published today, recommending the current major is the right default. Nixpkgs and Homebrew both have `postgresql_18` / `postgresql@18` available.
+
+**Changes:**
+
+- `flake.nix` devShell: `postgresql_16` → `postgresql_18` (client tools — psql, pg_dump, pg_restore — for migrations/backups). Verified via `nix develop --command psql --version` → `psql (PostgreSQL) 18.3`.
+- `.goreleaser.yaml` brews block:
+  - `dependencies.postgresql@16` → `postgresql@18` (recommended dep installed alongside sopds-go via brew).
+  - `caveats` step 1: `brew services start postgresql@16` → `postgresql@18`.
+- `README.md` Requirements: `PostgreSQL 14+` → `PostgreSQL 16+` (raised the lower bound — features used by sopds-go don't strictly require >14, but no point shipping with an unsupported floor); explicit "18 recommended" note pointing at the brew dep.
+- `CLAUDE.md` Requirements: `Go 1.21+` → `Go 1.25+` (catches Rev 62 toolchain bump that was missed in the dev-doc); `PostgreSQL 12+` → `PostgreSQL 16+` with the same "18 recommended" note.
+
+**Compat notes:**
+- Schema in `init.sql` and migrations works on PG 16+ — the only PG-15-or-newer feature used is "Grant schema permissions" (per the comment in init.sql:13). PG 12-14 would need additional GRANTs which we never tested; raising the floor to 16 makes the support story honest.
+- No code changes needed in Go — `gorm.io/driver/postgres` autodetects server version.
+
+**For users on existing PG 14/15/16 installs:** keep using your current Postgres; no schema migration needed. The bump is just the *recommended* default for fresh installs.
+
+**Files Modified:**
+- `flake.nix`: 1 line (postgres pkg name).
+- `.goreleaser.yaml`: 2 lines (dep name + caveat).
+- `README.md`: 1 line (Requirements bullet).
+- `CLAUDE.md`: 2 lines (Go + PG bullets).
+
+---
+
 ### Revision 68 - 2026-05-10
 **Drop `sopds-tts-rs` from root `flake.nix` inputs — fixes `nix run github:dimgord/sopds-go` for end users:**
 

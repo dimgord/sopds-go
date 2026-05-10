@@ -609,8 +609,8 @@ The full route table lives in `internal/server/server.go` — grep `r.Get(`, `r.
 
 ## Requirements
 
-- Go 1.21+
-- PostgreSQL 12+
+- Go 1.25+
+- PostgreSQL 16+ (18 recommended; client tools in nix devShell are postgresql_18)
 - Calibre (optional, for MOBI conversion)
 
 ## Dependencies
