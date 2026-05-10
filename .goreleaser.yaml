@@ -25,18 +25,16 @@ builds:
       - -s -w            # strip symbols + DWARF debug info
       - -X main.version={{ .Version }}
 
-  # TTS subprocess (Go path; CUDA-accelerated alternative is sopds-tts-rs/).
-  - id: sopds-tts
-    main: ./cmd/sopds-tts
-    binary: sopds-tts
-    env:
-      - CGO_ENABLED=0
-    goos: [linux, darwin]
-    goarch: [amd64, arm64]
-    flags:
-      - -trimpath
-    ldflags:
-      - -s -w
+  # NOTE: `sopds-tts` is intentionally NOT in the release matrix.
+  # It depends on `github.com/yalue/onnxruntime_go` which is CGO-only
+  # (binds to libonnxruntime.so at runtime). Building it with
+  # CGO_ENABLED=0 fails with "build constraints exclude all Go files".
+  # Building with CGO_ENABLED=1 works but the resulting binary needs
+  # ONNX Runtime installed on the host — which we'd then have to bundle
+  # (~50MB) or document as a runtime dependency. Better path: users
+  # who need TTS either build from source (`go build ./cmd/sopds-tts`
+  # with ORT installed) or use the Rust port `sopds-tts-rs/` which
+  # has its own self-contained Nix flake including CUDA support.
 
   # FB2-archive duplicate finder (Rust port: zipdupes-rs/).
   - id: zipdupes
@@ -53,7 +51,7 @@ builds:
 
 archives:
   - id: default
-    ids: [sopds, sopds-tts, zipdupes]
+    ids: [sopds, zipdupes]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_
       {{- if eq .Os "darwin" }}macos{{ else }}{{ .Os }}{{ end }}_
@@ -158,7 +156,6 @@ brews:
     # Three binaries plus the example config + init.sql land in the cellar.
     install: |
       bin.install "sopds"
-      bin.install "sopds-tts"
       bin.install "zipdupes"
       pkgshare.install "config.yaml.example"
       pkgshare.install "init.sql"

@@ -27,9 +27,10 @@
 FROM gcr.io/distroless/base-debian12:nonroot
 
 # Pre-built binaries from GoReleaser's docker context (CGO_ENABLED=0,
-# static, ~10-15MB each).
+# static, ~10-15MB each). `sopds-tts` is intentionally not in the
+# release matrix — it depends on CGO + libonnxruntime; users who need
+# TTS either build it from source or use sopds-tts-rs/.
 COPY sopds /usr/local/bin/sopds
-COPY sopds-tts /usr/local/bin/sopds-tts
 COPY zipdupes /usr/local/bin/zipdupes
 
 # Reference config — users should mount over /etc/sopds/config.yaml.
