@@ -18,6 +18,13 @@
 #                   has ~25 reports across these — incremental cleanup is
 #                   the right path. Re-enable in a future Rev with the
 #                   specific check classes excluded that don't apply here.
+#   unused        — flags ~10 items: an unused logFile var in main.go,
+#                   helpers that are stubbed but not yet wired (basicAuth,
+#                   getBookDir, isAudioExtension, isArchiveExtension), one
+#                   unused adapter (boolToIntAdapter), an errorReader test
+#                   helper. Keep them OFF for now — some are deliberate
+#                   stubs for upcoming features. Re-enable after a
+#                   dead-code sweep PR.
 #
 # Re-adding staticcheck later — recommended config skeleton:
 #
@@ -42,7 +49,6 @@ linters:
   enable:
     - govet
     - ineffassign
-    - unused
     - misspell
 
 run:
