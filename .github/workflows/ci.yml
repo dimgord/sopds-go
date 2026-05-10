@@ -37,17 +37,20 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        # @v7 is required for golangci-lint v2.x (which is the line
+        # built against Go 1.25). @v6 caps out at v1.64.8 (Go 1.24).
+        # Bumped after the first attempt with @v6 + version: latest
+        # resolved to v1.64.8 and failed with "Go 1.24 < 1.25 target".
+        uses: golangci/golangci-lint-action@v7
         with:
           # `latest` resolves to whatever's current at run time. Pinning
           # to a specific version becomes a maintenance liability — every
           # Go release bumps the minimum golangci-lint version that can
-          # parse it (v1.61 was built with Go 1.23 and fails to lint Go
-          # 1.24+ code; we hit that on the first push). `latest` is the
-          # right default for a project that tracks current Go.
+          # parse it. `latest` is the right default for a project that
+          # tracks current Go. v2.x has a different config format than
+          # v1.x but with no .golangci.yml in repo, defaults work for both.
           version: latest
           # Defaults: govet, ineffassign, staticcheck, errcheck, unused.
-          # No .golangci.yml in repo (yet) — use the action's defaults.
           args: --timeout=5m
 
   # Unit tests on Linux + macOS to catch platform-specific code paths
