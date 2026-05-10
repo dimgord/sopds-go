@@ -131,6 +131,74 @@ docker_manifests:
       - "ghcr.io/dimgord/sopds-go:latest-amd64"
       - "ghcr.io/dimgord/sopds-go:latest-arm64"
 
+# Homebrew formula auto-update — on each tag, GoReleaser opens a commit
+# to dimgord/homebrew-tap updating Formula/sopds-go.rb with the new
+# release archive URL + SHA256. Users:  brew tap dimgord/tap &&
+# brew install sopds-go.
+#
+# Auth: HOMEBREW_TAP_GITHUB_TOKEN is a PAT (or fine-grained token) with
+# `contents: write` on dimgord/homebrew-tap, set as a repo Secret in
+# dimgord/sopds-go's settings.
+brews:
+  - name: sopds-go
+    repository:
+      owner: dimgord
+      name: homebrew-tap
+      branch: master
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/dimgord/sopds-go"
+    description: "Self-hosted OPDS catalog server (Go rewrite of SOPDS)"
+    license: "AGPL-3.0"
+    commit_author:
+      name: dimgord-bot
+      email: dimgord+bot@users.noreply.github.com
+    commit_msg_template: "Brew formula update for sopds-go {{ .Tag }}"
+
+    # Three binaries plus the example config + init.sql land in the cellar.
+    install: |
+      bin.install "sopds"
+      bin.install "sopds-tts"
+      bin.install "zipdupes"
+      pkgshare.install "config.yaml.example"
+      pkgshare.install "init.sql"
+
+    # Smoke test — run by `brew test sopds-go`. The version subcmd hits
+    # the version-injection ldflags wired in Rev 58, so a successful
+    # exit confirms the binary is link-clean and version metadata sane.
+    # Note: some setupLogging warnings on stderr are non-fatal — test
+    # checks only that the command runs and exits 0.
+    test: |
+      system "#{bin}/sopds", "version"
+
+    # Optional deps — `brew install --with-postgresql sopds-go` would
+    # work but Homebrew dropped --with-* flags in 2019. Keep this as
+    # documentation; install postgres separately or via brew services.
+    dependencies:
+      - name: postgresql@16
+        type: recommended
+
+    # Caveats shown after `brew install`. Reminds users about the
+    # external runtime deps that aren't installable via brew.
+    caveats: |
+      sopds-go is now installed. To complete setup:
+
+        1. Start PostgreSQL: brew services start postgresql@16
+        2. Initialize the database:
+             psql -U postgres -f #{pkgshare}/init.sql
+        3. Create config: sopds init
+        4. Edit config.yaml.example as a starting template:
+             cat #{pkgshare}/config.yaml.example
+        5. Run migrations: sopds migrate
+        6. Start: sopds start
+
+      Optional runtime deps (install separately):
+        - calibre        — for FB2 → MOBI conversion (`brew install calibre`)
+        - espeak-ng      — for IPA-based Piper TTS voices (`brew install espeak-ng`)
+
+      For CUDA-accelerated TTS (NVIDIA GPU only), see sopds-tts-rs/ in the
+      upstream repo: https://github.com/dimgord/sopds-go/tree/main/sopds-tts-rs
+
 snapshot:
   version_template: '{{ incpatch .Version }}-next'
 

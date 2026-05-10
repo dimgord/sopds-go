@@ -5,6 +5,52 @@
 
 ---
 
+### Revision 61 - 2026-05-10
+**Homebrew tap — `dimgord/homebrew-tap` + GoReleaser brews integration (Phase 9):**
+
+End-user macOS install path closed: `brew tap dimgord/tap && brew install sopds-go`. Each `v*` tag automatically pushes a formula update to `dimgord/homebrew-tap` via GoReleaser's `brews:` integration — no manual formula maintenance.
+
+**1. New repo: `dimgord/homebrew-tap`**
+
+Created public via `gh repo create dimgord/homebrew-tap --public --add-readme`. Default branch: `master`. README explains the auto-update flow and lists available formulae (currently just `sopds-go`); the `Formula/` directory will be populated by GoReleaser on the first release tag — no formula committed manually. Brew's tap-name convention (`homebrew-` prefix on the repo name, dropped in `brew tap` user-side) means users get the friendly `dimgord/tap` shorthand.
+
+**2. `.goreleaser.yaml` — `brews:` block:**
+
+- `repository.{owner,name,branch}` → `dimgord/homebrew-tap` on `master`. Auth via `HOMEBREW_TAP_GITHUB_TOKEN` env var (PAT or fine-grained token with `contents: write` on the tap repo).
+- `directory: Formula` — Homebrew's standard formula location (resolves to `Formula/sopds-go.rb`).
+- `commit_author` — `dimgord-bot` for tap-side audit clarity (vs. mixing with personal commits).
+- `install` block — drops all three binaries to `bin/`, `config.yaml.example` and `init.sql` to `pkgshare/` so users have reference materials in `$(brew --prefix)/share/sopds-go/`.
+- `test` block — `system "#{bin}/sopds", "version"` is the smoke test that `brew test sopds-go` runs. Confirms the binary links cleanly and the version-injection ldflags from Rev 58 took effect.
+- `dependencies` — `postgresql@16` as recommended (not required, since users may have a separate Postgres install).
+- `caveats` — multi-step setup runbook shown after `brew install`. Mentions optional runtime deps (`calibre`, `espeak-ng`) and points at sopds-tts-rs for CUDA TTS.
+
+**3. `.github/workflows/release.yml` — passes `HOMEBREW_TAP_GITHUB_TOKEN` to GoReleaser env:**
+
+Added `HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}` next to existing `GITHUB_TOKEN`. Comment block in workflow file documents how to set the secret.
+
+**Manual step required from Dmitry — set the secret:**
+
+The auto-built `GITHUB_TOKEN` for sopds-go's workflow runs only has access to sopds-go itself; cross-repo writes (to homebrew-tap) need a separate token. Two options:
+
+- **Classic PAT** (simplest): https://github.com/settings/tokens/new — `repo` scope. Set:
+  ```sh
+  gh secret set HOMEBREW_TAP_GITHUB_TOKEN --repo dimgord/sopds-go
+  # paste the PAT when prompted
+  ```
+- **Fine-grained token** (recommended for least-privilege): https://github.com/settings/personal-access-tokens/new — Repository access: *Only select repositories* → `dimgord/homebrew-tap`. Repository permissions: *Contents: Read and write*. Same `gh secret set` command.
+
+Once the secret is set, the next `v*` tag push will auto-publish the formula. No re-trigger of v1.2.0 is needed; just bump to v1.3.0 (or whatever) when convenient.
+
+**Pre-publication checklist update:**
+- [x] Optional: Homebrew tap
+
+**Files Modified:**
+- `dimgord/homebrew-tap` (new repo): polished README pushed (1 commit, 33 lines).
+- `.goreleaser.yaml`: +60 lines (`brews:` block).
+- `.github/workflows/release.yml`: +5 lines (HOMEBREW_TAP_GITHUB_TOKEN env + comment).
+
+---
+
 ### Revision 60 - 2026-05-10
 **Root `flake.nix` — `nix run github:dimgord/sopds-go` (Phase 8):**
 
@@ -245,6 +291,7 @@ Significant rewrite preparing the repo for public release on GitHub. Goals: orie
 - [x] Rev 58 — Release automation (`.github/workflows/release.yml`) + GoReleaser config
 - [x] Rev 59 — Dockerfile + GHCR multi-arch publish
 - [x] Rev 60 — Root `flake.nix` (Go binaries + composed Rust devShell)
+- [x] Rev 61 — Homebrew tap (`dimgord/homebrew-tap`) + GoReleaser `brews:` integration
 - [ ] Optional: Homebrew tap (`dimgord/homebrew-tap`)
 
 ---
