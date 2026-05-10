@@ -5,15 +5,17 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
 
-    # The Rust TTS subproject has its own flake (CUDA + Pascal sm_61
-    # bring-up was non-trivial — see sopds-tts-rs/flake.nix and PROGRESS
-    # Rev 52). Composed here so a single root `nix develop` from the
-    # repo root has access to everything; users who only need the Rust
-    # path can still `cd sopds-tts-rs && nix develop ./` directly.
-    sopds-tts-rs = {
-      url = "path:./sopds-tts-rs";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    # NOTE: sopds-tts-rs/flake.nix is intentionally NOT composed as a
+    # `path:./sopds-tts-rs` input here (Rev 67 had it; Rev 68 dropped
+    # it). Reason: when this root flake is consumed via
+    # `nix run github:dimgord/sopds-go`, Nix tries to re-lock the
+    # `path:` input against the remote checkout location and fails with
+    # `cannot write modified lock file of flake (use --no-write-lock-file
+    # to ignore)`. That breaks the entire `nix run` UX for end users.
+    #
+    # The Rust TTS subproject remains a self-contained flake — users
+    # who want the CUDA + Pascal sm_61 dev shell run
+    # `cd sopds-tts-rs && nix develop ./`  from a local clone.
   };
 
   outputs =
@@ -21,7 +23,6 @@
       self,
       nixpkgs,
       flake-utils,
-      sopds-tts-rs,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -128,38 +129,33 @@
             default = mkApp "sopds";
           };
 
-        # Default Go dev shell. `nix develop` from repo root puts you
-        # here. For the Rust-CUDA workflow, see `tts-rs` shell below.
-        devShells = {
-          default = pkgs.mkShell {
-            name = "sopds-go";
-            packages = with pkgs; [
-              go_1_25
-              gopls
-              go-tools # staticcheck
-              golangci-lint
-              delve # debugger
-              go-task # Taskfile.yml runner
-              postgresql_16 # client tools (psql, pg_dump) for migrations / backups
-            ];
-            shellHook = ''
-              echo "sopds-go dev shell on ${system}"
-              echo "  go:           $(go version | awk '{print $3}')"
-              echo "  golangci:     $(golangci-lint version 2>/dev/null | head -1)"
-              echo "  task:         $(task --version 2>/dev/null | head -1)"
-              echo
-              echo "Quick refs:"
-              echo "  task build         build all binaries"
-              echo "  task test          go test ./..."
-              echo "  nix develop .#tts-rs    Rust + CUDA shell (Linux only)"
-            '';
-          };
-
-          # Re-export sopds-tts-rs's CUDA-aware shell. Linux-only because
-          # the upstream flake hardcodes x86_64-linux + cudaSupport.
-        }
-        // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
-          tts-rs = sopds-tts-rs.devShells.${system}.default;
+        # Go dev shell. `nix develop` from repo root puts you here.
+        # For the Rust-CUDA workflow, the sopds-tts-rs/ subproject has
+        # its own self-contained flake — `cd sopds-tts-rs && nix develop ./`
+        # from a local clone. (See PROGRESS Rev 68 for why it's not
+        # composed in here as an input.)
+        devShells.default = pkgs.mkShell {
+          name = "sopds-go";
+          packages = with pkgs; [
+            go_1_25
+            gopls
+            go-tools # staticcheck
+            golangci-lint
+            delve # debugger
+            go-task # Taskfile.yml runner
+            postgresql_16 # client tools (psql, pg_dump) for migrations / backups
+          ];
+          shellHook = ''
+            echo "sopds-go dev shell on ${system}"
+            echo "  go:           $(go version | awk '{print $3}')"
+            echo "  golangci:     $(golangci-lint version 2>/dev/null | head -1)"
+            echo "  task:         $(task --version 2>/dev/null | head -1)"
+            echo
+            echo "Quick refs:"
+            echo "  task build                              build all binaries"
+            echo "  task test                               go test ./..."
+            echo "  cd sopds-tts-rs && nix develop ./       Rust + CUDA shell (Linux only)"
+          '';
         };
       }
     );
