@@ -5,6 +5,33 @@
 
 ---
 
+### Revision 68 - 2026-05-10
+**Drop `sopds-tts-rs` from root `flake.nix` inputs — fixes `nix run github:dimgord/sopds-go` for end users:**
+
+Symptom (reported from dvg-fedya): `nix run github:dimgord/sopds-go -- status` failed with:
+```
+error: cannot write modified lock file of flake 'github:dimgord/sopds-go'
+       (use '--no-write-lock-file' to ignore)
+```
+
+Root cause: Rev 60 composed `sopds-tts-rs` into the root flake via a `path:./sopds-tts-rs` input. `path:` inputs in flakes lock to a specific narHash + lastModified pair tied to the *parent* flake's working-tree position. When the root flake is fetched from GitHub (read-only), Nix tries to re-resolve the `path:` to the new fetch location and discovers the narHash drifts — wants to update the lock, but can't write to a remote read-only flake. Fail.
+
+Fix: drop the input entirely. The `tts-rs` devShell that re-exported `sopds-tts-rs.devShells.${system}.default` is removed; users who want the Rust + CUDA workflow now `cd sopds-tts-rs && nix develop ./` from a local clone (the sopds-tts-rs flake remains self-contained and works fine — the issue is only with composing it under a different parent flake that's then consumed remotely).
+
+Trade-off: `nix develop` from repo root no longer gives you the Rust toolchain in one shot. Have to nest. Acceptable — the Rust+CUDA stack is heavy (cuDNN 9.8 pin from Jun-2025 nixpkgs, ~15-30min source build of ORT) and most users of sopds-go don't need it. Those who do are already cd-ing into the subproject.
+
+**Verified after fix:**
+- `nix flake update` removed `sopds-tts-rs` and its 4 transitive inputs (`nixpkgs`, `nixpkgs-cuda`, `rust-overlay`, `rust-overlay/nixpkgs`) from `flake.lock`.
+- `nix build .#sopds --no-link` builds clean (only depends on `nixpkgs` + `flake-utils` now).
+- `nix run github:dimgord/sopds-go -- version` will work for end users once this Rev is on `main`.
+
+**Files Modified:**
+- `flake.nix`: -25 lines (input declaration + devShells.<system>.tts-rs entry + the `pkgs.lib.optionalAttrs` Linux gate). Updated comment block at top of inputs explaining the rationale so future-me doesn't re-introduce the same trap.
+- `flake.lock`: 5 inputs auto-removed by `nix flake update`.
+- `PROGRESS.md`: this entry.
+
+---
+
 ### Revision 67 - 2026-05-10
 **Fix `flake.nix` vendorHash — `nix run github:dimgord/sopds-go` now actually works:**
 
