@@ -1,0 +1,121 @@
+# GoReleaser config — https://goreleaser.com
+# Run locally: `goreleaser release --snapshot --clean` to test without publishing.
+# Triggered by .github/workflows/release.yml on `v*` tag push.
+
+version: 2
+
+project_name: sopds-go
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  # Main OPDS server + library manager CLI.
+  - id: sopds
+    main: ./cmd/sopds
+    binary: sopds
+    env:
+      - CGO_ENABLED=0   # static binaries — no glibc dependency
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath        # reproducible builds — remove local path info
+    ldflags:
+      - -s -w            # strip symbols + DWARF debug info
+      - -X main.version={{ .Version }}
+
+  # TTS subprocess (Go path; CUDA-accelerated alternative is sopds-tts-rs/).
+  - id: sopds-tts
+    main: ./cmd/sopds-tts
+    binary: sopds-tts
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  # FB2-archive duplicate finder (Rust port: zipdupes-rs/).
+  - id: zipdupes
+    main: ./cmd/zipdupes
+    binary: zipdupes
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+archives:
+  - id: default
+    ids: [sopds, sopds-tts, zipdupes]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- if eq .Os "darwin" }}macos{{ else }}{{ .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "arm64" }}arm64
+      {{- else }}{{ .Arch }}{{ end }}
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - NOTICE.md
+      - README.md
+      - PROGRESS.md
+      - config.yaml.example
+      - init.sql
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+snapshot:
+  version_template: '{{ incpatch .Version }}-next'
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - 'typo'
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?(fix|bugfix)(\(.+\))??!?:.+$'
+      order: 1
+    - title: Other
+      order: 999
+
+release:
+  github:
+    owner: dimgord
+    name: sopds-go
+  prerelease: auto    # tags with -rc/-beta/-alpha auto-marked prerelease
+  draft: false
+  header: |
+    ## sopds-go {{ .Tag }}
+
+    Self-hosted OPDS catalog server. See [README](https://github.com/dimgord/sopds-go/blob/main/README.md) for setup, [PROGRESS.md](https://github.com/dimgord/sopds-go/blob/main/PROGRESS.md) for the per-revision log.
+  footer: |
+    ---
+
+    **Verification**: `sha256sum -c checksums.txt` against the downloaded archive.
+
+    **Quick install** (Linux x86_64):
+    ```bash
+    curl -LO https://github.com/dimgord/sopds-go/releases/download/{{ .Tag }}/sopds-go_{{ trimprefix .Tag "v" }}_linux_x86_64.tar.gz
+    tar xzf sopds-go_{{ trimprefix .Tag "v" }}_linux_x86_64.tar.gz
+    sudo install sopds /usr/local/bin/
+    ```
+
+    **License**: AGPL-3.0 — see [LICENSE](https://github.com/dimgord/sopds-go/blob/main/LICENSE).

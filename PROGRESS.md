@@ -5,6 +5,45 @@
 
 ---
 
+### Revision 58 - 2026-05-10
+**Release automation: GoReleaser + `.github/workflows/release.yml`:**
+
+End-to-end release pipeline that fires on `v*` tag push: cross-compiles all three CLI binaries (`sopds`, `sopds-tts`, `zipdupes`) for linux/darwin × amd64/arm64, packages them with assets, computes SHA-256 checksums, generates a changelog from git commits, and publishes a GitHub Release.
+
+**1. `.goreleaser.yaml`** at repo root:
+- `version: 2` — modern GoReleaser config schema.
+- **3 `builds`** entries — one per CLI. All static (`CGO_ENABLED=0`) so the binaries run on any glibc/musl distro. `-trimpath` for reproducible builds (no local-path leak); `-s -w` strips DWARF debug info; `-X main.version={{ .Version }}` injects the tag into the `sopds` binary's version command (refactored to use a package var — see code change below).
+- **Archive naming**: `sopds-go_<version>_<os>_<arch>.tar.gz` with macOS aliased to `macos` and arm64/amd64 normalized to `arm64`/`x86_64` for human readability. Each archive bundles both binaries plus `LICENSE`, `NOTICE.md`, `README.md`, `PROGRESS.md`, `config.yaml.example`, `init.sql`.
+- **Checksums**: `checksums.txt` in SHA-256.
+- **Changelog from GitHub commits**: uses `Conventional Commits` regex grouping — `feat:` → "Features", `fix:` / `bugfix:` → "Bug fixes", everything else → "Other". Filters out `^docs:`, `^test:`, `^chore:`, `^ci:`, and `typo` from the changelog (signal noise).
+- **Release header/footer**: header points to README + PROGRESS; footer has a curl-tar-install one-liner for Linux x86_64 + sha256sum verification reminder + AGPL-3.0 disclosure.
+- `prerelease: auto` — tags with `-rc`, `-beta`, `-alpha` automatically flagged as pre-release on GitHub.
+
+**2. `.github/workflows/release.yml`** — single job, ~50 lines:
+- Triggered on `push` of `v*` tag, plus `workflow_dispatch` for manual rebuilds of an existing tag.
+- `permissions: contents: write` — minimum scope, lets GoReleaser create the Release; no other writes.
+- `fetch-depth: 0` — GoReleaser needs full git history for the changelog.
+- `goreleaser/goreleaser-action@v6` with `version: ~> v2`.
+- `GITHUB_TOKEN` from default action secrets — no PAT needed; default token has the necessary `releases: write` scope.
+
+**3. Code change — `cmd/sopds/main.go`**: replaced the hardcoded `fmt.Println("SOPDS v1.2.0 (Go rewrite)")` with `fmt.Printf("SOPDS %s (Go rewrite)\n", version)` where `version` is a package-level `var version = "dev"` overridable via `-ldflags`. So:
+- `go install github.com/dimgord/sopds-go/cmd/sopds@latest` → version reports `dev`
+- `go build -ldflags '-X main.version=v1.2.0' …` → reports `v1.2.0`
+- GoReleaser-built binaries → reports the tag name from `{{ .Version }}`
+- Verified: `/tmp/sopds_test version` → `SOPDS v1.2.0 (Go rewrite)`. ✓
+
+**4. Future-Phase wiring**: the GoReleaser config includes hooks for Docker (Phase 7) and Homebrew tap (Phase 9) but they're commented out / not yet enabled — will come in subsequent Revs.
+
+**Pre-publication checklist update:**
+- [x] Release automation
+
+**Files Modified:**
+- `.goreleaser.yaml` (new): ~120 lines.
+- `.github/workflows/release.yml` (new): ~50 lines.
+- `cmd/sopds/main.go`: 4 lines changed (added `version` package var, switched Println → Printf).
+
+---
+
 ### Revision 57 - 2026-05-10
 **CI workflow — `.github/workflows/ci.yml`:**
 
@@ -124,7 +163,7 @@ Significant rewrite preparing the repo for public release on GitHub. Goals: orie
 - [x] Rev 55 — NOTICE.md third-party attributions audit
 - [x] Rev 56 — Module-path rename to `github.com/dimgord/sopds-go`
 - [x] Rev 57 — CI workflow (`.github/workflows/ci.yml`)
-- [ ] Release automation (`.github/workflows/release.yml`) + GoReleaser config
+- [x] Rev 58 — Release automation (`.github/workflows/release.yml`) + GoReleaser config
 - [ ] Dockerfile + GHCR publish
 - [ ] Root `flake.nix` packaging the binary for `nix run github:dimgord/sopds-go`
 - [ ] Optional: Homebrew tap (`dimgord/homebrew-tap`)
