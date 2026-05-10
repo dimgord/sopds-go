@@ -72,3 +72,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT (or fine-grained token) with `contents: write` on
+          # dimgord/homebrew-tap so GoReleaser's `brews:` step can push
+          # the formula update commit. Set as a repo Secret manually:
+          #   gh secret set HOMEBREW_TAP_GITHUB_TOKEN --repo dimgord/sopds-go
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
