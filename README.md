@@ -77,13 +77,18 @@ Access the interfaces:
 
 ### Pre-built binaries (recommended)
 
-Grab the latest release for your platform from [GitHub Releases](https://github.com/dimgord/sopds-go/releases) — Linux/macOS, amd64/arm64.
+Grab the latest release for your platform from [GitHub Releases](https://github.com/dimgord/sopds-go/releases) — Linux/macOS × x86_64/arm64.
+
+Archive naming convention: `sopds-go_<version>_<os>_<arch>.tar.gz` where
+`<os>` is `linux` or `macos` and `<arch>` is `x86_64` or `arm64`.
 
 ```bash
-# Linux x86_64 example
-curl -LO https://github.com/dimgord/sopds-go/releases/latest/download/sopds-go_linux_amd64.tar.gz
-tar xzf sopds-go_linux_amd64.tar.gz
+# Linux x86_64 (replace v1.3.2 with the latest tag from /releases):
+VERSION=v1.3.2
+curl -LO https://github.com/dimgord/sopds-go/releases/download/$VERSION/sopds-go_${VERSION#v}_linux_x86_64.tar.gz
+tar xzf sopds-go_${VERSION#v}_linux_x86_64.tar.gz
 sudo install sopds /usr/local/bin/
+sudo install zipdupes /usr/local/bin/    # optional: FB2 dedup tool
 ```
 
 ### Docker
