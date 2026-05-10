@@ -143,7 +143,7 @@
             golangci-lint
             delve # debugger
             go-task # Taskfile.yml runner
-            postgresql_16 # client tools (psql, pg_dump) for migrations / backups
+            postgresql_18 # client tools (psql, pg_dump) for migrations / backups
           ];
           shellHook = ''
             echo "sopds-go dev shell on ${system}"

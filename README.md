@@ -68,7 +68,7 @@ Access the interfaces:
 ## Requirements
 
 - **Go 1.24+** for building from source
-- **PostgreSQL 14+** for persistence
+- **PostgreSQL 16+** for persistence (PostgreSQL 18 recommended; that's what `brew install` will pull as a dependency)
 - **Calibre** (`ebook-convert`) — optional, for MOBI conversion
 - **Espeak-ng** + Piper voice models — optional, for TTS / audiobooks
 - **NVIDIA GPU + CUDA 12** — optional, for accelerated TTS via [`sopds-tts-rs`](sopds-tts-rs/)

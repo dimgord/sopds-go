@@ -172,7 +172,7 @@ brews:
     # work but Homebrew dropped --with-* flags in 2019. Keep this as
     # documentation; install postgres separately or via brew services.
     dependencies:
-      - name: postgresql@16
+      - name: postgresql@18
         type: recommended
 
     # Caveats shown after `brew install`. Reminds users about the
@@ -180,7 +180,7 @@ brews:
     caveats: |
       sopds-go is now installed. To complete setup:
 
-        1. Start PostgreSQL: brew services start postgresql@16
+        1. Start PostgreSQL: brew services start postgresql@18
         2. Initialize the database:
              psql -U postgres -f #{pkgshare}/init.sql
         3. Create config: sopds init
