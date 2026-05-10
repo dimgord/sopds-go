@@ -14,10 +14,10 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/sopds/sopds-go/internal/config"
-	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
-	"github.com/sopds/sopds-go/internal/scanner"
-	"github.com/sopds/sopds-go/internal/server"
+	"github.com/dimgord/sopds-go/internal/config"
+	"github.com/dimgord/sopds-go/internal/infrastructure/persistence"
+	"github.com/dimgord/sopds-go/internal/scanner"
+	"github.com/dimgord/sopds-go/internal/server"
 	"github.com/spf13/cobra"
 )
 

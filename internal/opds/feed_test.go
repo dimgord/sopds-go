@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sopds/sopds-go/internal/config"
-	"github.com/sopds/sopds-go/internal/database"
+	"github.com/dimgord/sopds-go/internal/config"
+	"github.com/dimgord/sopds-go/internal/database"
 )
 
 func TestMimeType(t *testing.T) {

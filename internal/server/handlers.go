@@ -18,9 +18,9 @@ import (
 	"github.com/dhowden/tag"
 	"github.com/go-chi/chi/v5"
 	go7z "github.com/saracen/go7z"
-	"github.com/sopds/sopds-go/internal/database"
-	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
-	"github.com/sopds/sopds-go/internal/opds"
+	"github.com/dimgord/sopds-go/internal/database"
+	"github.com/dimgord/sopds-go/internal/infrastructure/persistence"
+	"github.com/dimgord/sopds-go/internal/opds"
 )
 
 // handleMainMenu renders the main OPDS menu

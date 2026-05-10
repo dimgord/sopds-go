@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sopds/sopds-go/internal/config"
+	"github.com/dimgord/sopds-go/internal/config"
 )
 
 // Generator manages TTS audio generation using piper

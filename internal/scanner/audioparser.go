@@ -12,7 +12,7 @@ import (
 	"github.com/dhowden/tag"
 	"golang.org/x/text/encoding/charmap"
 
-	"github.com/sopds/sopds-go/internal/database"
+	"github.com/dimgord/sopds-go/internal/database"
 )
 
 // AudioMetadata holds extracted audio file metadata

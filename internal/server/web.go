@@ -21,10 +21,10 @@ import (
 	"github.com/bodgit/sevenzip"
 	"github.com/dhowden/tag"
 	"github.com/go-chi/chi/v5"
-	"github.com/sopds/sopds-go/internal/converter"
-	"github.com/sopds/sopds-go/internal/database"
-	"github.com/sopds/sopds-go/internal/i18n"
-	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
+	"github.com/dimgord/sopds-go/internal/converter"
+	"github.com/dimgord/sopds-go/internal/database"
+	"github.com/dimgord/sopds-go/internal/i18n"
+	"github.com/dimgord/sopds-go/internal/infrastructure/persistence"
 )
 
 // Cached ebook-convert availability check

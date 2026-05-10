@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/sopds/sopds-go/internal/domain/user"
+	"github.com/dimgord/sopds-go/internal/domain/user"
 )
 
 // JWT constants

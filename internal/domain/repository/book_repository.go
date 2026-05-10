@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/sopds/sopds-go/internal/domain/book"
+	"github.com/dimgord/sopds-go/internal/domain/book"
 )
 
 // DuplicateMode defines the duplicate detection strategy

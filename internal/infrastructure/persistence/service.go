@@ -6,12 +6,12 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/sopds/sopds-go/internal/database"
-	"github.com/sopds/sopds-go/internal/domain/book"
-	domainCatalog "github.com/sopds/sopds-go/internal/domain/catalog"
-	"github.com/sopds/sopds-go/internal/domain/genre"
-	"github.com/sopds/sopds-go/internal/domain/repository"
-	"github.com/sopds/sopds-go/internal/domain/series"
+	"github.com/dimgord/sopds-go/internal/database"
+	"github.com/dimgord/sopds-go/internal/domain/book"
+	domainCatalog "github.com/dimgord/sopds-go/internal/domain/catalog"
+	"github.com/dimgord/sopds-go/internal/domain/genre"
+	"github.com/dimgord/sopds-go/internal/domain/repository"
+	"github.com/dimgord/sopds-go/internal/domain/series"
 )
 
 // legacyDuplicateToID converts legacy *int64 duplicate to *book.ID

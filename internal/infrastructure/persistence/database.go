@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/sopds/sopds-go/internal/config"
+	"github.com/dimgord/sopds-go/internal/config"
 )
 
 //go:embed migrations/*.sql

@@ -11,13 +11,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/sopds/sopds-go/internal/config"
-	"github.com/sopds/sopds-go/internal/converter"
-	"github.com/sopds/sopds-go/internal/domain/repository"
-	"github.com/sopds/sopds-go/internal/i18n"
-	"github.com/sopds/sopds-go/internal/infrastructure/persistence"
-	"github.com/sopds/sopds-go/internal/opds"
-	"github.com/sopds/sopds-go/internal/tts"
+	"github.com/dimgord/sopds-go/internal/config"
+	"github.com/dimgord/sopds-go/internal/converter"
+	"github.com/dimgord/sopds-go/internal/domain/repository"
+	"github.com/dimgord/sopds-go/internal/i18n"
+	"github.com/dimgord/sopds-go/internal/infrastructure/persistence"
+	"github.com/dimgord/sopds-go/internal/opds"
+	"github.com/dimgord/sopds-go/internal/tts"
 )
 
 // Server represents the HTTP server

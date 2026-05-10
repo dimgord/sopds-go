@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/sopds/sopds-go/internal/domain/series"
+	"github.com/dimgord/sopds-go/internal/domain/series"
 )
 
 // SeriesWithCount represents a series with book count

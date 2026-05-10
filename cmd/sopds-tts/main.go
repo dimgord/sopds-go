@@ -5,7 +5,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/sopds/sopds-go/internal/tts"
+	"github.com/dimgord/sopds-go/internal/tts"
 )
 
 // sopds-tts is a subprocess helper for TTS generation
