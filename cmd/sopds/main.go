@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -221,29 +222,35 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
-		fmt.Println("SOPDS server is not running (no PID file)")
+		fmt.Printf("SOPDS server is not running (no PID file at %s)\n", pidFile)
 		return nil
 	}
 
-	pid, err := strconv.Atoi(string(data))
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
-		fmt.Println("SOPDS server status unknown (invalid PID file)")
+		fmt.Printf("SOPDS server status unknown (invalid PID file content: %q)\n", string(data))
 		return nil
 	}
 
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		fmt.Println("SOPDS server is not running")
-		return nil
+	// On Linux/macOS, os.FindProcess always succeeds (it just constructs
+	// a Process struct with the given PID). The actual liveness check is
+	// the signal-0 below, whose error tells us why we can't confirm.
+	process, _ := os.FindProcess(pid)
+	err = process.Signal(syscall.Signal(0))
+	switch {
+	case err == nil:
+		fmt.Printf("SOPDS server is running (PID: %d)\n", pid)
+	case errors.Is(err, syscall.ESRCH):
+		fmt.Printf("SOPDS server is not running (stale PID %d in %s)\n", pid, pidFile)
+	case errors.Is(err, syscall.EPERM):
+		// Process exists but is owned by another user — typical when
+		// status is invoked as a different user than the one that
+		// started the daemon (e.g. dimgord asking about a sopds-user
+		// systemd service).
+		fmt.Printf("SOPDS server is running (PID: %d) — owned by another user; run as that user or root to control it\n", pid)
+	default:
+		fmt.Printf("SOPDS server status check failed: %v\n", err)
 	}
-
-	// Check if process exists by sending signal 0
-	if err := process.Signal(syscall.Signal(0)); err != nil {
-		fmt.Println("SOPDS server is not running (process not found)")
-		return nil
-	}
-
-	fmt.Printf("SOPDS server is running (PID: %d)\n", pid)
 	return nil
 }
 

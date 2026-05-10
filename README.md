@@ -7,7 +7,7 @@
 
 Go implementation of **Simple OPDS Catalog Server** — manage and serve large e-book collections via OPDS feeds and a modern web UI. Designed for self-hosted home libraries: scans nested ZIP archives of FB2 books, extracts metadata, generates EPUB/MOBI on the fly, and even produces audiobooks via local TTS.
 
-A modernized Go rewrite of [V.A. Onishchenko's original Python SOPDS](https://github.com/sergey-dryabzhinsky/sopds), with PostgreSQL persistence, parallel scanning, GPU-accelerated TTS, and a redesigned responsive UI.
+A modernized Go rewrite of the original **Simple OPDS** Python project (v0.23) by **Dmitry V. Shelepnev** (Дмитрий Шелепнёв, © 2014; contact: admin@sopds.ru). The upstream homepage (`www.sopds.ru`) and any related public source repositories appear to be offline as of 2026. PostgreSQL persistence (vs. MySQL upstream), parallel scanning, GPU-accelerated TTS, and a redesigned responsive UI.
 
 ## Features
 
@@ -324,6 +324,10 @@ cargo build --release
 
 Modern responsive layout with Font Awesome icons, gradient header, library statistics on the home page, full-text + hierarchical navigation, download buttons for all supported formats, personal bookshelf, duplicates browser, and language filtering. Optimized for both desktop and mobile screens.
 
+## Related projects
+
+- **[fbe-go](https://github.com/dimgord/fbe-go)** — FictionBook editor. Same author, same FB2 ecosystem, complementary role: sopds-go *serves* books; fbe-go *edits* them. Native macOS/Linux desktop app (Wails + Svelte + ProseMirror) with full FB2 round-trip + XSD validation. Use it to fix/enrich metadata before adding files to your sopds-go library.
+
 ## License
 
 **[GNU Affero General Public License v3.0](LICENSE)** (AGPL-3.0).
@@ -333,6 +337,10 @@ of sopds-go as a network-accessible service (e.g. a public OPDS catalog or
 web UI), you must offer the modified source to your users. Self-hosting for
 personal use is unrestricted.
 
-Original SOPDS project (Python implementation by V.A. Onishchenko) is also
-GPL-licensed; this Go rewrite follows the same copyleft principle, upgraded
-to AGPL specifically because OPDS catalogs are inherently network services.
+The original **Simple OPDS** Python implementation by Dmitry V. Shelepnev
+(Дмитрий Шелепнёв, © 2014, admin@sopds.ru) is licensed under
+**GPL-3.0-or-later** ("any later version" clause). This Go rewrite
+follows the same copyleft principle, upgraded to AGPL-3.0 specifically
+because OPDS catalogs are inherently network services. The "or any
+later version" wording in the original license is what makes the
+upgrade to AGPL-3.0 cleanly compatible.

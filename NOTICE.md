@@ -12,7 +12,22 @@ AGPL-3.0 compatibility has been verified for every direct dependency listed belo
 
 ## Original SOPDS — Python implementation
 
-sopds-go is a Go rewrite of [V.A. Onishchenko's Python SOPDS](https://github.com/sergey-dryabzhinsky/sopds), which is itself GPL-licensed. The architecture, config schema, MySQL database layout (preserved for the `import-mysql` migration tool), OPDS feed structure, and many UI conventions were carried over directly. Significant credit to Onishchenko and the upstream SOPDS contributors.
+sopds-go is a Go rewrite of the original **Simple OPDS** (Простой OPDS Каталог) Python project, authored by:
+
+> **Dmitry V. Shelepnev** (Дмитрий Шелепнёв)
+> Copyright © 2014, version 0.23
+> Contact: admin@sopds.ru
+
+(The upstream homepage `www.sopds.ru` referenced in the original Python source headers, and any publicly-accessible source repository, do not appear to be online as of 2026. Attribution preserved from the LICENSE file shipped with the Python source.)
+
+The original is licensed under **GNU GPL-3.0-or-later**: per the LICENSE header in upstream Python source, "версии 3 или, по Вашему желанию, любой более поздней версии" — version 3 or any later version. The "or any later version" clause is what makes our AGPL-3.0 downstream cleanly compatible (see [GNU's compatibility matrix](https://www.gnu.org/licenses/license-compatibility.html)).
+
+Carried over from the upstream:
+- The OPDS catalog feed structure (Atom XML conventions)
+- The MySQL database schema (preserved for the `import-mysql` migration tool — sopds-go's PostgreSQL is structurally compatible with the original MySQL tables)
+- The `sopds.conf`-style ini-config layout (translated to YAML in our `config.yaml`)
+- The CLI shape (`sopdsd.py start/stop/status` ↔ `sopds start/stop/status`)
+- Many UI conventions for letter-based hierarchical navigation
 
 ---
 
