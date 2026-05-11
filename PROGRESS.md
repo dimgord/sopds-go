@@ -1,7 +1,33 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.3.2
+## Current Version: 1.3.3
+
+---
+
+### Revision 75 - 2026-05-11
+**v1.3.3 patch — resend-verification + SMTP password_env + docs cleanup:**
+
+Bundle of features and fixes since v1.3.2 (Rev 70). New user-visible behavior plus the usual archive-rebuild for any users who pull from GoReleaser/Homebrew/GHCR.
+
+**Features (vs. v1.3.2):**
+- Rev 73 — **`/web/resend-verification` flow** with 60s per-user cooldown, login-page link, email-enumeration-safe responses.
+- Rev 74 — **`smtp.password_env:`** for secret-store integration (sops/k8s/vault/docker-env).
+
+**Docs/fixes (vs. v1.3.2):**
+- Rev 71-72 — docker-compose recipe + Taskfile helpers for the typical `~/dockers/sopds/` deployment pattern.
+- Migration 013 — `verify_token_sent_at` column for resend cooldown state.
+- Various config.yaml.example fixes: SMTP block, JWT secret, auth.users `[]` placeholder, port aligned to 8081, library.root container-vs-host distinction documented in README.
+- `init.sql` removed from compose recipe (POSTGRES_DB env var handles bootstrap; init.sql is for standalone PG only).
+- PG volume mount path corrected for PG18+ layout (`/var/lib/postgresql` instead of `/.../data`).
+- PostgreSQL bumped 16 → 18 in Homebrew formula dep.
+
+**Migration note:** Existing v1.3.x installations need `sopds migrate` (or `task migrate` in the docker stack) on first start with v1.3.3 to apply migration 013. Users running first-time install just get the column for free at bootstrap.
+
+**Auto-triggered on tag push:**
+- GoReleaser builds 4 archives (linux/macos × x86_64/arm64) + checksums.txt.
+- Docker images republished as `ghcr.io/dimgord/sopds-go:1.3.3` and `:latest`.
+- Homebrew formula auto-updated in `dimgord/homebrew-tap` to v1.3.3.
 
 ---
 
