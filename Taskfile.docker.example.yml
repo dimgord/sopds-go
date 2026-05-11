@@ -1,0 +1,140 @@
+# Taskfile.docker.example.yml — sopds-go docker stack helpers.
+#
+# Drop into your stack directory (e.g. ~/dockers/sopds/) next to
+# docker-compose.yml and config.yaml; rename to `Taskfile.yml`. Then:
+#   task                 # list available tasks
+#   task up              # start stack
+#   task logs            # tail sopds logs
+#   task psql            # psql shell into the DB
+#   task backup          # dump DB to ./backups/
+#
+# Requires: go-task (https://taskfile.dev) — `brew install go-task` or
+# from any package manager. Most Linux distros also package it as `task`.
+
+version: '3'
+
+vars:
+  COMPOSE: docker compose
+  SOPDS_CONTAINER: sopds
+  PG_CONTAINER: sopds-pg
+  PG_USER: sopds
+  PG_DB: sopds
+  CONFIG: /etc/sopds/config.yaml
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds: [task --list]
+    silent: true
+
+  # ─── Stack lifecycle ───────────────────────────────────────────────
+
+  up:
+    desc: Start the stack in background
+    cmds: ['{{.COMPOSE}} up -d']
+
+  down:
+    desc: Stop the stack (keeps DB volume)
+    cmds: ['{{.COMPOSE}} down']
+
+  nuke:
+    desc: Stop + delete DB volume (DESTROYS data)
+    prompt: 'This deletes the Postgres data volume. The book index will be lost (rescannable). Continue?'
+    cmds: ['{{.COMPOSE}} down -v']
+
+  restart:
+    desc: Restart sopds only (PG keeps running)
+    cmds: ['{{.COMPOSE}} restart {{.SOPDS_CONTAINER}}']
+
+  restart-all:
+    desc: Restart entire stack
+    cmds: ['{{.COMPOSE}} restart']
+
+  pull:
+    desc: Pull latest images from registry
+    cmds: ['{{.COMPOSE}} pull']
+
+  update:
+    desc: Pull latest + restart (rolling upgrade)
+    cmds:
+      - '{{.COMPOSE}} pull'
+      - '{{.COMPOSE}} up -d'
+
+  # ─── Observability ─────────────────────────────────────────────────
+
+  ps:
+    desc: Show container status
+    cmds: ['{{.COMPOSE}} ps']
+
+  logs:
+    desc: Tail sopds logs
+    cmds: ['{{.COMPOSE}} logs -f {{.SOPDS_CONTAINER}}']
+
+  logs-pg:
+    desc: Tail Postgres logs
+    cmds: ['{{.COMPOSE}} logs -f {{.PG_CONTAINER}}']
+
+  logs-all:
+    desc: Tail logs from all containers
+    cmds: ['{{.COMPOSE}} logs -f']
+
+  # ─── sopds CLI (via docker exec; image is distroless, no shell) ────
+
+  status:
+    desc: sopds server status
+    cmds: ['docker exec {{.SOPDS_CONTAINER}} /usr/local/bin/sopds status -c {{.CONFIG}}']
+
+  version:
+    desc: sopds version
+    cmds: ['docker exec {{.SOPDS_CONTAINER}} /usr/local/bin/sopds version']
+
+  scan:
+    desc: Run library scan now (synchronous; tail with `task logs` in another pane)
+    cmds: ['docker exec {{.SOPDS_CONTAINER}} /usr/local/bin/sopds scan -c {{.CONFIG}}']
+
+  migrate:
+    desc: Apply DB schema migrations
+    cmds: ['docker exec {{.SOPDS_CONTAINER}} /usr/local/bin/sopds migrate -c {{.CONFIG}}']
+
+  # ─── Postgres ──────────────────────────────────────────────────────
+
+  psql:
+    desc: Open interactive psql shell on the sopds DB
+    interactive: true
+    cmds: ['docker exec -it {{.PG_CONTAINER}} psql -U {{.PG_USER}} -d {{.PG_DB}}']
+
+  psql-exec:
+    desc: 'Run one-shot SQL (usage: task psql-exec -- "SELECT count(*) FROM books;")'
+    cmds: ['docker exec -i {{.PG_CONTAINER}} psql -U {{.PG_USER}} -d {{.PG_DB}} -c {{.CLI_ARGS | shellQuote}}']
+
+  db-size:
+    desc: Show DB size + per-table row counts
+    cmds:
+      - 'docker exec {{.PG_CONTAINER}} psql -U {{.PG_USER}} -d {{.PG_DB}} -c "SELECT pg_size_pretty(pg_database_size(''{{.PG_DB}}'')) AS db_size;"'
+      - 'docker exec {{.PG_CONTAINER}} psql -U {{.PG_USER}} -d {{.PG_DB}} -c "SELECT schemaname, relname, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC LIMIT 20;"'
+
+  shell-pg:
+    desc: Drop into Postgres container's sh (debug only)
+    interactive: true
+    cmds: ['docker exec -it {{.PG_CONTAINER}} sh']
+
+  # ─── Backup / restore ──────────────────────────────────────────────
+
+  backup:
+    desc: 'Dump DB to ./backups/sopds_<timestamp>.dump (PG custom format, restorable)'
+    cmds:
+      - mkdir -p backups
+      - docker exec {{.PG_CONTAINER}} pg_dump -U {{.PG_USER}} -Fc {{.PG_DB}} > "backups/sopds_$(date +%Y%m%d_%H%M%S).dump"
+      - ls -lh backups/ | tail -3
+
+  backup-sql:
+    desc: 'Dump DB as plain-SQL to ./backups/sopds_<timestamp>.sql (human-readable)'
+    cmds:
+      - mkdir -p backups
+      - docker exec {{.PG_CONTAINER}} pg_dump -U {{.PG_USER}} {{.PG_DB}} > "backups/sopds_$(date +%Y%m%d_%H%M%S).sql"
+      - ls -lh backups/ | tail -3
+
+  restore:
+    desc: 'Restore from a .dump file (usage: task restore -- backups/sopds_20260511.dump)'
+    cmds:
+      - 'docker exec -i {{.PG_CONTAINER}} pg_restore -U {{.PG_USER}} -d {{.PG_DB}} --clean --if-exists < {{.CLI_ARGS}}'

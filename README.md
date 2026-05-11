@@ -112,14 +112,21 @@ docker run -d \
 mkdir -p ~/dockers/sopds && cd ~/dockers/sopds
 curl -O https://raw.githubusercontent.com/dimgord/sopds-go/main/docker-compose.example.yml
 curl -O https://raw.githubusercontent.com/dimgord/sopds-go/main/config.yaml.example
+curl -O https://raw.githubusercontent.com/dimgord/sopds-go/main/Taskfile.docker.example.yml
 mv docker-compose.example.yml docker-compose.yml
 mv config.yaml.example config.yaml
+mv Taskfile.docker.example.yml Taskfile.yml
 # Edit config.yaml: set database.host=postgres, database.password=...
 # Edit docker-compose.yml: replace /path/to/your/books with real path
 docker compose up -d
 docker compose logs -f sopds      # watch it boot
 docker exec -it sopds sopds scan -c /etc/sopds/config.yaml   # first library scan
 ```
+
+The `Taskfile.docker.example.yml` (requires [`task`](https://taskfile.dev),
+`brew install go-task` or any pkg manager) bundles common ops: `task up` /
+`task logs` / `task psql` / `task scan` / `task backup` / `task update` /
+`task nuke`. Run `task` to list everything.
 
 (`init.sql` is *not* needed in the docker-compose case — Postgres'
 `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` env vars provision
