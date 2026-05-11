@@ -18,6 +18,7 @@ type UserModel struct {
 	EmailVerified      bool       `gorm:"column:email_verified;not null;default:false"`
 	VerifyToken        *string    `gorm:"column:verify_token;size:64"`
 	VerifyTokenExpires *time.Time `gorm:"column:verify_token_expires"`
+	VerifyTokenSentAt  *time.Time `gorm:"column:verify_token_sent_at"` // resend cooldown gate, added in migration 013
 	ResetToken         *string    `gorm:"column:reset_token;size:64"`
 	ResetTokenExpires  *time.Time `gorm:"column:reset_token_expires"`
 	CreatedAt          time.Time  `gorm:"column:created_at;not null;default:now()"`
@@ -178,6 +179,7 @@ func userToModel(u *user.User) *UserModel {
 		PasswordHash:       u.PasswordHash,
 		EmailVerified:      u.EmailVerified,
 		VerifyTokenExpires: u.VerifyTokenExpires,
+		VerifyTokenSentAt:  u.VerifyTokenSentAt,
 		ResetTokenExpires:  u.ResetTokenExpires,
 		CreatedAt:          u.CreatedAt,
 		LastLogin:          u.LastLogin,
@@ -200,6 +202,7 @@ func modelToUser(m *UserModel) *user.User {
 		PasswordHash:       m.PasswordHash,
 		EmailVerified:      m.EmailVerified,
 		VerifyTokenExpires: m.VerifyTokenExpires,
+		VerifyTokenSentAt:  m.VerifyTokenSentAt,
 		ResetTokenExpires:  m.ResetTokenExpires,
 		CreatedAt:          m.CreatedAt,
 		LastLogin:          m.LastLogin,

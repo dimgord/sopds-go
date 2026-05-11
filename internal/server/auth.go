@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -561,6 +562,85 @@ func (h *AuthHandlers) HandleVerifyEmail(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, h.server.config.Server.WebPrefix+"/login?verified=1", http.StatusSeeOther)
 }
 
+// HandleResendVerification handles re-sending the email-verification link.
+// GET shows a form asking for the email address; POST processes it.
+//
+// Security / privacy posture:
+//   - Doesn't disclose whether a given email is registered (always responds
+//     with the same "if your account exists, we sent an email" message,
+//     to avoid email enumeration via this endpoint).
+//   - Per-user cooldown via domain method (user.CanResendVerification, 60s
+//     default) — independent of HTTP-level per-IP rate limiting which
+//     should also be wired at the route layer.
+//   - Skips already-verified accounts silently (same generic response).
+//   - SMTP send failures are logged but don't expose details to the
+//     unauthenticated caller.
+func (h *AuthHandlers) HandleResendVerification(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		h.renderResendVerificationPage(w, r, nil)
+		return
+	}
+
+	// POST — process resend request.
+	email := strings.TrimSpace(strings.ToLower(r.FormValue("email")))
+	if email == "" {
+		h.renderResendVerificationPage(w, r, map[string]string{"error": "Email is required"})
+		return
+	}
+
+	// Generic response shown for every outcome that isn't an outright
+	// form-validation error. Keeps email-enumeration safe.
+	const genericMsg = "If an account with that email exists and isn't already verified, a new verification link has been sent. Check your inbox (and spam folder)."
+
+	u, err := h.server.userRepo.GetByEmail(r.Context(), email)
+	if err != nil {
+		// Account not found — fall through to generic response.
+		h.renderMessagePage(w, r, "Verification email sent", genericMsg)
+		return
+	}
+
+	if u.EmailVerified {
+		// Already verified — silently OK, same generic message.
+		h.renderMessagePage(w, r, "Verification email sent", genericMsg)
+		return
+	}
+
+	// Per-user cooldown — protects against burst-resend abuse even when
+	// HTTP-rate-limiter is bypassed (e.g. distributed IPs).
+	allowed, remaining := u.CanResendVerification()
+	if !allowed {
+		secs := int(remaining.Seconds())
+		if secs < 1 {
+			secs = 1
+		}
+		h.renderResendVerificationPage(w, r, map[string]string{
+			"error": fmt.Sprintf("Please wait %d second(s) before requesting another verification email.", secs),
+		})
+		return
+	}
+
+	// Regenerate token (invalidates the previous one) and persist.
+	if err := u.RegenerateVerifyToken(); err != nil {
+		log.Printf("RegenerateVerifyToken failed for %s: %v", email, err)
+		h.renderMessagePage(w, r, "Verification email sent", genericMsg)
+		return
+	}
+	if err := h.server.userRepo.Update(r.Context(), u); err != nil {
+		log.Printf("user repo Update failed for resend (%s): %v", email, err)
+		h.renderMessagePage(w, r, "Verification email sent", genericMsg)
+		return
+	}
+
+	// Best-effort SMTP send — log failures, still show the generic
+	// confirmation. Operators can grep `journalctl -u sopds` for actual
+	// delivery problems.
+	if err := h.server.emailService.SendVerificationEmail(email, u.Username, u.VerifyToken); err != nil {
+		log.Printf("SendVerificationEmail failed for %s: %v", email, err)
+	}
+
+	h.renderMessagePage(w, r, "Verification email sent", genericMsg)
+}
+
 // HandleLanding handles the landing page for unauthenticated users
 func (h *AuthHandlers) HandleLanding(w http.ResponseWriter, r *http.Request) {
 	h.renderLandingPage(w, r)
@@ -618,6 +698,10 @@ func (h *AuthHandlers) renderRegisterPage(w http.ResponseWriter, r *http.Request
 
 func (h *AuthHandlers) renderForgotPasswordPage(w http.ResponseWriter, r *http.Request, data map[string]string) {
 	h.server.renderAuthTemplate(w, r, "forgot-password", data)
+}
+
+func (h *AuthHandlers) renderResendVerificationPage(w http.ResponseWriter, r *http.Request, data map[string]string) {
+	h.server.renderAuthTemplate(w, r, "resend-verification", data)
 }
 
 func (h *AuthHandlers) renderResetPasswordPage(w http.ResponseWriter, r *http.Request, token string, data map[string]string) {
