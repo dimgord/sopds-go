@@ -86,7 +86,15 @@ smtp:
   host: "smtp.gmail.com"
   port: 587
   username: "you@gmail.com"
-  password: "<app-password-or-API-key>"   # NEVER your real Gmail password — use an app password
+  # Two ways to provide the password — use ONE:
+  #   (a) `password:` literal here — fine for local dev, BAD for repos and config
+  #       files that get committed/pushed/mounted into containers.
+  #   (b) `password_env: SOME_VAR` — sopds reads `os.Getenv("SOME_VAR")` at startup.
+  #       Lets the secret live in sops/k8s/vault/docker-env, never on disk.
+  #       If the env var is unset, falls back to `password:` (so a missing
+  #       env var doesn't silently send anonymous SMTP).
+  password: ""                             # leave blank when using password_env
+  password_env: "SOPDS_SMTP_PASSWORD"      # name of env var holding the secret
   from: "SOPDS Library <noreply@example.com>"
   use_tls: false                           # set true for port 465 (implicit TLS)
   use_starttls: true                       # set true for port 587 (STARTTLS upgrade)

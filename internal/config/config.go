@@ -39,9 +39,26 @@ type SMTPConfig struct {
 	Port     int    `yaml:"port"`
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
-	From     string `yaml:"from"`      // From address (e.g., "SOPDS Library <noreply@example.com>")
-	UseTLS   bool   `yaml:"use_tls"`   // Use TLS (port 465)
-	UseSTARTTLS bool `yaml:"use_starttls"` // Use STARTTLS (port 587)
+	// PasswordEnv, when set, names an env var whose value is used as the
+	// SMTP password instead of `password:` above. Keeps secrets out of
+	// the config file — works with sops-decrypted env, docker env, k8s
+	// secrets, etc. If the env var is unset/empty, falls back to
+	// `password:` (so misconfiguration doesn't silently send anon-SMTP).
+	PasswordEnv string `yaml:"password_env"`
+	From        string `yaml:"from"`         // From address (e.g., "SOPDS Library <noreply@example.com>")
+	UseTLS      bool   `yaml:"use_tls"`      // Port 465 implicit TLS
+	UseSTARTTLS bool   `yaml:"use_starttls"` // Port 587 STARTTLS upgrade
+}
+
+// ResolvedPassword returns the effective SMTP password — env-var lookup
+// when `password_env:` is set, else the literal `password:` field.
+func (c *SMTPConfig) ResolvedPassword() string {
+	if c.PasswordEnv != "" {
+		if v := os.Getenv(c.PasswordEnv); v != "" {
+			return v
+		}
+	}
+	return c.Password
 }
 
 // DatabaseConfig holds PostgreSQL connection settings
