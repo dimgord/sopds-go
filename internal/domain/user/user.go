@@ -35,11 +35,18 @@ type User struct {
 	EmailVerified      bool
 	VerifyToken        string
 	VerifyTokenExpires *time.Time
+	VerifyTokenSentAt  *time.Time // when the most recent verification email was sent — gates resend cooldown
 	ResetToken         string
 	ResetTokenExpires  *time.Time
 	CreatedAt          time.Time
 	LastLogin          *time.Time
 }
+
+// VerifyResendCooldown is the minimum time between verification-email sends
+// for a given user. Short enough to be friendly (user accidentally deleted
+// the first email and wants another) but long enough to make burst-spam
+// unattractive.
+const VerifyResendCooldown = 60 * time.Second
 
 // NewUser creates a new user with validated fields
 func NewUser(username, email, password string) (*User, error) {
@@ -66,7 +73,8 @@ func NewUser(username, email, password string) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	verifyExpires := time.Now().Add(24 * time.Hour)
+	now := time.Now()
+	verifyExpires := now.Add(24 * time.Hour)
 
 	return &User{
 		Username:           username,
@@ -75,8 +83,43 @@ func NewUser(username, email, password string) (*User, error) {
 		EmailVerified:      false,
 		VerifyToken:        verifyToken,
 		VerifyTokenExpires: &verifyExpires,
-		CreatedAt:          time.Now(),
+		VerifyTokenSentAt:  &now,
+		CreatedAt:          now,
 	}, nil
+}
+
+// RegenerateVerifyToken generates a fresh verification token (new value,
+// 24h expiry, sent-at = now) for an already-existing user. Caller MUST
+// check CanResendVerification first to enforce rate limit. The previous
+// token is invalidated by replacement — any old verification email link
+// stops working as soon as this returns.
+func (u *User) RegenerateVerifyToken() error {
+	token, err := generateToken()
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	expires := now.Add(24 * time.Hour)
+	u.VerifyToken = token
+	u.VerifyTokenExpires = &expires
+	u.VerifyTokenSentAt = &now
+	return nil
+}
+
+// CanResendVerification reports whether the cooldown has elapsed since the
+// last verification email was sent. Returns (true, 0) if allowed, or
+// (false, remaining) with the wait time until the next allowed send.
+// Users with VerifyTokenSentAt == nil (pre-migration accounts, or freshly
+// reset accounts) are always allowed to resend.
+func (u *User) CanResendVerification() (allowed bool, remaining time.Duration) {
+	if u.VerifyTokenSentAt == nil {
+		return true, 0
+	}
+	elapsed := time.Since(*u.VerifyTokenSentAt)
+	if elapsed >= VerifyResendCooldown {
+		return true, 0
+	}
+	return false, VerifyResendCooldown - elapsed
 }
 
 // CheckPassword verifies the password against the hash
@@ -122,6 +165,7 @@ func (u *User) VerifyEmail() {
 	u.EmailVerified = true
 	u.VerifyToken = ""
 	u.VerifyTokenExpires = nil
+	u.VerifyTokenSentAt = nil // clear cooldown state — irrelevant once verified
 }
 
 // UpdateLastLogin sets the last login time

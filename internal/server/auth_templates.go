@@ -377,6 +377,8 @@ var authPageTemplates = map[string]string{
 
     <div class="auth-links">
         <a href="{{.WebPrefix}}/forgot-password">{{.T.forgot_password}}</a>
+        <span style="margin: 0 8px; opacity: 0.5;">·</span>
+        <a href="{{.WebPrefix}}/resend-verification">Resend verification email</a>
     </div>
 
     <div class="divider"><span>{{.T.or}}</span></div>
@@ -643,6 +645,44 @@ document.getElementById('confirmPassword').addEventListener('input', validateCon
 
         <button type="submit" class="btn btn-primary">
             <i class="fas fa-paper-plane"></i> {{.T.send_reset_link}}
+        </button>
+    </form>
+
+    <div class="auth-links" style="margin-top: 20px;">
+        <a href="{{.WebPrefix}}/login"><i class="fas fa-arrow-left"></i> {{.T.login}}</a>
+    </div>
+</div>
+{{end}}
+`,
+
+	"resend-verification": `
+{{define "content"}}
+<div class="auth-container">
+    <div class="auth-header">
+        <h1><i class="fas fa-book-open"></i> {{.SiteTitle}}</h1>
+        <p>Resend verification email</p>
+    </div>
+
+    {{if .Error}}
+    <div class="alert alert-error">
+        <i class="fas fa-exclamation-circle"></i> {{.Error}}
+    </div>
+    {{end}}
+
+    <p style="margin-bottom: 16px; color: var(--text-muted, #666);">
+        Enter the email you registered with. If an account exists and
+        isn't already verified, we'll send a fresh verification link.
+        (One request per minute per account.)
+    </p>
+
+    <form method="POST" action="{{.WebPrefix}}/resend-verification">
+        <div class="form-group">
+            <label for="email">{{.T.email}}</label>
+            <input type="email" id="email" name="email" required autofocus>
+        </div>
+
+        <button type="submit" class="btn btn-primary">
+            <i class="fas fa-paper-plane"></i> Send verification link
         </button>
     </form>
 

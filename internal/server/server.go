@@ -112,6 +112,8 @@ func (s *Server) setupRouter() chi.Router {
 	r.Get(s.config.Server.WebPrefix+"/reset-password", s.authHandlers.HandleResetPassword)
 	r.Post(s.config.Server.WebPrefix+"/reset-password", s.authHandlers.HandleResetPassword)
 	r.Get(s.config.Server.WebPrefix+"/verify-email", s.authHandlers.HandleVerifyEmail)
+	r.Get(s.config.Server.WebPrefix+"/resend-verification", s.authHandlers.HandleResendVerification)
+	r.With(RateLimitMiddleware(checkRateLimiter)).Post(s.config.Server.WebPrefix+"/resend-verification", s.authHandlers.HandleResendVerification)
 	r.Post(s.config.Server.WebPrefix+"/guest", s.authHandlers.HandleGuestLogin)
 
 	// Apply auth middleware (JWT + optional basic auth) for all routes below

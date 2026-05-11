@@ -5,6 +5,54 @@
 
 ---
 
+### Revision 73 - 2026-05-11
+**Resend-verification-email flow:**
+
+`SendVerificationEmail` was already wired into the signup path (auth.go:378 since Rev <X>), but there was no way for a user to request a new email if the first one was lost or expired. Added a complete resend flow with per-user rate-limiting and email-enumeration protection.
+
+**Domain layer (`internal/domain/user/user.go`):**
+- New field `VerifyTokenSentAt *time.Time` on User — tracks when the most recent verification email was sent.
+- New method `RegenerateVerifyToken() error` — replaces the existing token with a fresh value (new 24h expiry), invalidating any previous email link.
+- New method `CanResendVerification() (allowed bool, remaining time.Duration)` — returns whether the cooldown has elapsed and how long to wait. Returns `(true, 0)` for users without a sent-at timestamp (pre-migration accounts).
+- New const `VerifyResendCooldown = 60 * time.Second` — short enough to be user-friendly when an email is lost, long enough to make burst-spam unattractive.
+- `NewUser` now sets `VerifyTokenSentAt = &now` so the cooldown clock starts at signup.
+- `VerifyEmail` clears `VerifyTokenSentAt` to nil (irrelevant once verified).
+
+**Persistence (`internal/infrastructure/persistence/user_repository.go`):**
+- New column `VerifyTokenSentAt *time.Time` (GORM tag `column:verify_token_sent_at`).
+- Updated `userToModel` and `modelToUser` converters to round-trip the new field.
+
+**Migration (`migrations/013_verify_resend.sql`):**
+- `ALTER TABLE users ADD COLUMN IF NOT EXISTS verify_token_sent_at TIMESTAMP`.
+- Index `idx_users_verify_sent_at` (partial, `WHERE email_verified = FALSE`) for future nag-cron jobs.
+- Existing users get NULL, treated as "no recent send" → can resend immediately.
+
+**Handler (`internal/server/auth.go::HandleResendVerification`):**
+- GET → renders form asking for email.
+- POST → looks up user by email; if exists + not verified + cooldown OK → regenerate token, save, send email.
+- **Email-enumeration safe**: every outcome below the form-validation level renders the same generic "if an account exists, a new link was sent" message. Doesn't matter whether the email exists, is already verified, or the SMTP send itself failed — no information disclosure.
+- Per-user cooldown rejection IS shown to the caller (form-error with seconds remaining) — there's no enumeration risk because cooldown only triggers when a real account was found, but the cooldown response only fires AFTER the lookup; we accept that minor info-leak in exchange for a sane UX. (An attacker can still discover this by sending two requests in quick succession to the same email and observing the response delta — but at that point they've also gotten two genuine SMTP sends.)
+
+**Routes (`internal/server/server.go`):**
+- `r.Get(WebPrefix+"/resend-verification", HandleResendVerification)` — show form.
+- `r.With(RateLimitMiddleware(checkRateLimiter)).Post(WebPrefix+"/resend-verification", HandleResendVerification)` — process. The HTTP rate limiter (per-IP) layers on top of the per-user 60s cooldown.
+
+**Template (`internal/server/auth_templates.go`):**
+- New `resend-verification` template, modelled on the `forgot-password` form.
+- Login page now links to it: `Forgot password? · Resend verification email` next to the existing forgot-password link, so users who hit the "Please verify your email first" error have a one-click path forward.
+
+**Files Modified:**
+- `internal/domain/user/user.go` — new field + 2 methods + 1 const.
+- `internal/infrastructure/persistence/user_repository.go` — column + converters.
+- `internal/infrastructure/persistence/migrations/013_verify_resend.sql` — new file.
+- `internal/server/auth.go` — `HandleResendVerification` (~70 lines), `renderResendVerificationPage`, `fmt` import.
+- `internal/server/auth_templates.go` — new template + login-page link.
+- `internal/server/server.go` — 2 new route lines.
+
+**Verified:** `go build ./...` clean; `go test ./...` all 14 packages pass.
+
+---
+
 ### Revision 72 - 2026-05-11
 **`Taskfile.docker.example.yml` — task-runner recipes for the docker-compose stack:**
 
