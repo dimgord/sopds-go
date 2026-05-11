@@ -120,8 +120,16 @@ mv Taskfile.docker.example.yml Taskfile.yml
 # Edit docker-compose.yml: replace /path/to/your/books with real path
 docker compose up -d
 docker compose logs -f sopds      # watch it boot
-docker exec -it sopds sopds scan -c /etc/sopds/config.yaml   # first library scan
+
+# First-time setup (in this order):
+docker exec -it sopds sopds migrate -c /etc/sopds/config.yaml   # create tables
+docker exec -it sopds sopds scan -c /etc/sopds/config.yaml      # index books
 ```
+
+If you copied `Taskfile.docker.example.yml` → `Taskfile.yml`, those last
+two are `task migrate` + `task scan`. Important: in `config.yaml`,
+`library.root` must point at the **container** path (`/library` per the
+example volume mount in `docker-compose.yml`), not the host path.
 
 The `Taskfile.docker.example.yml` (requires [`task`](https://taskfile.dev),
 `brew install go-task` or any pkg manager) bundles common ops: `task up` /

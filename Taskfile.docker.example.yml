@@ -67,15 +67,27 @@ tasks:
     cmds: ['{{.COMPOSE}} ps']
 
   logs:
-    desc: Tail sopds logs
+    desc: Show last 100 lines of sopds logs and exit
+    cmds: ['{{.COMPOSE}} logs --tail=100 {{.SOPDS_CONTAINER}}']
+
+  logs-f:
+    desc: Follow sopds logs (Ctrl-C to exit)
     cmds: ['{{.COMPOSE}} logs -f {{.SOPDS_CONTAINER}}']
 
   logs-pg:
-    desc: Tail Postgres logs
+    desc: Show last 100 lines of Postgres logs and exit
+    cmds: ['{{.COMPOSE}} logs --tail=100 {{.PG_CONTAINER}}']
+
+  logs-pg-f:
+    desc: Follow Postgres logs (Ctrl-C to exit)
     cmds: ['{{.COMPOSE}} logs -f {{.PG_CONTAINER}}']
 
   logs-all:
-    desc: Tail logs from all containers
+    desc: Show last 100 lines from all containers and exit
+    cmds: ['{{.COMPOSE}} logs --tail=100']
+
+  logs-all-f:
+    desc: Follow logs from all containers (Ctrl-C to exit)
     cmds: ['{{.COMPOSE}} logs -f']
 
   # ─── sopds CLI (via docker exec; image is distroless, no shell) ────
