@@ -61,7 +61,12 @@ site:
 
 logging:
   level: info
-  file: /var/log/sopds/sopds.log
+  # Path to log file, or empty string to log to stdout only.
+  # In docker, leave EMPTY — Docker captures stdout via its log driver
+  # (`docker logs sopds` / `task logs`). Writing to a file inside the
+  # distroless container requires either pre-creating the dir in a custom
+  # Dockerfile or mounting a host folder at /var/log/sopds.
+  file: ""
 
 converters:
   # Path to FB2 to EPUB converter (optional)
