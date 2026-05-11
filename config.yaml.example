@@ -26,7 +26,8 @@ library:
 
 server:
   bind: 0.0.0.0
-  port: 8789
+  port: 8081                       # matches docker-compose.example.yml's port mapping
+                                   # (the original Python SOPDS used 8789; safe to change)
   opds_prefix: /opds
   web_prefix: /web
   auth:
@@ -54,7 +55,7 @@ site:
   title: "SOPDS Library"
   subtitle: "Simple OPDS Catalog"
   author: "Admin"
-  url: "http://localhost:8789"
+  url: "http://localhost:8081"
   email: "admin@example.com"
   main_title: "Library Catalog"
 
