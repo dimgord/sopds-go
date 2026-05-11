@@ -24,7 +24,13 @@ services:
       POSTGRES_PASSWORD: ${SOPDS_PG_PASSWORD:-sopds-change-me}
       POSTGRES_DB: sopds
     volumes:
-      - sopds-pg-data:/var/lib/postgresql/data
+      # PG 18+ changed its data layout — the canonical mount target is now
+      # /var/lib/postgresql (parent dir), not /var/lib/postgresql/data.
+      # Data lands in /var/lib/postgresql/18/docker/, which keeps `pg_upgrade
+      # --link` workable across future major version bumps. Mounting at the
+      # old /data path makes PG 18's entrypoint refuse to start with
+      # "PostgreSQL data in /var/lib/postgresql/data (unused mount/volume)".
+      - sopds-pg-data:/var/lib/postgresql
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     restart: unless-stopped
     healthcheck:
