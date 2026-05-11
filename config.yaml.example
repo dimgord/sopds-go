@@ -30,10 +30,13 @@ server:
   opds_prefix: /opds
   web_prefix: /web
   auth:
-    enabled: true
-    users:
-      - username: *****
-        password: ************
+    enabled: false                  # set to true and list users below to require login
+    users: []                       # empty list = no users (when auth.enabled = false)
+    # users:                        # uncomment + populate when auth.enabled = true:
+    #   - username: "alice"         # quote values to avoid YAML alias-ref errors
+    #     password: "change-me"     # (bare `*****` is parsed as YAML alias and fails)
+    #   - username: "bob"
+    #     password: "also-change-me"
 
 scanner:
   # Number of parallel workers for scanning
