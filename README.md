@@ -112,7 +112,6 @@ docker run -d \
 mkdir -p ~/dockers/sopds && cd ~/dockers/sopds
 curl -O https://raw.githubusercontent.com/dimgord/sopds-go/main/docker-compose.example.yml
 curl -O https://raw.githubusercontent.com/dimgord/sopds-go/main/config.yaml.example
-curl -O https://raw.githubusercontent.com/dimgord/sopds-go/main/init.sql
 mv docker-compose.example.yml docker-compose.yml
 mv config.yaml.example config.yaml
 # Edit config.yaml: set database.host=postgres, database.password=...
@@ -121,6 +120,11 @@ docker compose up -d
 docker compose logs -f sopds      # watch it boot
 docker exec -it sopds sopds scan -c /etc/sopds/config.yaml   # first library scan
 ```
+
+(`init.sql` is *not* needed in the docker-compose case — Postgres'
+`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` env vars provision
+the DB+user with full privileges. `init.sql` is only for standalone-PG
+bootstrap as the postgres superuser.)
 
 Access at `http://<host>:8081/web/` (web UI) and `http://<host>:8081/opds/` (OPDS feed).
 

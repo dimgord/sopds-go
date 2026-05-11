@@ -7,8 +7,13 @@
 #
 # Required files in the same directory as this compose file:
 #   config.yaml    — sopds-go config (see config.yaml.example in the repo)
-#   init.sql       — initial DB schema; download with:
-#                      curl -O https://raw.githubusercontent.com/dimgord/sopds-go/main/init.sql
+#
+# NOTE: init.sql from the repo is for STANDALONE Postgres bootstrap
+# (creates the sopds DB + user from scratch as the postgres superuser).
+# In docker-compose mode the POSTGRES_{USER,PASSWORD,DB} env vars below
+# already provision the user (as owner of the DB) with full privileges,
+# so no init.sql is needed. Schema tables are created lazily by sopds-go
+# itself on first run (`sopds migrate` runs at startup).
 #
 # Required edits before first `up -d`:
 #   - Replace `/path/to/your/books` with the actual library path on the host.
@@ -31,7 +36,8 @@ services:
       # old /data path makes PG 18's entrypoint refuse to start with
       # "PostgreSQL data in /var/lib/postgresql/data (unused mount/volume)".
       - sopds-pg-data:/var/lib/postgresql
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Intentionally NOT mounting init.sql here — see the comment block
+      # at the top of this file. Env-vars provision DB+user already.
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sopds -d sopds"]
