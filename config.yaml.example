@@ -55,7 +55,9 @@ site:
   title: "SOPDS Library"
   subtitle: "Simple OPDS Catalog"
   author: "Admin"
-  url: "http://localhost:8081"
+  url: "http://localhost:8081"           # base URL used in verification/reset email links
+                                         # — set to your public address if deployed
+                                         # (e.g. "https://sopds.example.com")
   email: "admin@example.com"
   main_title: "Library Catalog"
 
