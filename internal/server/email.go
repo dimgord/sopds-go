@@ -112,7 +112,7 @@ func (e *EmailService) sendEmail(to, subject, body string) error {
 	// Setup authentication
 	var auth smtp.Auth
 	if e.config.Username != "" {
-		auth = smtp.PlainAuth("", e.config.Username, e.config.Password, e.config.Host)
+		auth = smtp.PlainAuth("", e.config.Username, e.config.ResolvedPassword(), e.config.Host)
 	}
 
 	// Extract email address from "Name <email>" format

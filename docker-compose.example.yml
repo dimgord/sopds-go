@@ -57,6 +57,14 @@ services:
       # ↓ change this to your real book library path on the host
       - /path/to/your/books:/library:ro
       - ./config.yaml:/etc/sopds/config.yaml:ro
+    # Pass secrets through env vars (config.yaml references them via
+    # `password_env: SOPDS_SMTP_PASSWORD`-style indirection). Source the
+    # values from sops/vault/k8s-secrets/.env at deploy time — e.g.
+    #     sops exec-env ~/.nixfiles/secrets/secrets.yaml \
+    #       'SOPDS_SMTP_PASSWORD=$email_app_password docker compose up -d'
+    # or use compose's own .env file in this directory.
+    environment:
+      SOPDS_SMTP_PASSWORD: ${SOPDS_SMTP_PASSWORD:-}
     restart: unless-stopped
 
 volumes:

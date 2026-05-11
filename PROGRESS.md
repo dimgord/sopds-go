@@ -5,6 +5,41 @@
 
 ---
 
+### Revision 74 - 2026-05-11
+**SMTP `password_env:` env-var indirection — keep secrets out of config files:**
+
+`smtp.password:` in `config.yaml` lands secrets on disk (and into any committed-or-mounted version of that file). Not OK for production deployments where the SMTP credential should come from sops, k8s secrets, Vault, or docker env. Added generic env-var indirection:
+
+```yaml
+smtp:
+  password: ""                              # leave blank
+  password_env: "SOPDS_SMTP_PASSWORD"       # name of env var holding the secret
+```
+
+At startup sopds calls `SMTPConfig.ResolvedPassword()` which checks `os.Getenv(c.PasswordEnv)` first, falls back to `c.Password` if the env var is unset/empty. Existing deployments using `password:` continue to work unchanged.
+
+**Files Modified:**
+- `internal/config/config.go`: new `PasswordEnv string` field on `SMTPConfig`; new method `ResolvedPassword() string` (env-lookup with fallback).
+- `internal/server/email.go`: one-line change — `e.config.Password` → `e.config.ResolvedPassword()` in the auth setup.
+- `config.yaml.example`: SMTP block documents both options (a) literal password and (b) `password_env` indirection, with the rationale and fallback semantics.
+- `docker-compose.example.yml`: added `environment: SOPDS_SMTP_PASSWORD: ${SOPDS_SMTP_PASSWORD:-}` passthrough on the sopds service, with comment showing the `sops exec-env … docker compose up -d` deploy pattern.
+
+**Deploy pattern with sops-nix secrets:**
+
+```sh
+cd ~/dockers/sopds
+sops exec-env ~/.nixfiles/secrets/secrets.yaml \
+  'SOPDS_SMTP_PASSWORD="$email_app_password" docker compose up -d'
+```
+
+`sops exec-env` decrypts secrets.yaml in-memory and exports each key as an env var for the wrapped command; docker compose's `${SOPDS_SMTP_PASSWORD}` interpolation then forwards it into the container's env; sopds reads it on startup via `os.Getenv`. Plaintext secret never touches disk.
+
+Works equally well with `.env` file (compose auto-loads), k8s `secrets:` mount → `envFrom:`, AWS ECS task secrets, etc. — env-var is the lowest common denominator.
+
+**Verified:** `go build ./...` clean; `go test ./...` all 14 packages pass.
+
+---
+
 ### Revision 73 - 2026-05-11
 **Resend-verification-email flow:**
 
