@@ -8,7 +8,7 @@
 ### Revision 71 - 2026-05-10
 **`docker-compose.example.yml` + README compose-stack instructions:**
 
-The single-container `docker run` example in README assumes the user already has PostgreSQL running somewhere — which is true for some deployments but not the common "spin up a fresh stack in `~/dockers/sopds/`" pattern. Dmitry hit this on dvg-nixos: copied the binary-install commands by mistake, then asked for a proper docker-compose recipe.
+The single-container `docker run` example in README assumes the user already has PostgreSQL running somewhere — true for some deployments but not the common "spin up a fresh stack in `~/dockers/sopds/`" pattern. The README didn't cover the latter explicitly; this Rev fills that gap.
 
 **This Rev adds:**
 
@@ -90,7 +90,7 @@ PG 18 was released 2025-09-25 and is the current stable major as of 2026-05. PG 
 ### Revision 68 - 2026-05-10
 **Drop `sopds-tts-rs` from root `flake.nix` inputs — fixes `nix run github:dimgord/sopds-go` for end users:**
 
-Symptom (reported from dvg-fedya): `nix run github:dimgord/sopds-go -- status` failed with:
+Symptom: `nix run github:dimgord/sopds-go -- status` failed for an end-user invocation with:
 ```
 error: cannot write modified lock file of flake 'github:dimgord/sopds-go'
        (use '--no-write-lock-file' to ignore)
@@ -165,13 +165,13 @@ v1.3.0 release archives (linux/macos × x86_64/arm64 tar.gz) shipped with the Re
 ### Revision 65 - 2026-05-10
 **`sopds status` UX fix — distinguish ESRCH from EPERM, show PID file path:**
 
-Symptom: on dvg-fedya, `ps -ef | grep sopds` shows `sopds 2260 1 0 May05 ? /opt/sopds/sopds start` (running for 5 days). But `/opt/sopds/sopds status` reports "SOPDS server is not running (process not found)". Same with explicit `-c ~/sopds-go/config.yaml`.
+Symptom: `ps -ef | grep sopds` on a deployment shows `sopds 2260 1 0 … /opt/sopds/sopds start` (process running for days). But `/opt/sopds/sopds status` reports "SOPDS server is not running (process not found)" — even with explicit `-c <config.yaml>`.
 
 **Root causes (two separate issues, both surfacing through the same symptom):**
 
-1. **Process is running under user `sopds`; status invoked as `dimgord` lacks permission to signal it.** `os.FindProcess` on Linux always succeeds (it just constructs a `os.Process` struct); the actual liveness check is `process.Signal(syscall.Signal(0))`, which on Linux returns `EPERM` (permission denied) when the process exists but is owned by another user, and `ESRCH` (no such process) when the PID is stale. The pre-Rev-65 code lumped both into "process not found", erasing the diagnostic distinction.
+1. **Process is running under a daemon user; status invoked from a different account lacks permission to signal it.** `os.FindProcess` on Linux always succeeds (it just constructs a `os.Process` struct); the actual liveness check is `process.Signal(syscall.Signal(0))`, which on Linux returns `EPERM` (permission denied) when the process exists but is owned by another user, and `ESRCH` (no such process) when the PID is stale. The pre-Rev-65 code lumped both into "process not found", erasing the diagnostic distinction.
 
-2. **PID file path differs between configs.** When dimgord runs `sopds status` without `-c`, the binary loads default config which has empty `Scanner.PIDFile` → falls back to `/tmp/sopds.pid`. The production sopds (started by user `sopds` with its own config) writes its PID file elsewhere (likely `/opt/sopds/sopds.pid` or similar). The two-config situation is correct architecture; the bug is that the error message gives no hint which PID file path was being read, leaving the user to guess.
+2. **PID file path differs between configs.** When `sopds status` is invoked without `-c`, the binary loads default config which has empty `Scanner.PIDFile` → falls back to `/tmp/sopds.pid`. A production sopds started under a service account with its own config writes its PID file elsewhere (e.g. `/opt/sopds/sopds.pid`). The two-config situation is correct architecture; the bug is that the error message gives no hint which PID file path was being read, leaving the user to guess.
 
 **Fix in `cmd/sopds/main.go::runStatus`:**
 - Distinguish `ESRCH` (stale PID) vs `EPERM` (running but not yours) vs other errors via `errors.Is(err, syscall.ESRCH/EPERM)`.
@@ -196,7 +196,7 @@ Symptom: on dvg-fedya, `ps -ef | grep sopds` shows `sopds 2260 1 0 May05 ? /opt/
 ### Revision 64 - 2026-05-10
 **Fix incorrect upstream attribution + drop dead links:**
 
-In Rev 54 (README) and Rev 55 (NOTICE.md) I attributed the original Simple OPDS Python project to "V.A. Onishchenko" — that was a hallucination. The actual author per the LICENSE header (Russian text, shared by Dmitry from his local copy of upstream Python source) is **Dmitry V. Shelepnev** (Дмитрий Шелепнёв), © 2014, contact `admin@sopds.ru`, version 0.23.
+In Rev 54 (README) and Rev 55 (NOTICE.md) I attributed the original Simple OPDS Python project to "V.A. Onishchenko" — that was a hallucination. The actual author per the LICENSE header (Russian text, sourced from a local copy of the upstream Python source) is **Dmitry V. Shelepnev** (Дмитрий Шелепнёв), © 2014, contact `admin@sopds.ru`, version 0.23.
 
 I also linked to a `sergey-dryabzhinsky/sopds` GitHub repo as an "active fork" — that link returns 404 (verified with curl). The upstream homepage `www.sopds.ru` referenced in the LICENSE / README headers also doesn't resolve in 2026. Both removed from sopds-go's docs to avoid promising users dead resources.
 
@@ -227,7 +227,7 @@ Bump version 1.2.0 → 1.3.0 marking the first publicly-installable release. Not
 - **Docker images** — `ghcr.io/dimgord/sopds-go:latest` (multi-arch via manifest list, distroless base, ~75MB) auto-published on each release (Rev 59).
 - **Nix** — `nix run github:dimgord/sopds-go -- start` works directly; `nix develop .#tts-rs` for the CUDA Rust workflow (Rev 60).
 - **Homebrew** — `brew tap dimgord/tap && brew install sopds-go` after the first release ships the formula auto-update (Rev 61).
-- **Go 1.25** — toolchain bumped to match the rest of dvg-mac's stack (Rev 62).
+- **Go 1.25** — toolchain bumped to current Go stable (Rev 62).
 
 **Install matrix (post-v1.3.0):**
 
@@ -276,7 +276,7 @@ golangci-lint is lower than the targeted Go version (1.24.0)
 
 **Fix is twofold:**
 
-1. **Bump Go target 1.24 → 1.25.0** in `go.mod` to match the rest of dvg-mac's stack (fbe-go, fedora-managed boxes — all on Go 1.25 since fbe-go's CI workflow already uses `1.25.x`). Also dropped the `toolchain go1.24.10` line — Go's auto-downloader will fetch 1.25 on hosts without it.
+1. **Bump Go target 1.24 → 1.25.0** in `go.mod` to align with current stable Go. Also dropped the `toolchain go1.24.10` line — Go's auto-downloader will fetch 1.25 on hosts without it.
 2. **Switch CI lint version from `v1.61` → `latest`** so the action grabs whatever golangci-lint release is current at run time. This eliminates the version-skew failure mode for good. Comment block in ci.yml documents the rationale so this doesn't get re-pinned by reflex on a future PR.
 
 **Other files touched to stay in sync:**
@@ -287,7 +287,7 @@ golangci-lint is lower than the targeted Go version (1.24.0)
 - `go.mod` — direct + indirect deps re-tidied via `go mod tidy` (added a few transitively-needed packages: `go-internal`, `objx`, `pretty`, `mousetrap`, `randomstring`).
 
 **Verified locally:**
-- `go version` reports 1.26.1 (dvg-mac has Go newer than the floor — fine).
+- `go version` reports 1.26.1 (newer than the go.mod floor — fine, Go is forward-compatible).
 - `go build ./...` clean.
 - `go test ./...` all 14 packages pass.
 
@@ -322,7 +322,7 @@ Created public via `gh repo create dimgord/homebrew-tap --public --add-readme`. 
 
 Added `HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}` next to existing `GITHUB_TOKEN`. Comment block in workflow file documents how to set the secret.
 
-**Manual step required from Dmitry — set the secret:**
+**Manual step required from the maintainer — set the secret:**
 
 The auto-built `GITHUB_TOKEN` for sopds-go's workflow runs only has access to sopds-go itself; cross-repo writes (to homebrew-tap) need a separate token. Two options:
 
@@ -623,7 +623,7 @@ Replaced the LICENSE file with the canonical AGPL-3.0 text from gnu.org. README'
 ### Revision 52 - 2026-03-12
 **Rust ports of `sopds-tts` and `zipdupes` for performance + GPU acceleration:**
 
-Two CLI utilities rewritten in Rust as drop-in replacements for the Go versions, primarily to recover GPU acceleration on the Pascal-class GTX 1070 (sm_61) on dvg-fedya and squeeze more throughput out of the audiobook-generation pipeline. Both Rust subprojects ship as separate crates under the sopds-go monorepo and remain CLI-compatible with their Go predecessors so callers don't change.
+Two CLI utilities rewritten in Rust as drop-in replacements for the Go versions, primarily to recover GPU acceleration on Pascal-class hardware (sm_61, GTX 1070-era) and squeeze more throughput out of the audiobook-generation pipeline. Both Rust subprojects ship as separate crates under the sopds-go monorepo and remain CLI-compatible with their Go predecessors so callers don't change.
 
 **1. `sopds-tts-rs/` — CUDA-accelerated TTS (drop-in for `sopds-tts`):**
 - Same CLI: `sopds-tts-rs <model> <output>`, text on stdin, WAV on `<output>`. Identical interface to Go version, so the audiobook generator's subprocess plumbing stays unchanged.
@@ -641,7 +641,7 @@ Two CLI utilities rewritten in Rust as drop-in replacements for the Go versions,
 - Files: `zipdupes-rs/src/main.rs` (455 lines), `zipdupes-rs/Cargo.toml`, `zipdupes-rs/Cargo.lock`.
 
 **Status:**
-- Both ports landed in production at this Rev — `sopds-tts-rs` is the active TTS backend on dvg-fedya whenever GPU TTS is needed; `zipdupes-rs` replaces the Go `zipdupes` for batch corpus scans. Neither has been heavily exercised since (no major book imports / TTS jobs in the recent month), so any subtle bugs are still latent. The Go versions remain in-tree as fallbacks (not deleted).
+- Both ports landed in production at this Rev — `sopds-tts-rs` is the active TTS backend whenever GPU TTS is needed; `zipdupes-rs` replaces the Go `zipdupes` for batch corpus scans. Neither has been heavily exercised since (no major book imports / TTS jobs in the recent month), so any subtle bugs are still latent. The Go versions remain in-tree as fallbacks (not deleted).
 
 **Files Modified:**
 - `sopds-tts-rs/` (new directory, 7 files): `Cargo.toml`, `Cargo.lock`, `flake.nix`, `flake.lock`, `run-gpu.sh`, `src/main.rs`. Total: 1547 lines.
