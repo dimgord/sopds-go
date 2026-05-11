@@ -5,6 +5,31 @@
 
 ---
 
+### Revision 72 - 2026-05-11
+**`Taskfile.docker.example.yml` — task-runner recipes for the docker-compose stack:**
+
+Sister file to `docker-compose.example.yml` (Rev 71). Bundles common operational commands so end-users don't need to memorize `docker compose ...` invocations or `docker exec -it sopds ... -c /etc/sopds/config.yaml` boilerplate.
+
+**Task groups:**
+
+- **Stack lifecycle**: `up`, `down`, `nuke` (with `prompt:` confirmation since it deletes the data volume), `restart` (sopds only — keeps PG warm), `restart-all`, `pull`, `update` (pull + up = rolling upgrade).
+- **Observability**: `ps`, `logs` (sopds), `logs-pg`, `logs-all`.
+- **sopds CLI** (via `docker exec`; image is distroless so calls are direct to `/usr/local/bin/sopds` rather than through a shell): `status`, `version`, `scan`, `migrate`.
+- **Postgres**: `psql` (interactive shell into the DB), `psql-exec -- "<SQL>"` (one-shot), `db-size` (DB size + top-20 table row counts), `shell-pg` (debug shell into PG container).
+- **Backup / restore**: `backup` (pg_dump custom-format → `./backups/sopds_<ts>.dump`), `backup-sql` (plain SQL, human-readable), `restore -- backups/<file>.dump` (pg_restore with --clean --if-exists).
+
+**Why ship in the repo as `*.example.yml`:**
+
+Same logic as `docker-compose.example.yml` — these are starter templates users curl down alongside their stack. Naming with `.example.yml` keeps it from being confused with the repo's own dev `Taskfile.yml` (which has `go build` / `go test` / etc. for sopds-go development, irrelevant to a runtime deployment).
+
+**README docker recipe updated** to curl this third file alongside the compose + config + (mv it to `Taskfile.yml`), with a one-line pointer to the task list.
+
+**Files Modified:**
+- `Taskfile.docker.example.yml` (new, ~100 lines including section comments and prompt'd nuke).
+- `README.md`: +3 lines in the Docker recipe block + a paragraph about task discoverability.
+
+---
+
 ### Revision 71 - 2026-05-10
 **`docker-compose.example.yml` + README compose-stack instructions:**
 
