@@ -5,6 +5,37 @@
 
 ---
 
+### Revision 80 - 2026-07-11
+**Deploy: sopds-tts-rs live on fedya (CUDA GPU); sopds server rebuilt to Rev 79 for daemon mode.**
+
+Completed the fedya (dvg-fedya, GTX 1070 / Pascal) TTS deployment that Rev 79 left as a TODO. The
+TTS binary is CUDA and the sopds service runs as `User=sopds` with a minimal PATH and no `nix`.
+
+Recipe (all on dvg-fedya):
+1. **Build** the CUDA binary via the flake: `cd sopds-tts-rs && nix develop -c cargo build --release`
+   (builds `cudaPkgs.onnxruntime` for sm_61 — heavy the first time, cached after).
+2. **Copy** it where the service user can exec it (home dir is `0700`):
+   `sudo install -m755 target/release/sopds-tts-rs /opt/sopds/sopds-tts-rs-bin`.
+3. **Wrapper** — install the file `getTTSBinaryPath()` looks for, next to `/opt/sopds/sopds`:
+   `/opt/sopds/sopds-tts`, a `sh` script that puts espeak-ng (nix store) on PATH and execs the
+   binary. `libonnxruntime` + cuDNN/cuBLAS resolve via the binary's **baked RPATH**; `libcuda`
+   from `/run/opengl-driver/lib` (NixOS default loader path). No `LD_LIBRARY_PATH` needed.
+4. **Pin** those store paths against nix-GC:
+   `nix develop sopds-tts-rs --profile ~/.local/state/sopds-tts-devshell -c true` (indirect gcroot).
+5. **Server** — rebuild the Go server from Rev 79 (has the daemon integration) and swap it in.
+   The server needs CGO: `nix shell nixpkgs#gcc -c go build -o /tmp/sopds-new ./cmd/sopds`, then
+   `sudo systemctl stop sopds && sudo cp -a /opt/sopds/sopds /opt/sopds/sopds.bak-pre-rev78 &&
+   sudo install -m755 /tmp/sopds-new /opt/sopds/sopds && sudo systemctl start sopds`.
+
+Regenerate steps 1–4 together if `sopds-tts-rs/flake.lock` changes (espeak path in the wrapper +
+the gcroot). **Verified:** binary runs on the GPU (`nvidia-smi` → 368 MiB); one-shot **and** daemon
+both exit `0` (no more CUDA-teardown core dump, Rev 79); the wrapper works under `sudo -u sopds`
+with a systemd-minimal env; the redeployed server logs `TTS: Starting 2 workers` on boot. Rollback:
+`/opt/sopds/sopds.bak-pre-rev78`. Left for the operator: a UI-triggered generate to confirm the
+resident daemon end-to-end (TTS routes are session-authed).
+
+---
+
 ### Revision 79 - 2026-07-11
 **sopds-tts-rs: fix the fedya "TTS starts and dies" crash — exit before the ORT Session drops:**
 

@@ -354,7 +354,35 @@ cargo build --release
 ./target/release/sopds-tts-rs <model> <output> < text.txt
 ```
 
-Wire it into sopds-go's pipeline by setting `tts.binary: /path/to/sopds-tts-rs` in `config.yaml`.
+sopds-go picks it up automatically: it looks for a binary named **`sopds-tts` next to the server executable** (or on `PATH`) — no config key. Symlink or copy `sopds-tts-rs` (or a wrapper, below) to that name.
+
+**Daemon mode.** With no output argument (`sopds-tts-rs <model>`) the binary loads the model **once** and then reads NDJSON `{"text","output"}` requests on stdin, emitting one WAV per line — ~20–90 ms/chunk vs ~340 ms when the model is reloaded per call. sopds-go uses this automatically (one resident process per model, falling back to a one-shot subprocess if the binary doesn't support daemon mode).
+
+#### Deploy on a GPU host (systemd)
+
+When the service runs as an unprivileged user with a minimal `PATH` and no `nix` (e.g. `User=sopds`, `/opt/sopds/sopds`):
+
+1. **Build:** `cd sopds-tts-rs && nix develop -c cargo build --release`.
+2. **Copy** the binary somewhere the service user can exec (its home is usually `0700`):
+   `sudo install -m755 target/release/sopds-tts-rs /opt/sopds/sopds-tts-rs-bin`.
+3. **Wrapper** named `sopds-tts` next to the server — it only puts espeak-ng on `PATH` and execs the
+   binary (`libonnxruntime` + cuDNN come from the binary's RPATH; `libcuda` from `/run/opengl-driver/lib`
+   on NixOS, so no `LD_LIBRARY_PATH` is needed):
+   ```sh
+   #!/bin/sh
+   export PATH="/nix/store/…-espeak-ng-…/bin:$PATH"
+   exec /opt/sopds/sopds-tts-rs-bin "$@"
+   ```
+   `sudo install -m755 wrapper /opt/sopds/sopds-tts`.
+4. **Pin** the runtime store paths against nix garbage collection:
+   `nix develop sopds-tts-rs --profile ~/.local/state/sopds-tts-devshell -c true`.
+5. **Restart** the service. Verify with `nvidia-smi` (the process holds GPU memory) and the server log
+   (`TTS: Starting N workers`).
+
+> **CUDA teardown note:** on some ONNX Runtime + cuDNN combinations the process core-dumps
+> (`corrupted double-linked list`) when the session is dropped at exit — *after* the WAV is already
+> written. The binary sidesteps this by calling `exit(0)` before the drop, so the exit status stays
+> clean and sopds-go doesn't mistake a good chunk for a failure.
 
 ### `zipdupes-rs/` — Rust port of FB2-archive duplicate finder
 
