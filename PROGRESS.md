@@ -5,6 +5,16 @@
 
 ---
 
+### Revision 84 - 2026-07-11
+**fb2-to-wav.sh: live progress % + elapsed + ETA.**
+
+The synth loop now prints `N/M (pct%)  <elapsed>  ETA <dur>` on one refreshing line (ANSI
+clear-to-EOL), extrapolating ETA from the average per-chunk rate so far, plus a final
+`done in <dur>` summary. Durations format as `1h02m` / `3m05s` / `12s`. Files:
+`sopds-tts-rs/fb2-to-wav.sh`.
+
+---
+
 ### Revision 83 - 2026-07-11
 **sopds-tts-rs: a phoneme-less chunk no longer kills the whole book (silence + no crash).**
 

@@ -32,6 +32,13 @@ BIN=${SOPDS_TTS_BIN:-"$(cd "$(dirname "$0")" && pwd)/target/release/sopds-tts-rs
 [ -f "$MODEL" ] || { echo "model not found: $MODEL"; exit 1; }
 [ -f "$MODEL.json" ] || echo "warning: $MODEL.json (Piper config) not found next to the model" >&2
 
+fmt_dur() { # seconds -> "1h02m" / "3m05s" / "12s"
+  local s=$1
+  if   [ "$s" -ge 3600 ]; then printf '%dh%02dm' $((s/3600)) $(((s%3600)/60))
+  elif [ "$s" -ge 60   ]; then printf '%dm%02ds' $((s/60)) $((s%60))
+  else                         printf '%ds' "$s"; fi
+}
+
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
@@ -56,13 +63,19 @@ jq -Rc --arg dir "$WORK" \
    '{text: ., output: ($dir + "/c" + (("00000"+(input_line_number|tostring))[-5:]) + ".wav")}' \
    "$WORK/chunks.txt" > "$WORK/reqs.ndjson"
 
-ok=0; fail=0
+ok=0; fail=0; SECONDS=0
 while IFS= read -r line; do
   if [ "$(printf '%s' "$line" | jq -r '.ok')" = "true" ]; then ok=$((ok+1))
-  else fail=$((fail+1)); printf 'chunk error: %s\n' "$(printf '%s' "$line" | jq -r '.error')" >&2; fi
-  printf '\r  %d/%d done' "$((ok+fail))" "$N"
+  else fail=$((fail+1)); printf '\r\033[Kchunk error: %s\n' "$(printf '%s' "$line" | jq -r '.error')" >&2; fi
+  done=$((ok+fail)); pct=$((done*100/N))
+  if [ "$done" -gt 0 ] && [ "$SECONDS" -gt 0 ]; then
+    eta=$(( (N-done)*SECONDS/done ))
+    printf '\r\033[K  %d/%d (%d%%)  %s elapsed  ETA %s' "$done" "$N" "$pct" "$(fmt_dur "$SECONDS")" "$(fmt_dur "$eta")"
+  else
+    printf '\r\033[K  %d/%d (%d%%)' "$done" "$N" "$pct"
+  fi
 done < <("$BIN" "$MODEL" < "$WORK/reqs.ndjson" 2>/dev/null)
-echo
+printf '\r\033[K  %d/%d done in %s\n' "$ok" "$N" "$(fmt_dur "$SECONDS")"
 [ "$fail" -eq 0 ] || echo "  ($fail chunk(s) failed — they are skipped in the output)" >&2
 
 ls "$WORK"/c*.wav >/dev/null 2>&1 || { echo "no audio produced"; exit 1; }
