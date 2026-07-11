@@ -5,6 +5,24 @@
 
 ---
 
+### Revision 82 - 2026-07-11
+**sopds-tts-rs/fb2-to-wav.sh — one-command FB2 → single WAV (manual/CLI conversion).**
+
+A standalone converter for one-off files (the web UI already chunks; this is the manual path
+Dmitry asked for). `./fb2-to-wav.sh <book.fb2> <model.onnx> [out.wav]`:
+- extracts the main `<body>` text (skips `<body name="notes">` footnotes) via `xmllint`,
+- splits it into ~900-byte **sentence-grouped** chunks (`MAXBYTES` overridable) — big chunks OOM
+  the GPU (Rev 81),
+- synthesizes every chunk through **one resident daemon** (model loaded once, NDJSON protocol),
+- concatenates the chunk WAVs into one file via `ffmpeg -c copy`.
+
+Self-bootstraps its tools (`espeak-ng`, `ffmpeg`, `jq`, `xmllint`, GNU `sed`/`awk`) through
+`nix shell` when `nix` is present, so nothing needs preinstalling; degrades to whatever's on PATH
+otherwise. Tested on mac5: single- and multi-chunk paths, footnote exclusion, Cyrillic; 2-chunk
+vs 1-chunk output durations match (~13 s). Files: `sopds-tts-rs/fb2-to-wav.sh`.
+
+---
+
 ### Revision 81 - 2026-07-11
 **TTS: default `chunk_size` 5000 → 1000 bytes — the old default OOMs the GPU (real cause of "slow").**
 

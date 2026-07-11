@@ -358,6 +358,15 @@ sopds-go picks it up automatically: it looks for a binary named **`sopds-tts` ne
 
 **Daemon mode.** With no output argument (`sopds-tts-rs <model>`) the binary loads the model **once** and then reads NDJSON `{"text","output"}` requests on stdin, emitting one WAV per line — ~20–90 ms/chunk vs ~340 ms when the model is reloaded per call. sopds-go uses this automatically (one resident process per model, falling back to a one-shot subprocess if the binary doesn't support daemon mode).
 
+**Convert a whole book from the CLI.** `fb2-to-wav.sh` wraps the above into one command — it extracts the main body text, splits it into ~900-byte sentence chunks (bigger chunks OOM the GPU), runs them through one resident daemon, and concatenates the result:
+
+```bash
+./fb2-to-wav.sh book.fb2 ~/piper-models/ru_RU-irina-medium.onnx book.wav
+# MAXBYTES=800 ./fb2-to-wav.sh …   # smaller chunks if a voice/GPU is tight on memory
+```
+
+It self-bootstraps its tools (espeak-ng, ffmpeg, jq, xmllint, GNU sed/awk) via `nix shell`, so on a nix box nothing needs installing.
+
 #### Deploy on a GPU host (systemd)
 
 When the service runs as an unprivileged user with a minimal `PATH` and no `nix` (e.g. `User=sopds`, `/opt/sopds/sopds`):
