@@ -5,6 +5,31 @@
 
 ---
 
+### Revision 78 - 2026-07-11
+**sopds-go TTS: use the resident daemon (Rev 77) instead of one process per chunk:**
+
+Wired the daemon protocol into `internal/tts` — this is what turns Rev 77 into a UI-visible
+speedup. New `daemon.go`: a `daemonPool` keeps up to `Workers` live `sopds-tts <model>`
+processes **per model**, reused across chunks and jobs. `generateChunk` now prefers the pool
+(NDJSON request → WAV) and transparently falls back to the old one-shot subprocess
+(`generateChunkOneShot`) when a daemon can't start — an old binary without daemon mode, or
+`espeak-ng` missing. The failure is detected **once per model** (a `broken` flag on the
+model's pool), so there's no per-chunk retry storm; a daemon that dies mid-stream is
+discarded and respawned. The pool is created in `Start()` (sized to `Workers`) and shut down
+when the workers stop.
+
+Integration test `daemon_test.go` (skipped unless `SOPDS_TTS_BIN`/`SOPDS_TTS_MODEL` are set
+and `espeak-ng` is on PATH) drives 4 chunks through the pool in parallel: **0.52 s** for 4
+chunks with 2 daemons (model loaded once each) vs ~1.6 s as 4 separate one-shot processes.
+For a full book (dozens of chunks) the two model loads amortize to near-zero, so per-chunk
+cost approaches the ~20–90 ms measured in Rev 77.
+
+Files: `internal/tts/daemon.go` (new), `internal/tts/daemon_test.go` (new),
+`internal/tts/generator.go` (pool field; `Start`/shutdown wiring; `generateChunk` daemon-first
+with one-shot fallback, old body renamed `generateChunkOneShot`).
+
+---
+
 ### Revision 77 - 2026-07-11
 **sopds-tts-rs: daemon mode — load the model once, then ~20–90 ms per chunk (no GPU):**
 

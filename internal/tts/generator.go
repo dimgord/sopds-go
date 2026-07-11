@@ -24,6 +24,7 @@ type Generator struct {
 	running  bool
 	mu       sync.RWMutex
 	cancelFn context.CancelFunc
+	pool     *daemonPool // resident TTS processes (load model once); nil until Start
 }
 
 // BookGetter is a function that retrieves book data for TTS
@@ -137,6 +138,11 @@ func (g *Generator) Start(ctx context.Context) {
 
 	log.Printf("TTS: Starting %d workers", workers)
 
+	// Resident daemons (load the ONNX model once, reuse across chunks/jobs). Sized to
+	// the worker count so chunks synthesized in parallel each get their own daemon.
+	// Falls back to one-shot subprocesses per model if a daemon can't start.
+	g.pool = newDaemonPool(getTTSBinaryPath(), workers)
+
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -151,6 +157,10 @@ func (g *Generator) Start(ctx context.Context) {
 		wg.Wait()
 		g.mu.Lock()
 		g.running = false
+		if g.pool != nil {
+			g.pool.shutdown()
+			g.pool = nil
+		}
 		g.mu.Unlock()
 		log.Printf("TTS: All workers stopped")
 	}()
@@ -372,14 +382,34 @@ func getTTSBinaryPath() string {
 	return "sopds-tts"
 }
 
-// generateChunk generates audio for a single text chunk using sopds-tts subprocess
-// Each chunk runs in a separate process, guaranteeing complete memory release
+// generateChunk generates audio for a single text chunk. It prefers a resident daemon
+// (model loaded once, ~20-90ms/chunk) and transparently falls back to a one-shot
+// subprocess if daemon mode is unavailable for this binary/model.
 func (g *Generator) generateChunk(text, modelPath, outputPath string) error {
 	// Ensure output directory exists
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return fmt.Errorf("failed to create output dir: %w", err)
 	}
 
+	if g.pool != nil {
+		err := g.pool.synth(modelPath, text, outputPath)
+		if err == nil {
+			if _, statErr := os.Stat(outputPath); statErr == nil {
+				return nil
+			}
+			err = fmt.Errorf("daemon reported success but output missing")
+		}
+		if err != errDaemonUnsupported {
+			// Daemon exists but this chunk failed — log and retry once via one-shot.
+			log.Printf("TTS: daemon chunk failed (%v); retrying via one-shot subprocess", err)
+		}
+	}
+	return g.generateChunkOneShot(text, modelPath, outputPath)
+}
+
+// generateChunkOneShot runs sopds-tts as a fresh subprocess per chunk (reloads the
+// model each time). Guarantees complete memory release; used as the daemon fallback.
+func (g *Generator) generateChunkOneShot(text, modelPath, outputPath string) error {
 	// Run sopds-tts as subprocess
 	// Usage: sopds-tts <model_path> <output_path> (text via stdin)
 	ttsBinary := getTTSBinaryPath()
