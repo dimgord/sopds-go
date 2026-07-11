@@ -5,6 +5,32 @@
 
 ---
 
+### Revision 83 - 2026-07-11
+**sopds-tts-rs: a phoneme-less chunk no longer kills the whole book (silence + no crash).**
+
+A 12455-chunk Russian book reached chunk **12454/12455**, then the job was marked *failed* and the
+UI reverted to "Audio Not Generated" — 12454 good WAVs thrown away. Cause: chunk 909's text had
+**no pronounceable phonemes** (a "* * *"-style scene break / bare separator), so `synth` returned
+`no phoneme IDs generated`. On the one-shot fallback that error propagated via `?`, which
+unwind-dropped the ORT Session → the CUDA-teardown core dump (Rev 79's `exit_ok` guarded only the
+success path). Go saw the non-zero exit and failed the entire job.
+
+Two fixes in `main.rs`:
+1. `synth` now returns ~0.25 s of **silence** for a phoneme-less chunk instead of an error — a
+   scene break becomes a short pause, and one dud chunk can't fail a whole book. (The daemon path
+   already tolerated synth errors; this makes the *result* correct too.)
+2. The one-shot arm runs synth+write in a `match` and calls `exit_ok()` / `exit(1)` **without
+   dropping the Session on either path**, so a genuine synth error exits cleanly (exit 1) instead
+   of core-dumping.
+
+Verified on mac5: empty/whitespace text → ok, 5512-sample (0.25 s) silent WAV; real text unchanged;
+empty stdin → clean `exit 1`, no core dump. Files: `sopds-tts-rs/src/main.rs` (`synth`, one-shot arm).
+
+**Follow-up (not yet done):** harden `processJob` to tolerate *any* single failed chunk — write a
+silence placeholder and complete the job rather than discarding all completed work.
+
+---
+
 ### Revision 82 - 2026-07-11
 **sopds-tts-rs/fb2-to-wav.sh — one-command FB2 → single WAV (manual/CLI conversion).**
 

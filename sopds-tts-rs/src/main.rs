@@ -192,7 +192,12 @@ impl Tts {
     /// Synthesize `text` into 16-bit PCM samples.
     fn synth(&mut self, text: &str) -> Result<Vec<i16>, String> {
         let phonemes = text_to_phonemes(text, &self.config)?;
-        let phoneme_ids = phonemes_to_ids(&phonemes, &self.phoneme_map)?;
+        let phoneme_ids = match phonemes_to_ids(&phonemes, &self.phoneme_map) {
+            Ok(ids) => ids,
+            // No pronounceable content (a "* * *" scene break, a bare number, punctuation) —
+            // emit ~0.25s of silence instead of erroring, so one dud chunk can't fail a whole book.
+            Err(_) => return Ok(vec![0i16; (self.sample_rate() / 4) as usize]),
+        };
         let seq_len = phoneme_ids.len();
 
         let input_tensor = Tensor::from_array(([1, seq_len], phoneme_ids.into_boxed_slice()))
@@ -370,16 +375,26 @@ fn run() -> Result<(), String> {
             }
 
             let mut tts = Tts::load(model_path)?;
-            let samples = tts.synth(text)?;
             let sample_rate = tts.sample_rate();
-            write_wav(&samples, output_path, sample_rate)?;
-
-            eprintln!(
-                "generated {} samples ({:.1}s) at {sample_rate}Hz -> {output_path}",
-                samples.len(),
-                samples.len() as f64 / sample_rate as f64,
-            );
-            exit_ok(); // before `tts` drops (ORT CUDA teardown crashes)
+            // Do the work, then exit WITHOUT dropping `tts` on *either* path — the ORT CUDA
+            // Session teardown corrupts the heap (Rev 79), and `?` would unwind-drop it on error.
+            let result = tts.synth(text).and_then(|samples| {
+                write_wav(&samples, output_path, sample_rate)?;
+                eprintln!(
+                    "generated {} samples ({:.1}s) at {sample_rate}Hz -> {output_path}",
+                    samples.len(),
+                    samples.len() as f64 / sample_rate as f64,
+                );
+                Ok(())
+            });
+            match result {
+                Ok(()) => exit_ok(),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    let _ = std::io::stdout().flush();
+                    std::process::exit(1);
+                }
+            }
         }
         // Daemon: load model once, stream NDJSON requests on stdin.
         2 => serve(&args[1]),
