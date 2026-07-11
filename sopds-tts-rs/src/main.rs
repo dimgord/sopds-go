@@ -301,7 +301,7 @@ fn serve(model_path: &str) -> Result<(), String> {
             .read_line(&mut line)
             .map_err(|e| format!("failed to read request: {e}"))?;
         if n == 0 {
-            break; // EOF — parent closed stdin
+            exit_ok(); // EOF — parent closed stdin; exit before `tts` drops (ORT CUDA teardown crashes)
         }
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -328,8 +328,6 @@ fn serve(model_path: &str) -> Result<(), String> {
         writeln!(out, "{resp}").map_err(|e| format!("failed to write response: {e}"))?;
         out.flush().map_err(|e| format!("failed to flush response: {e}"))?;
     }
-
-    Ok(())
 }
 
 // --- Main ---
@@ -339,6 +337,19 @@ fn main() {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
+    // On success run() exits the process itself (see `exit_ok` calls) *before* the ORT
+    // Session is dropped — its CUDA-provider teardown corrupts the heap.
+}
+
+// exit_ok flushes stdout and terminates with status 0 without running destructors.
+// ONNX Runtime's CUDA provider crashes ("corrupted double-linked list", core dump) when
+// the Session is dropped at process exit — but only *after* all audio is written and
+// flushed. We call this while the Session is still alive so its Drop never runs; the WAV
+// is already finalized on disk and any daemon responses already sent. No-op-safe on the
+// clean-exiting macOS/CPU path.
+fn exit_ok() -> ! {
+    let _ = std::io::stdout().flush();
+    std::process::exit(0);
 }
 
 fn run() -> Result<(), String> {
@@ -368,7 +379,7 @@ fn run() -> Result<(), String> {
                 samples.len(),
                 samples.len() as f64 / sample_rate as f64,
             );
-            Ok(())
+            exit_ok(); // before `tts` drops (ORT CUDA teardown crashes)
         }
         // Daemon: load model once, stream NDJSON requests on stdin.
         2 => serve(&args[1]),

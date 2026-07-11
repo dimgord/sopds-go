@@ -5,6 +5,32 @@
 
 ---
 
+### Revision 79 - 2026-07-11
+**sopds-tts-rs: fix the fedya "TTS starts and dies" crash — exit before the ORT Session drops:**
+
+Root cause of fedya's TTS dying immediately: the binary synthesized the WAV **correctly**, then
+core-dumped (`corrupted double-linked list`) the instant the `Tts` struct — holding the ONNX
+Runtime CUDA Session — was dropped at end of scope. ORT's CUDA-provider static teardown corrupts
+the heap on this box (onnxruntime-1.22 CUDA build, cuDNN 9.8, GTX 1070 / Pascal). In one-shot
+mode that non-zero exit (134, core dumped) made sopds-go treat a perfectly good chunk as a
+failure — hence "starts and dies very quickly".
+
+Fix: added `exit_ok()` (flush stdout, `std::process::exit(0)`) and call it **while the Session is
+still alive** — at the end of the one-shot arm and at daemon EOF — so the Session's `Drop` (the
+crashing CUDA teardown) never runs. The WAV is already finalized on disk and any daemon responses
+already sent/flushed, so nothing is lost. No-op on the clean-exiting macOS/CPU path.
+
+Verified on fedya (CUDA): one-shot now exits `0` with a valid WAV; daemon mode answers 3 chunks
+(492 / 215 / 115 ms) and exits `0` on EOF. Files: `sopds-tts-rs/src/main.rs` (`main`, new
+`exit_ok`, one-shot arm, `serve` EOF).
+
+**Still TODO for fedya (deploy, not code):** the sopds service (`User=sopds`, `/opt/sopds/sopds`)
+finds the TTS binary via `getTTSBinaryPath()` = `sopds-tts` next to the exe or on PATH — and
+`/opt/sopds/` has no such binary, so spawns fail. Needs a `sopds-tts` wrapper on that box that
+provides the ORT/cuDNN/espeak-ng runtime env (the service PATH has no `nix`).
+
+---
+
 ### Revision 78 - 2026-07-11
 **sopds-go TTS: use the resident daemon (Rev 77) instead of one process per chunk:**
 
