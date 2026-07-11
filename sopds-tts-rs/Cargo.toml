@@ -4,7 +4,19 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ort = { version = "=2.0.0-rc.10", features = ["cuda"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hound = "3"
+
+# ONNX Runtime execution provider is platform-specific (one repo, auto per OS):
+#   macOS → CPU (downloads the onnxruntime lib via download-binaries). CoreML
+#           can't run this Piper/VITS model on the GPU — its dynamic input
+#           dimensions are unsupported — and Apple-Silicon CPU is ~13x real-time
+#           anyway. Re-add the "coreml" feature only if the model is re-exported
+#           with bounded shapes.
+#   Linux → CUDA (lib provided via ORT_LIB_LOCATION in flake.nix / run-gpu.sh).
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "=2.0.0-rc.10", features = ["download-binaries"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+ort = { version = "=2.0.0-rc.10", features = ["cuda"] }

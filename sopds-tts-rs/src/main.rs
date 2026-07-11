@@ -185,11 +185,20 @@ fn run() -> Result<(), String> {
     let phoneme_ids = phonemes_to_ids(&phonemes, &phoneme_map)?;
     let seq_len = phoneme_ids.len();
 
-    // Create ONNX session with CUDA, falling back to CPU.
+    // Create ONNX session with hardware acceleration — CoreML (ANE/GPU) on
+    // macOS, CUDA elsewhere — falling back to CPU for unsupported ops.
     let mut session = Session::builder()
         .map_err(|e| format!("failed to create session builder: {e}"))?
-        .with_execution_providers([ort::execution_providers::CUDAExecutionProvider::default()
-            .build()])
+        .with_execution_providers([
+            // macOS: CPU. CoreML can't run this VITS/Piper model on the GPU —
+            // its inputs have dynamic (unbounded) dimensions, which CoreML
+            // MLProgram rejects, so the whole graph falls back to CPU anyway
+            // (with heavy error spam). Apple-Silicon CPU is fast enough here.
+            #[cfg(target_os = "macos")]
+            ort::execution_providers::CPUExecutionProvider::default().build(),
+            #[cfg(not(target_os = "macos"))]
+            ort::execution_providers::CUDAExecutionProvider::default().build(),
+        ])
         .map_err(|e| format!("failed to set execution providers: {e}"))?
         .commit_from_file(model_path)
         .map_err(|e| format!("failed to load model {model_path}: {e}"))?;

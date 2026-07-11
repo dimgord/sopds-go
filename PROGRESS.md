@@ -5,6 +5,23 @@
 
 ---
 
+### Revision 76 - 2026-07-11
+**sopds-tts-rs: build + run on macOS (Apple Silicon) — one repo, auto per platform:**
+
+The Rust CUDA TTS port (`sopds-tts-rs/`) now also builds and runs on macOS. `Cargo.toml`
+selects the ONNX Runtime execution provider per target via `[target.'cfg(...)'.dependencies]`
+(CUDA on Linux — unchanged, lib via `ORT_LIB_LOCATION`/`run-gpu.sh`; `download-binaries` on
+macOS), and `main.rs` picks the provider with `cfg(target_os)`. `cargo build --release` now
+Just Works on both: CUDA binary on fedya, CPU binary on mac5.
+
+- **macOS runs on CPU.** CoreML — the only ORT GPU path on Apple Silicon — can't run this
+  Piper/VITS model: its inputs have dynamic (unbounded) dimensions that CoreML rejects
+  (NeuralNetwork format segfaults; MLProgram floods `unbounded dimension` errors and falls
+  back to CPU anyway). Not worth chasing — Apple-Silicon CPU is **~13× real-time** (13.8 s of
+  audio in 1.08 s on an M5 Pro). Re-add the `coreml` feature only if the model is re-exported
+  with bounded shapes.
+- No change to the Linux/CUDA path.
+
 ### Revision 75 - 2026-05-11
 **v1.3.3 patch — resend-verification + SMTP password_env + docs cleanup:**
 
