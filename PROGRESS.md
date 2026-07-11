@@ -5,6 +5,35 @@
 
 ---
 
+### Revision 81 - 2026-07-11
+**TTS: default `chunk_size` 5000 → 1000 bytes — the old default OOMs the GPU (real cause of "slow").**
+
+A live fedya generation (a large Russian book, `ru_RU-irina-medium`) ran at ~2.3 s/chunk, ETA 1h42m.
+The log showed why: **every chunk failed on the daemon with a CUDA OOM** and fell back to the slow
+one-shot path (fresh process + CUDA init + 114 MB model reload each time):
+`BFCArena … Failed to allocate memory for requested buffer of size 3035899904` (~3 GB).
+
+Root cause: Piper/VITS attention/upsampling is ~O(n²) in text length (the intermediate is roughly
+`text_len × predicted-audio-frames`), and `chunk_size` defaulted to **5000 bytes**. Measured threshold
+on the GTX 1070 (8 GB, 7.85 GB free): chunks of 576 / 1152 bytes synthesize fine (175 / 535 ms), a
+**2304-byte chunk requests >7.8 GB and OOMs**. So it is not GPU contention — a single chunk's tensor
+simply doesn't fit.
+
+Fix: lower the default `chunk_size` to **1000 bytes** (`config.go` default + `extractor.go` fallback).
+`chunk_size` is measured in **bytes**, and Cyrillic is ~2 bytes/char, so 1000 ≈ 500 ru / ~1000 en chars
+— a few sentences, ~20–40 s of audio. Confirmed on fedya: realistic EN (362 B → 919 ms) and RU
+(436 B → 484 ms) chunks run on the daemon with **no OOM**. Also set `chunk_size: 1000` in the live
+`/opt/sopds/config.yaml` and restarted. Bigger GPUs can raise it; the O(n²) wall is the only limit.
+
+Note: total synth time is bounded by GPU throughput (audio length is fixed), so the win here is
+(a) the daemon **actually engaging** instead of the OOM→one-shot fallback, and (b) better prosody from
+sentence-scale chunks. Files: `internal/config/config.go`, `internal/tts/extractor.go`.
+
+**Future option:** set the CUDA EP arena to a memory limit / `kSameAsRequested`, or auto-split a chunk
+that still OOMs, instead of failing that chunk.
+
+---
+
 ### Revision 80 - 2026-07-11
 **Deploy: sopds-tts-rs live on fedya (CUDA GPU); sopds server rebuilt to Rev 79 for daemon mode.**
 

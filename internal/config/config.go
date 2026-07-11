@@ -29,7 +29,7 @@ type TTSConfig struct {
 	DefaultVoice string            `yaml:"default_voice"` // Fallback voice model
 	CacheDir     string            `yaml:"cache_dir"`     // Generated audio storage
 	Workers      int               `yaml:"workers"`       // Parallel generation jobs
-	ChunkSize    int               `yaml:"chunk_size"`    // Characters per audio chunk
+	ChunkSize    int               `yaml:"chunk_size"`    // Bytes of text per audio chunk (keep ~1000: Piper/VITS attention is O(n²) — big chunks OOM the GPU)
 }
 
 // SMTPConfig holds email sending settings
@@ -116,9 +116,9 @@ type ScannerConfig struct {
 	Workers    int    `yaml:"workers"`
 	Schedule   string `yaml:"schedule"`
 	OnStart    bool   `yaml:"on_start"`
-	Duplicates string `yaml:"duplicates"`  // none, normal, strong, clear
+	Duplicates string `yaml:"duplicates"` // none, normal, strong, clear
 	PIDFile    string `yaml:"pid_file"`
-	AutoClean  string `yaml:"auto_clean"`  // ask (default), yes, no - for missing archives
+	AutoClean  string `yaml:"auto_clean"` // ask (default), yes, no - for missing archives
 }
 
 // SiteConfig holds site metadata
@@ -145,7 +145,7 @@ type LoggingConfig struct {
 type ConvertersConfig struct {
 	FB2ToEPUB string `yaml:"fb2toepub"`
 	FB2ToMOBI string `yaml:"fb2tomobi"`
-	FFmpeg    string `yaml:"ffmpeg"`  // Path to ffmpeg for AWB→MP3 conversion
+	FFmpeg    string `yaml:"ffmpeg"` // Path to ffmpeg for AWB→MP3 conversion
 	TempDir   string `yaml:"temp_dir"`
 }
 
@@ -214,7 +214,7 @@ func DefaultConfig() *Config {
 			DefaultVoice: "",
 			CacheDir:     "/var/lib/sopds/tts_cache",
 			Workers:      2,
-			ChunkSize:    5000,
+			ChunkSize:    1000, // ~1000 bytes; Piper/VITS attention is O(n²) — larger chunks blow up GPU memory (a ~2.3 KB chunk needs >8 GB)
 		},
 	}
 }

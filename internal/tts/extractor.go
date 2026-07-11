@@ -168,10 +168,10 @@ func extractPlainTextFromContent(content []byte) string {
 	return strings.Join(cleanLines, "\n")
 }
 
-// splitIntoChunks splits sections into chunks of approximately chunkSize characters
+// splitIntoChunks splits sections into chunks of approximately chunkSize bytes
 func splitIntoChunks(sections []sectionText, chunkSize int) []TextChunk {
 	if chunkSize <= 0 {
-		chunkSize = 5000
+		chunkSize = 1000 // Piper/VITS attention is O(n²); larger chunks OOM the GPU
 	}
 
 	var chunks []TextChunk
@@ -301,10 +301,10 @@ type fb2Description struct {
 }
 
 type fb2TitleInfo struct {
-	Lang      string       `xml:"lang"`
-	BookTitle string       `xml:"book-title"`
-	Authors   []fb2Author  `xml:"author"`
-	Coverpage *fb2Cover    `xml:"coverpage"`
+	Lang      string      `xml:"lang"`
+	BookTitle string      `xml:"book-title"`
+	Authors   []fb2Author `xml:"author"`
+	Coverpage *fb2Cover   `xml:"coverpage"`
 }
 
 type fb2Author struct {
@@ -324,10 +324,10 @@ type fb2Image struct {
 }
 
 type fb2Body struct {
-	Name     string       `xml:"name,attr"`
-	Title    *fb2Title    `xml:"title"`
+	Name     string        `xml:"name,attr"`
+	Title    *fb2Title     `xml:"title"`
 	Epigraph []fb2Epigraph `xml:"epigraph"`
-	Sections []fb2Section `xml:"section"`
+	Sections []fb2Section  `xml:"section"`
 }
 
 type fb2Title struct {
