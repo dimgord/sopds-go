@@ -5,6 +5,33 @@
 
 ---
 
+### Revision 77 - 2026-07-11
+**sopds-tts-rs: daemon mode — load the model once, then ~20–90 ms per chunk (no GPU):**
+
+The one-shot contract `sopds-tts-rs <model> <output>` reloads the ~60 MB ONNX model on **every**
+call. Benchmarking showed that reload (~0.34 s) — not synthesis — is the dominant cost: actual
+inference is ~0.02–0.09 s per sentence on the M5 Pro CPU. So the win isn't the GPU (CoreML can't
+run this VITS model anyway, see Rev 76); it's a **resident model**.
+
+Added a backward-compatible daemon mode:
+
+- `sopds-tts-rs <model> <output>` — unchanged one-shot (text on stdin, WAV out).
+- `sopds-tts-rs <model>` (no output arg) — loads model + session **once**, prints `ready: …` to
+  stderr, then reads **NDJSON** requests on stdin, one per line: `{"text":"…","output":"/p.wav"}`.
+  For each it synthesizes + writes the WAV and emits one NDJSON response:
+  `{"ok":true,"samples":N,"elapsed_ms":M,"output":"…"}` (or `{"ok":false,"error":"…"}`). EOF → exit.
+
+Refactored load/synth into a `Tts` struct (`load()` once → `synth(text) -> Vec<i16>`), shared by
+both modes. Measured on mac5, 5 sentences in one daemon session: **86 / 76 / 19 / 60 / 70 ms** each,
+vs ~340 ms per separate one-shot call — **sub-0.1 s per chunk, ×4–15 faster**, CPU only.
+
+Files: `sopds-tts-rs/src/main.rs` (Tts struct, `serve()` daemon, `run()` dispatch on argc).
+**TODO (next rev):** `internal/tts/generator.go` should keep one daemon per model alive and speak
+this NDJSON protocol instead of spawning a process per chunk — that's what turns this into a
+UI-visible speedup.
+
+---
+
 ### Revision 76 - 2026-07-11
 **sopds-tts-rs: build + run on macOS (Apple Silicon) — one repo, auto per platform:**
 

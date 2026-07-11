@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{BufRead, Read, Write};
 use std::process::{Command, Stdio};
+use std::time::Instant;
 
 use hound::{SampleFormat, WavSpec, WavWriter};
 use ort::session::Session;
@@ -81,7 +82,6 @@ fn text_to_phonemes(text: &str, config: &PiperConfig) -> Result<String, String> 
         .map_err(|e| format!("failed to spawn espeak-ng: {e}"))?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
         stdin
             .write_all(text.as_bytes())
             .map_err(|e| format!("failed to write to espeak-ng stdin: {e}"))?;
@@ -141,6 +141,197 @@ fn build_phoneme_map(raw: &HashMap<String, Vec<i64>>) -> HashMap<char, Vec<i64>>
     map
 }
 
+// --- TTS engine: load the model + config ONCE, synthesize many times ---
+//
+// The model load + ONNX session init is the dominant per-invocation cost
+// (~0.3s for a 60MB Piper model); synthesis itself is ~15-70x real-time. So a
+// resident process that loads once and synthesizes in a loop (daemon mode) is
+// far faster per chunk than re-spawning per chunk.
+struct Tts {
+    session: Session,
+    config: PiperConfig,
+    phoneme_map: HashMap<char, Vec<i64>>,
+}
+
+impl Tts {
+    fn load(model_path: &str) -> Result<Self, String> {
+        let config_path = format!("{model_path}.json");
+        let config_data = std::fs::read_to_string(&config_path)
+            .map_err(|e| format!("failed to read config {config_path}: {e}"))?;
+        let config: PiperConfig = serde_json::from_str(&config_data)
+            .map_err(|e| format!("failed to parse config: {e}"))?;
+        let phoneme_map = build_phoneme_map(&config.phoneme_id_map);
+
+        let session = Session::builder()
+            .map_err(|e| format!("failed to create session builder: {e}"))?
+            .with_execution_providers([
+                // macOS: CPU. CoreML can't run this VITS/Piper model on the GPU —
+                // its inputs have dynamic (unbounded) dimensions, which CoreML
+                // MLProgram rejects, so the whole graph falls back to CPU anyway
+                // (with heavy error spam). Apple-Silicon CPU is fast enough here.
+                #[cfg(target_os = "macos")]
+                ort::execution_providers::CPUExecutionProvider::default().build(),
+                #[cfg(not(target_os = "macos"))]
+                ort::execution_providers::CUDAExecutionProvider::default().build(),
+            ])
+            .map_err(|e| format!("failed to set execution providers: {e}"))?
+            .commit_from_file(model_path)
+            .map_err(|e| format!("failed to load model {model_path}: {e}"))?;
+
+        Ok(Self {
+            session,
+            config,
+            phoneme_map,
+        })
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.config.audio.sample_rate
+    }
+
+    /// Synthesize `text` into 16-bit PCM samples.
+    fn synth(&mut self, text: &str) -> Result<Vec<i16>, String> {
+        let phonemes = text_to_phonemes(text, &self.config)?;
+        let phoneme_ids = phonemes_to_ids(&phonemes, &self.phoneme_map)?;
+        let seq_len = phoneme_ids.len();
+
+        let input_tensor = Tensor::from_array(([1, seq_len], phoneme_ids.into_boxed_slice()))
+            .map_err(|e| format!("failed to create input tensor: {e}"))?;
+        let lengths_tensor = Tensor::from_array(([1], vec![seq_len as i64].into_boxed_slice()))
+            .map_err(|e| format!("failed to create lengths tensor: {e}"))?;
+        let scales_tensor = Tensor::from_array((
+            [3],
+            vec![
+                self.config.inference.noise_scale,
+                self.config.inference.length_scale,
+                self.config.inference.noise_w,
+            ]
+            .into_boxed_slice(),
+        ))
+        .map_err(|e| format!("failed to create scales tensor: {e}"))?;
+
+        let num_speakers = self.config.num_speakers.unwrap_or(0);
+        let outputs = if num_speakers > 1 {
+            let speaker_id = self
+                .config
+                .speaker_id_map
+                .as_ref()
+                .and_then(|m| m.values().next().copied())
+                .unwrap_or(0);
+            let sid_tensor = Tensor::from_array(([1usize], vec![speaker_id].into_boxed_slice()))
+                .map_err(|e| format!("failed to create sid tensor: {e}"))?;
+            self.session
+                .run(ort::inputs![
+                    "input" => input_tensor,
+                    "input_lengths" => lengths_tensor,
+                    "scales" => scales_tensor,
+                    "sid" => sid_tensor,
+                ])
+                .map_err(|e| format!("inference failed: {e}"))?
+        } else {
+            self.session
+                .run(ort::inputs![
+                    "input" => input_tensor,
+                    "input_lengths" => lengths_tensor,
+                    "scales" => scales_tensor,
+                ])
+                .map_err(|e| format!("inference failed: {e}"))?
+        };
+
+        let (_shape, audio_float) = outputs[0]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| format!("failed to extract output tensor: {e}"))?;
+
+        let audio_i16: Vec<i16> = audio_float
+            .iter()
+            .map(|&s: &f32| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+            .collect();
+
+        Ok(audio_i16)
+    }
+}
+
+fn write_wav(samples: &[i16], output_path: &str, sample_rate: u32) -> Result<(), String> {
+    let spec = WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: SampleFormat::Int,
+    };
+    let mut writer = WavWriter::create(output_path, spec)
+        .map_err(|e| format!("failed to create WAV file: {e}"))?;
+    for &sample in samples {
+        writer
+            .write_sample(sample)
+            .map_err(|e| format!("failed to write sample: {e}"))?;
+    }
+    writer
+        .finalize()
+        .map_err(|e| format!("failed to finalize WAV: {e}"))?;
+    Ok(())
+}
+
+// --- Daemon mode: one NDJSON request per line on stdin, one response per line ---
+//
+//   request:  {"text": "...", "output": "/path/to/out.wav"}
+//   response: {"ok": true,  "samples": 12345, "elapsed_ms": 42, "output": "..."}
+//             {"ok": false, "error": "..."}
+//
+// The model is loaded once; each request only pays phonemize + inference + WAV.
+#[derive(Deserialize)]
+struct Request {
+    text: String,
+    output: String,
+}
+
+fn serve(model_path: &str) -> Result<(), String> {
+    let mut tts = Tts::load(model_path)?;
+    let sample_rate = tts.sample_rate();
+    // Signal readiness on stderr so the parent knows the (slow) load is done.
+    eprintln!("ready: {model_path} loaded (daemon mode; NDJSON on stdin)");
+
+    let stdin = std::io::stdin();
+    let mut reader = stdin.lock();
+    let stdout = std::io::stdout();
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        let n = reader
+            .read_line(&mut line)
+            .map_err(|e| format!("failed to read request: {e}"))?;
+        if n == 0 {
+            break; // EOF — parent closed stdin
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let started = Instant::now();
+        let resp = match serde_json::from_str::<Request>(trimmed) {
+            Ok(req) => match tts.synth(&req.text).and_then(|samples| {
+                write_wav(&samples, &req.output, sample_rate).map(|()| samples.len())
+            }) {
+                Ok(samples) => serde_json::json!({
+                    "ok": true,
+                    "samples": samples,
+                    "elapsed_ms": started.elapsed().as_millis(),
+                    "output": req.output,
+                }),
+                Err(e) => serde_json::json!({ "ok": false, "error": e }),
+            },
+            Err(e) => serde_json::json!({ "ok": false, "error": format!("bad request json: {e}") }),
+        };
+
+        let mut out = stdout.lock();
+        writeln!(out, "{resp}").map_err(|e| format!("failed to write response: {e}"))?;
+        out.flush().map_err(|e| format!("failed to flush response: {e}"))?;
+    }
+
+    Ok(())
+}
+
 // --- Main ---
 
 fn main() {
@@ -152,149 +343,38 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 3 {
-        return Err(format!("usage: {} <model_path> <output_path>", args[0]));
+    match args.len() {
+        // One-shot (backward compatible): text on stdin -> one WAV, then exit.
+        3 => {
+            let model_path = &args[1];
+            let output_path = &args[2];
+
+            let mut text = String::new();
+            std::io::stdin()
+                .read_to_string(&mut text)
+                .map_err(|e| format!("failed to read stdin: {e}"))?;
+            let text = text.trim();
+            if text.is_empty() {
+                return Err("no input text".to_string());
+            }
+
+            let mut tts = Tts::load(model_path)?;
+            let samples = tts.synth(text)?;
+            let sample_rate = tts.sample_rate();
+            write_wav(&samples, output_path, sample_rate)?;
+
+            eprintln!(
+                "generated {} samples ({:.1}s) at {sample_rate}Hz -> {output_path}",
+                samples.len(),
+                samples.len() as f64 / sample_rate as f64,
+            );
+            Ok(())
+        }
+        // Daemon: load model once, stream NDJSON requests on stdin.
+        2 => serve(&args[1]),
+        _ => Err(format!(
+            "usage:\n  {0} <model_path> <output_path>   # one-shot (text on stdin)\n  {0} <model_path>                 # daemon (NDJSON requests on stdin)",
+            args[0]
+        )),
     }
-    let model_path = &args[1];
-    let output_path = &args[2];
-
-    // Read text from stdin.
-    let mut text = String::new();
-    std::io::stdin()
-        .read_to_string(&mut text)
-        .map_err(|e| format!("failed to read stdin: {e}"))?;
-    let text = text.trim();
-    if text.is_empty() {
-        return Err("no input text".to_string());
-    }
-
-    // Load Piper config from <model_path>.json.
-    let config_path = format!("{model_path}.json");
-    let config_data = std::fs::read_to_string(&config_path)
-        .map_err(|e| format!("failed to read config {config_path}: {e}"))?;
-    let config: PiperConfig =
-        serde_json::from_str(&config_data).map_err(|e| format!("failed to parse config: {e}"))?;
-
-    // Build phoneme map (single-char keys only).
-    let phoneme_map = build_phoneme_map(&config.phoneme_id_map);
-
-    // Convert text to phonemes.
-    let phonemes = text_to_phonemes(text, &config)?;
-
-    // Convert phonemes to IDs.
-    let phoneme_ids = phonemes_to_ids(&phonemes, &phoneme_map)?;
-    let seq_len = phoneme_ids.len();
-
-    // Create ONNX session with hardware acceleration — CoreML (ANE/GPU) on
-    // macOS, CUDA elsewhere — falling back to CPU for unsupported ops.
-    let mut session = Session::builder()
-        .map_err(|e| format!("failed to create session builder: {e}"))?
-        .with_execution_providers([
-            // macOS: CPU. CoreML can't run this VITS/Piper model on the GPU —
-            // its inputs have dynamic (unbounded) dimensions, which CoreML
-            // MLProgram rejects, so the whole graph falls back to CPU anyway
-            // (with heavy error spam). Apple-Silicon CPU is fast enough here.
-            #[cfg(target_os = "macos")]
-            ort::execution_providers::CPUExecutionProvider::default().build(),
-            #[cfg(not(target_os = "macos"))]
-            ort::execution_providers::CUDAExecutionProvider::default().build(),
-        ])
-        .map_err(|e| format!("failed to set execution providers: {e}"))?
-        .commit_from_file(model_path)
-        .map_err(|e| format!("failed to load model {model_path}: {e}"))?;
-
-    // Prepare input tensors.
-    let input_tensor =
-        Tensor::from_array(([1, seq_len], phoneme_ids.into_boxed_slice()))
-            .map_err(|e| format!("failed to create input tensor: {e}"))?;
-
-    let lengths_tensor =
-        Tensor::from_array(([1], vec![seq_len as i64].into_boxed_slice()))
-            .map_err(|e| format!("failed to create lengths tensor: {e}"))?;
-
-    let scales_tensor = Tensor::from_array((
-        [3],
-        vec![
-            config.inference.noise_scale,
-            config.inference.length_scale,
-            config.inference.noise_w,
-        ]
-        .into_boxed_slice(),
-    ))
-    .map_err(|e| format!("failed to create scales tensor: {e}"))?;
-
-    // Build inputs.
-    let num_speakers = config.num_speakers.unwrap_or(0);
-
-    let outputs = if num_speakers > 1 {
-        let speaker_id = config
-            .speaker_id_map
-            .as_ref()
-            .and_then(|m| m.values().next().copied())
-            .unwrap_or(0);
-        let sid_tensor =
-            Tensor::from_array(([1usize], vec![speaker_id].into_boxed_slice()))
-                .map_err(|e| format!("failed to create sid tensor: {e}"))?;
-
-        session
-            .run(ort::inputs![
-                "input" => input_tensor,
-                "input_lengths" => lengths_tensor,
-                "scales" => scales_tensor,
-                "sid" => sid_tensor,
-            ])
-            .map_err(|e| format!("inference failed: {e}"))?
-    } else {
-        session
-            .run(ort::inputs![
-                "input" => input_tensor,
-                "input_lengths" => lengths_tensor,
-                "scales" => scales_tensor,
-            ])
-            .map_err(|e| format!("inference failed: {e}"))?
-    };
-
-    // Extract audio samples from output tensor.
-    let (_shape, audio_float) = outputs[0]
-        .try_extract_tensor::<f32>()
-        .map_err(|e| format!("failed to extract output tensor: {e}"))?;
-
-    // Convert float32 -> int16 PCM.
-    let audio_i16: Vec<i16> = audio_float
-        .iter()
-        .map(|&s: &f32| {
-            let clamped = s.clamp(-1.0, 1.0);
-            (clamped * 32767.0) as i16
-        })
-        .collect();
-
-    // Write WAV file.
-    let spec = WavSpec {
-        channels: 1,
-        sample_rate: config.audio.sample_rate,
-        bits_per_sample: 16,
-        sample_format: SampleFormat::Int,
-    };
-
-    let mut writer = WavWriter::create(output_path, spec)
-        .map_err(|e| format!("failed to create WAV file: {e}"))?;
-
-    for &sample in &audio_i16 {
-        writer
-            .write_sample(sample)
-            .map_err(|e| format!("failed to write sample: {e}"))?;
-    }
-
-    writer
-        .finalize()
-        .map_err(|e| format!("failed to finalize WAV: {e}"))?;
-
-    eprintln!(
-        "generated {} samples ({:.1}s) at {}Hz -> {output_path}",
-        audio_i16.len(),
-        audio_i16.len() as f64 / config.audio.sample_rate as f64,
-        config.audio.sample_rate,
-    );
-
-    Ok(())
 }
