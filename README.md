@@ -358,14 +358,14 @@ sopds-go picks it up automatically: it looks for a binary named **`sopds-tts` ne
 
 **Daemon mode.** With no output argument (`sopds-tts-rs <model>`) the binary loads the model **once** and then reads NDJSON `{"text","output"}` requests on stdin, emitting one WAV per line — ~20–90 ms/chunk vs ~340 ms when the model is reloaded per call. sopds-go uses this automatically (one resident process per model, falling back to a one-shot subprocess if the binary doesn't support daemon mode).
 
-**Convert a whole book from the CLI.** `fb2-to-wav.sh` wraps the above into one command — it extracts the main body text, splits it into ~900-byte sentence chunks (bigger chunks OOM the GPU), runs them through one resident daemon, and concatenates the result:
+**Convert a whole book from the CLI.** `fb2-to-wav.sh` wraps the above into one command — it extracts the main body text, splits it into ~600-character sentence chunks (bigger chunks OOM the GPU), runs them through one resident daemon, shows a live ETA, and joins the result:
 
 ```bash
-./fb2-to-wav.sh book.fb2 ~/piper-models/ru_RU-irina-medium.onnx book.wav
-# MAXBYTES=800 ./fb2-to-wav.sh …   # smaller chunks if a voice/GPU is tight on memory
+./fb2-to-wav.sh book.fb2 ~/piper-models/ru_RU-irina-medium.onnx book.mp3
+# MAXCHARS=800 ./fb2-to-wav.sh …   # bigger chunks (careful: >~700 chars can OOM an 8 GB GPU)
 ```
 
-It self-bootstraps its tools (espeak-ng, ffmpeg, jq, xmllint, GNU sed/awk) via `nix shell`, so on a nix box nothing needs installing.
+The output format follows the extension (default `.mp3`): `mp3` / `m4b` / `m4a` / `opus` / `ogg` are encoded at a speech-grade bitrate; `.wav` is copied losslessly but is **hard-capped at 4 GB** by the format, so a longer book auto-switches to `.mp3`. It self-bootstraps its tools (espeak-ng, ffmpeg, jq, xmllint, GNU sed/awk) via `nix shell`, so on a nix box nothing needs installing.
 
 #### Deploy on a GPU host (systemd)
 

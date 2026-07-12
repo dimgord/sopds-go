@@ -5,6 +5,25 @@
 
 ---
 
+### Revision 85 - 2026-07-12
+**fb2-to-wav.sh: output format by extension (default MP3), 4 GB-WAV guard, chunk size in chars.**
+
+Two issues surfaced converting a ~50 h book on mac5:
+- The concatenated audio was **8 GB**, but WAV's 32-bit size fields cap a file at **4 GB** →
+  ffmpeg wrote a broken header. Fix: output format now follows the **extension**
+  (`mp3`/`m4b`/`m4a`/`opus`/`ogg` are encoded at a speech bitrate; `wav` is copied), the **default
+  is `.mp3`**, and a `.wav` that would exceed 4 GB **auto-switches to `.mp3`** so you never get a
+  broken file. (An already-broken WAV recovers with
+  `ffmpeg -ignore_length 1 -i big.wav -c:a libmp3lame -b:a 64k out.mp3`.)
+- `MAXBYTES` was a misnomer — gawk `length()` counts **characters**, so it always limited chars,
+  not bytes (900 → ~1750 bytes for Cyrillic, near the GPU OOM cliff, and the reason the same-title
+  library book split into 12455 byte-based chunks while the script made 1827 char-based ones).
+  Renamed to `MAXCHARS` (legacy `MAXBYTES` still honored); default lowered 900 → **600** chars
+  (GPU-safe — char count tracks phoneme count, which drives attention memory). Files:
+  `sopds-tts-rs/fb2-to-wav.sh`.
+
+---
+
 ### Revision 84 - 2026-07-11
 **fb2-to-wav.sh: live progress % + elapsed + ETA.**
 
