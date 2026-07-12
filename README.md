@@ -358,12 +358,15 @@ sopds-go picks it up automatically: it looks for a binary named **`sopds-tts` ne
 
 **Daemon mode.** With no output argument (`sopds-tts-rs <model>`) the binary loads the model **once** and then reads NDJSON `{"text","output"}` requests on stdin, emitting one WAV per line — ~20–90 ms/chunk vs ~340 ms when the model is reloaded per call. sopds-go uses this automatically (one resident process per model, falling back to a one-shot subprocess if the binary doesn't support daemon mode).
 
-**Convert a whole book from the CLI.** `fb2-to-wav.sh` wraps the above into one command — it extracts the main body text, splits it into ~600-character sentence chunks (bigger chunks OOM the GPU), runs them through one resident daemon, shows a live ETA, and joins the result:
+**Convert a whole book from the CLI.** `fb2-to-wav.sh` wraps the above into one command — it extracts the main body text, splits it into ~600-character sentence chunks (bigger chunks OOM the GPU), runs them across `WORKERS` parallel daemons with a live ETA, and joins the result:
 
 ```bash
 ./fb2-to-wav.sh book.fb2 ~/piper-models/ru_RU-irina-medium.onnx book.mp3
-# MAXCHARS=800 ./fb2-to-wav.sh …   # bigger chunks (careful: >~700 chars can OOM an 8 GB GPU)
+WORKERS=6 ./fb2-to-wav.sh …          # more parallelism (default 4)
+MAXCHARS=800 ./fb2-to-wav.sh …       # bigger chunks (careful: >~700 chars can OOM an 8 GB GPU)
 ```
+
+`WORKERS` defaults to 4 (each daemon capped to ~cores/WORKERS ORT threads). On Apple Silicon — where this model runs CPU-only ([CoreML can't run Piper's VITS](docs/decisions/003-apple-silicon-piper-stays-cpu.md)) — that's roughly a 2× win, bounded by the performance-core count. On a GPU box keep it low (VRAM per resident model).
 
 The output format follows the extension (default `.mp3`): `mp3` / `m4b` / `m4a` / `opus` / `ogg` are encoded at a speech-grade bitrate; `.wav` is copied losslessly but is **hard-capped at 4 GB** by the format, so a longer book auto-switches to `.mp3`. It self-bootstraps its tools (espeak-ng, ffmpeg, jq, xmllint, GNU sed/awk) via `nix shell`, so on a nix box nothing needs installing.
 

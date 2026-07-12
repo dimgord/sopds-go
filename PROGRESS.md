@@ -5,6 +5,30 @@
 
 ---
 
+### Revision 86 - 2026-07-12
+**TTS: parallel workers for CLI conversion + intra-op thread cap; Apple Silicon stays CPU (decision 003).**
+
+Chased down why a **3× smaller** book took ~3× *longer* on the M5 Pro (1h44m) than the bigger book on
+fedya's GTX 1070 (35 min): mac5 runs Piper **CPU-only** — CoreML can't run VITS's data-dependent output
+length (decision [003](docs/decisions/003-apple-silicon-piper-stays-cpu.md)) — while fedya uses its real
+GPU, and `fb2-to-wav.sh` ran a **single** daemon on a 15-core machine.
+
+- `main.rs`: optional **`SOPDS_TTS_THREADS`** env caps the ORT intra-op thread count per session, so
+  several daemons can run in parallel without oversubscribing.
+- `fb2-to-wav.sh`: new **`WORKERS`** (default 4) runs N resident daemons over round-robin shards, each
+  capped to ~cores/WORKERS threads, with aggregate progress/ETA by polling produced WAVs. (Also fixed a
+  `pipefail` + `ls`-on-empty-glob bug that silently aborted the run before the first WAV existed.)
+- Benchmarked on mac5 (M5 Pro, 5 P + 10 E cores), 40 real ru chunks: **27 s → 14 s** at 4 workers, flat
+  at 5/8/10 — **~2× is the ceiling**, set by the performance-core count. So the ~50 h book drops from
+  ~1h44m to **~52 min** on mac5; fedya (GPU) stays faster for big books.
+- Decision doc **003** records (sourced) that Apple-Silicon GPU/ANE for Piper is a dead-end — the VITS
+  duration-predictor length dynamism forces CPU fallback, and ANE would be a wash even if it ran.
+
+Files: `sopds-tts-rs/src/main.rs`, `sopds-tts-rs/fb2-to-wav.sh`,
+`docs/decisions/003-apple-silicon-piper-stays-cpu.md`, `README.md`.
+
+---
+
 ### Revision 85 - 2026-07-12
 **fb2-to-wav.sh: output format by extension (default MP3), 4 GB-WAV guard, chunk size in chars.**
 

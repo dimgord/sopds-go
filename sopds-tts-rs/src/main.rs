@@ -162,7 +162,7 @@ impl Tts {
             .map_err(|e| format!("failed to parse config: {e}"))?;
         let phoneme_map = build_phoneme_map(&config.phoneme_id_map);
 
-        let session = Session::builder()
+        let mut builder = Session::builder()
             .map_err(|e| format!("failed to create session builder: {e}"))?
             .with_execution_providers([
                 // macOS: CPU. CoreML can't run this VITS/Piper model on the GPU —
@@ -174,7 +174,22 @@ impl Tts {
                 #[cfg(not(target_os = "macos"))]
                 ort::execution_providers::CUDAExecutionProvider::default().build(),
             ])
-            .map_err(|e| format!("failed to set execution providers: {e}"))?
+            .map_err(|e| format!("failed to set execution providers: {e}"))?;
+
+        // Optional intra-op thread cap. Lets a caller run several daemons in parallel
+        // (e.g. fb2-to-wav.sh WORKERS=N) without each ORT session grabbing every core
+        // and oversubscribing. Unset / 0 = ORT default (all cores).
+        if let Some(n) = std::env::var("SOPDS_TTS_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+        {
+            builder = builder
+                .with_intra_threads(n)
+                .map_err(|e| format!("failed to set intra threads: {e}"))?;
+        }
+
+        let session = builder
             .commit_from_file(model_path)
             .map_err(|e| format!("failed to load model {model_path}: {e}"))?;
 
