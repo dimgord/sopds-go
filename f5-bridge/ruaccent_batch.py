@@ -8,6 +8,7 @@ omograph model — avoids its token_type_ids bug, loses homograph disambiguation
 import argparse
 import json
 import os
+import re
 import sys
 
 
@@ -48,8 +49,10 @@ def main():
             # restore '…' (F5's trained token, id 1844) — preserves the book's ~560 pauses.
             s = acc.process_all(t.replace("…", "..."))
             s = s.replace("...", "…")
+            # whole-word replace: a key like 'обн+ял' must NOT match inside 'обн+ялся'/'обн+яла',
+            # so bound it by non-letter/non-'+' on both sides.
             for a, b in replace.items():
-                s = s.replace(a, b)
+                s = re.sub(r"(?<![а-яёА-ЯЁ+])" + re.escape(a) + r"(?![а-яёА-ЯЁ+])", b, s)
             sys.stdout.write(s + "\n")
         except Exception as e:
             fails += 1
