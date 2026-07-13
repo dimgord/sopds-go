@@ -47,16 +47,39 @@ curl -sL $B/F5TTS_v1_Base/vocab.txt                            -o ru-model/vocab
 
 ## Usage
 
-```bash
-NFE=16 WORKERS=3 nix shell nixpkgs#libxml2 nixpkgs#gawk nixpkgs#ffmpeg \
-  nixpkgs#gnused nixpkgs#coreutils -c \
-  ./fb2-to-f5.sh book.fb2 ./out
+Wrap the command in `nix shell nixpkgs#libxml2 nixpkgs#gawk nixpkgs#ffmpeg nixpkgs#gnused
+nixpkgs#coreutils -c …` (or have those on PATH). Common env: `NFE` (16 good · 8 fast/rough ·
+32 best) · `WORKERS` (parallel daemons) · `MAXCHARS` (250) · `DEVICE` (cpu|cuda) · `PARTS="4"`
+(subset) · `REMOVE_SILENCE=1` · `FIX=corrections.json` · `REF/REF_TEXT/CKPT/VOCAB/F5_HOME`.
 
-# env: NFE (16 good, 8 fast/rough, 32 best) · WORKERS (parallel daemons) · MAXCHARS (250)
-#      DEVICE (cpu|cuda) · PARTS="4" (subset, for testing) · REF/REF_TEXT/CKPT/VOCAB/F5_HOME
+**One-shot (no proofreading):**
+```bash
+FIX=corrections.json REMOVE_SILENCE=1 NFE=16 WORKERS=3 ./fb2-to-f5.sh book.fb2 ./out
+```
+
+**Two-phase (proofread the stress — the only path to perfect Russian stress):**
+```bash
+# 1) stress → reviewable text, no GPU
+MODE=stress FIX=corrections.json ./fb2-to-f5.sh book.fb2 ./out
+#    out/review/NN_<title>.txt   one stressed chunk per line — EDIT to fix any stress
+#    out/review/_check-yo.tsv    short list of ambiguous ё-homographs to eyeball (берет, десны…)
+# 2) synth from the (edited) text
+MODE=synth REMOVE_SILENCE=1 NFE=32 WORKERS=3 DEVICE=cuda ./fb2-to-f5.sh book.fb2 ./out
 ```
 
 Output: `out/NN_<title>.mp3`, one per top-level `<section>` (the book's own parts).
+
+**Why two-phase.** Russian ё/stress homographs are context-dependent (`берет` noun vs `берёт`
+verb; `десны` gen-sg vs `дёсны` plural). RUAccent's neural model gets most right but errs on
+some, and a global override in `corrections.json` (`{"yo":{"берет":"берет"}}`) can only force
+*one* sense — safe only where a word is single-sense in the book. Everything else is fixed by
+editing the review text once; synthesis then runs on the final text.
+
+**Clean the voice reference.** F5 clones the reference's noise floor. Denoise your clip first —
+it lowers pause hiss a lot:
+```bash
+ffmpeg -i ref.wav -af "afftdn=nf=-25,highpass=f=70,lowpass=f=8500" -ac 1 -ar 24000 ref_clean.wav
+```
 
 ## Speed (measured, mac5 M5 Pro CPU)
 

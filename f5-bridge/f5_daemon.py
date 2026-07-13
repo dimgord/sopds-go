@@ -29,6 +29,7 @@ def main():
     ap.add_argument("--model", default="F5TTS_v1_Base")
     ap.add_argument("--nfe", type=int, default=16)
     ap.add_argument("--device", default="cpu")
+    ap.add_argument("--remove-silence", action="store_true")
     args = ap.parse_args()
 
     ref_text = args.ref_text
@@ -52,7 +53,7 @@ def main():
             req = json.loads(line)
             model.infer(
                 ref_file=args.ref, ref_text=ref_text, gen_text=req["text"],
-                nfe_step=args.nfe, file_wave=req["output"], remove_silence=False,
+                nfe_step=args.nfe, file_wave=req["output"], remove_silence=args.remove_silence,
                 show_info=quiet,
             )
             resp = {"ok": True, "output": req["output"], "elapsed_ms": int((time.time() - t0) * 1000)}
