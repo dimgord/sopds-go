@@ -74,6 +74,38 @@
 
 <script>
 const $ = s => document.querySelector(s);
+
+// --- caret helpers for a single-text-node contenteditable line ---
+function caretOffset(el){
+  const s=window.getSelection(); if(!s.rangeCount) return null;
+  const r=s.getRangeAt(0), pre=r.cloneRange();
+  pre.selectNodeContents(el); pre.setEnd(r.endContainer,r.endOffset);
+  return pre.toString().length;
+}
+function setCaret(el,off){
+  const len=(el.textContent||"").length; off=Math.max(0,Math.min(off,len));
+  const r=document.createRange();
+  if(el.firstChild) r.setStart(el.firstChild,off); else r.setStart(el,0);
+  r.collapse(true);
+  const s=window.getSelection(); s.removeAllRanges(); s.addRange(r);
+}
+// lazy stress: one '+' per word — when a new '+' is typed, drop the word's previous '+'
+function dedupePlus(el){
+  const text=el.textContent, caret=caretOffset(el);
+  if(caret==null || caret<1 || text[caret-1]!=="+") return;
+  let a=caret-1; while(a>0 && !/\s/.test(text[a-1])) a--;      // word start
+  let b=caret;   while(b<text.length && !/\s/.test(text[b])) b++; // word end
+  const word=text.slice(a,b);
+  if((word.match(/\+/g)||[]).length<2) return;                 // only one '+' → nothing to do
+  const keep=(caret-1)-a;                                       // keep the just-typed '+'
+  let nw="", removedBefore=0;
+  for(let i=0;i<word.length;i++){
+    if(word[i]==="+" && i!==keep){ if(i<keep) removedBefore++; continue; }
+    nw+=word[i];
+  }
+  el.textContent=text.slice(0,a)+nw+text.slice(b);
+  setCaret(el, caret-removedBefore);
+}
 let HOM = new Set();          // ё-folded lemmas of ambiguous homographs
 let cur = null;               // {name, title, raw:[], stressed:[], dirty:Set}
 const dirtyFiles = new Set();
@@ -144,6 +176,7 @@ function renderRows(){
   }
   rows.querySelectorAll(".ed").forEach(ed=>{
     ed.addEventListener("focus",()=>{ ed.textContent = cur.stressed[+ed.dataset.i]; ed.closest(".row").classList.add("focus"); });
+    ed.addEventListener("input",()=>dedupePlus(ed));
     ed.addEventListener("blur",()=>{
       const i=+ed.dataset.i, v=ed.textContent.replace(/\n/g," ").trim();
       ed.closest(".row").classList.remove("focus");
