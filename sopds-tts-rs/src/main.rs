@@ -8,6 +8,37 @@ use ort::session::Session;
 use ort::value::Tensor;
 use serde::Deserialize;
 
+mod f5;
+
+// A daemon serves one voice: Piper (a .onnx file) or native F5 (a directory of 3 ONNX graphs +
+// vocab + reference). Same NDJSON protocol either way — the caller doesn't care which engine.
+enum Engine {
+    Piper(Tts),
+    F5(f5::F5),
+}
+
+impl Engine {
+    fn load(model_path: &str) -> Result<Self, String> {
+        if f5::is_f5_dir(model_path) {
+            Ok(Engine::F5(f5::F5::load(model_path)?))
+        } else {
+            Ok(Engine::Piper(Tts::load(model_path)?))
+        }
+    }
+    fn sample_rate(&self) -> u32 {
+        match self {
+            Engine::Piper(t) => t.sample_rate(),
+            Engine::F5(f) => f.sample_rate(),
+        }
+    }
+    fn synth(&mut self, text: &str) -> Result<Vec<i16>, String> {
+        match self {
+            Engine::Piper(t) => t.synth(text),
+            Engine::F5(f) => f.synth(text),
+        }
+    }
+}
+
 // Special phoneme IDs matching Piper convention.
 const PAD_ID: i64 = 0; // "_"
 const BOS_ID: i64 = 1; // "^"
@@ -305,8 +336,8 @@ struct Request {
 }
 
 fn serve(model_path: &str) -> Result<(), String> {
-    let mut tts = Tts::load(model_path)?;
-    let sample_rate = tts.sample_rate();
+    let mut engine = Engine::load(model_path)?;
+    let sample_rate = engine.sample_rate();
     // Signal readiness on stderr so the parent knows the (slow) load is done.
     eprintln!("ready: {model_path} loaded (daemon mode; NDJSON on stdin)");
 
@@ -330,7 +361,7 @@ fn serve(model_path: &str) -> Result<(), String> {
 
         let started = Instant::now();
         let resp = match serde_json::from_str::<Request>(trimmed) {
-            Ok(req) => match tts.synth(&req.text).and_then(|samples| {
+            Ok(req) => match engine.synth(&req.text).and_then(|samples| {
                 write_wav(&samples, &req.output, sample_rate).map(|()| samples.len())
             }) {
                 Ok(samples) => serde_json::json!({
@@ -389,11 +420,11 @@ fn run() -> Result<(), String> {
                 return Err("no input text".to_string());
             }
 
-            let mut tts = Tts::load(model_path)?;
-            let sample_rate = tts.sample_rate();
-            // Do the work, then exit WITHOUT dropping `tts` on *either* path — the ORT CUDA
+            let mut engine = Engine::load(model_path)?;
+            let sample_rate = engine.sample_rate();
+            // Do the work, then exit WITHOUT dropping `engine` on *either* path — the ORT CUDA
             // Session teardown corrupts the heap (Rev 79), and `?` would unwind-drop it on error.
-            let result = tts.synth(text).and_then(|samples| {
+            let result = engine.synth(text).and_then(|samples| {
                 write_wav(&samples, output_path, sample_rate)?;
                 eprintln!(
                     "generated {} samples ({:.1}s) at {sample_rate}Hz -> {output_path}",
