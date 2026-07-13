@@ -15,6 +15,7 @@ the cost is speed (F5 is a 336 M diffusion model — see below).
 |------|------|------|
 | `f5_daemon.py` | `f5env` | resident F5 (load once, NDJSON `{text,output}` in → WAV out) |
 | `fb2_extract.py` | — | FB2 → per-chapter narration text: part→chapter split, spoken headings, inline footnotes |
+| `reviewer/` | — | Go web tool to proofread the RUAccent stress before synthesis (two-pane, ё-homograph flags) |
 | `ruaccent_batch.py` | `ruaccent-env` | batch RUAccent stress (chunks in → stressed out, per-line fallback) |
 | `fb2-to-f5.sh` | — | orchestrator: split by part → chunk → stress → F5 daemons → per-part MP3 |
 | `merge_ellipsis.py` | — | graft `…` back into already-stressed text (RUAccent strips it — never re-stress) |
@@ -104,6 +105,17 @@ MODE=synth ENGINE=native F5MODEL=/path/to/f5model WORKERS=1 ./fb2-to-f5.sh book.
 `F5MODEL` and the export (NFE is fixed at 32). `F5BIN` overrides the binary path; `THREADS` caps
 ORT intra-op threads when `WORKERS>1`. CUDA vs CPU is a compile-time choice (CUDA on Linux, CPU on
 macOS), so build the binary on the machine you'll synth on.
+
+**Stress reviewer (GUI for step 1).** Editing the `.txt` by hand works; the reviewer makes it
+pleasant. Two-pane, line-aligned: raw reference on the left, editable stressed text on the right,
+with `+` rendered as real acute accents. Rare, genuinely-ambiguous **ё-homographs** (`берёте`,
+`нёбо`, `колёса`, `самоё`…) are flagged red and reachable with **`n`** / the *↓ флаг* button;
+frequent near-always-ё forms (`всё`, `чём`, `нём`) are shown subtly but not counted. Saves back to
+the `.txt` (one-time `.orig` backup), so it feeds `MODE=synth` directly.
+
+```bash
+cd reviewer && go build -o /tmp/f5-reviewer . && /tmp/f5-reviewer -dir ~/f5-review   # → http://127.0.0.1:8765
+```
 
 **Why two-phase.** Russian ё/stress homographs are context-dependent (`берет` noun vs `берёт`
 verb; `десны` gen-sg vs `дёсны` plural). RUAccent's neural model gets most right but errs on

@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F5 stress reviewer</title>
+<style>
+  :root{
+    --paper:#f4efe4; --ink:#22201b; --muted:#8a8272; --rule:#ded5c2;
+    --accent:#7a1f12; --accent-soft:#c8452e; --flag:#b3311c; --flag-bg:#f6dcd2;
+    --edit:#2b4a6f; --dirty:#c98a1a; --panel:#faf6ec;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--paper);color:var(--ink);
+    font:16px/1.6 "Iowan Old Style","PT Serif",Georgia,"Times New Roman",serif;
+    display:grid;grid-template-columns:248px 1fr;grid-template-rows:100%;height:100vh}
+
+  /* ---- sidebar: the chapters, like a table of contents ---- */
+  aside{background:var(--panel);border-right:1px solid var(--rule);overflow:auto;padding:0}
+  aside h1{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+    font-weight:600;margin:0;padding:18px 18px 10px}
+  .chap{padding:9px 18px;border-top:1px solid var(--rule);cursor:pointer;display:flex;gap:10px;align-items:baseline}
+  .chap:hover{background:#f0e9d8}
+  .chap.on{background:#ece2cc;box-shadow:inset 3px 0 0 var(--accent)}
+  .chap .nn{font-variant-numeric:tabular-nums;color:var(--accent);font-weight:700;min-width:1.4em}
+  .chap .ti{flex:1;font-size:14px}
+  .chap .dot{width:7px;height:7px;border-radius:50%;background:var(--dirty);align-self:center;visibility:hidden}
+  .chap.dirty .dot{visibility:visible}
+
+  /* ---- main pane ---- */
+  main{overflow:auto;display:flex;flex-direction:column}
+  header{position:sticky;top:0;z-index:5;background:var(--paper);border-bottom:1px solid var(--rule);
+    padding:14px 26px;display:flex;align-items:center;gap:16px}
+  header .title{font-size:20px;font-weight:700;flex:1}
+  header .stat{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+  button{font:inherit;font-size:14px;border:1px solid var(--rule);background:#fff;color:var(--ink);
+    padding:6px 14px;border-radius:6px;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  button:disabled{opacity:.4;cursor:default}
+  kbd{font:12px ui-monospace,monospace;background:#eee3cc;border:1px solid var(--rule);border-radius:4px;padding:0 5px}
+
+  .rows{padding:14px 26px 40vh;max-width:1180px}
+  .row{display:grid;grid-template-columns:2.4em 1fr 1fr;gap:18px;padding:5px 0;align-items:start;
+    border-bottom:1px solid #efe8d8}
+  .row .ix{color:var(--muted);font:12px ui-monospace,monospace;text-align:right;padding-top:4px;
+    font-variant-numeric:tabular-nums}
+  .raw{color:var(--muted)}
+  .ed{outline:none;border-radius:5px;padding:2px 7px;margin:-2px -7px;white-space:pre-wrap}
+  .ed:focus{background:#fff;box-shadow:0 0 0 2px var(--edit)}
+  .row.changed .ed{box-shadow:inset 3px 0 0 var(--dirty)}
+  .row.changed.focus .ed{box-shadow:inset 3px 0 0 var(--dirty),0 0 0 2px var(--edit)}
+  .row.note{opacity:.86}
+  .row.note .raw::before{content:"✎ ";color:var(--accent-soft)}
+  mark.hom{background:var(--flag-bg);color:var(--flag);border-radius:3px;padding:0 2px;
+    box-shadow:inset 0 -2px 0 var(--flag)}
+  .soft{box-shadow:inset 0 -1px 0 var(--rule)}  /* frequent near-always-ё (всё, чём…): shown, not counted */
+  .empty{color:var(--muted);padding:60px 26px;font-style:italic}
+</style>
+</head>
+<body>
+<aside><h1>Главы</h1><div id="chaps"></div></aside>
+<main>
+  <header>
+    <span class="title" id="title">—</span>
+    <span class="stat" id="stat"></span>
+    <button id="prev" title="предыдущий флаг (Shift+Tab область)">↑ флаг</button>
+    <button id="next" title="следующий ё-омограф — клавиша n">↓ флаг <kbd>n</kbd></button>
+    <button id="save" class="primary" title="сохранить — ⌘/Ctrl+S" disabled>Сохранить</button>
+  </header>
+  <div class="rows" id="rows"><div class="empty">Выберите главу слева.</div></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let HOM = new Set();          // ё-folded lemmas of ambiguous homographs
+let cur = null;               // {name, title, raw:[], stressed:[], dirty:Set}
+const dirtyFiles = new Set();
+
+const VOW = "аеёиоуыэюяАЕЁИОУЫЭЮЯ";
+const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const trimPunct = s => s.replace(/^[«»"'([{.,!?;:—\-–…]+|[«»"')\]}.,!?;:—\-–…]+$/g,"");
+// frequent ё-forms (ё-folded lemma) RUAccent almost always gets right — shown subtly, not counted,
+// so the 'hard' flags are the rarer genuinely-ambiguous homographs (нёбо, колёса, самоё, берёте…).
+const COMMON = new Set(["все","всем","чем","нем","ее","еще","мое","твое","свое","чье","нее","чьем"]);
+
+// tier of a stressed token: "hard" (rare homograph, count it), "soft" (frequent ё), or null
+function flagTier(tok){
+  const base = trimPunct(tok.replace(/\+/g,"").toLowerCase());
+  if(!base.includes("ё")) return null;
+  const lemma = base.replace(/ё/g,"е");
+  if(!HOM.has(lemma)) return null;
+  return COMMON.has(lemma) ? "soft" : "hard";
+}
+// display: '+' before a vowel → real acute accent; mark ё-homographs by tier
+function render(line){
+  return line.split(/(\s+)/).map(t=>{
+    if(/^\s+$/.test(t) || t==="") return esc(t);
+    const disp = esc(t).replace(new RegExp("\\+(["+VOW+"])","g"),"$1́");
+    const tier = flagTier(t);
+    return tier==="hard" ? `<mark class="hom">${disp}</mark>`
+         : tier==="soft" ? `<span class="soft">${disp}</span>` : disp;
+  }).join("");
+}
+function lineHasFlag(line){ return line.split(/\s+/).some(t=>flagTier(t)==="hard"); }
+
+async function loadList(){
+  const d = await (await fetch("/api/list")).json();
+  HOM = new Set(d.homographs.map(w=>w.trim().toLowerCase()).filter(Boolean));
+  const box = $("#chaps"); box.innerHTML="";
+  d.files.forEach(f=>{
+    const el = document.createElement("div");
+    el.className="chap"; el.dataset.name=f.nn+"_"+f.safe;
+    el.innerHTML=`<span class="nn">${f.nn}</span><span class="ti">${esc(f.title)}</span><span class="dot"></span>`;
+    el.onclick=()=>openFile(f.nn+"_"+f.safe, f.title, el);
+    box.appendChild(el);
+  });
+}
+
+async function openFile(name, title, el){
+  if(cur && cur.dirty.size && !confirm("Несохранённые правки в текущей главе. Перейти и потерять их?")) return;
+  document.querySelectorAll(".chap.on").forEach(c=>c.classList.remove("on"));
+  el?.classList.add("on");
+  const d = await (await fetch("/api/file?name="+encodeURIComponent(name))).json();
+  cur = {name, title, raw:d.raw||[], stressed:d.stressed||[], dirty:new Set()};
+  $("#title").textContent = title;
+  renderRows();
+  updateStat();
+  $("#rows").scrollIntoView();
+}
+
+function renderRows(){
+  const n = Math.max(cur.raw.length, cur.stressed.length);
+  const rows = $("#rows"); rows.innerHTML="";
+  for(let i=0;i<n;i++){
+    const raw = cur.raw[i]||"", str = cur.stressed[i]||"";
+    const row = document.createElement("div");
+    row.className = "row" + (/^\s*Примечание\./.test(raw)?" note":"");
+    row.dataset.i = i;
+    const ed = `<div class="ed" contenteditable="true" spellcheck="false" data-i="${i}">${render(str)}</div>`;
+    row.innerHTML = `<div class="ix">${i+1}</div><div class="raw">${esc(raw)}</div>${ed}`;
+    rows.appendChild(row);
+  }
+  rows.querySelectorAll(".ed").forEach(ed=>{
+    ed.addEventListener("focus",()=>{ ed.textContent = cur.stressed[+ed.dataset.i]; ed.closest(".row").classList.add("focus"); });
+    ed.addEventListener("blur",()=>{
+      const i=+ed.dataset.i, v=ed.textContent.replace(/\n/g," ").trim();
+      ed.closest(".row").classList.remove("focus");
+      if(v!==cur.stressed[i]){ cur.stressed[i]=v; cur.dirty.add(i); ed.closest(".row").classList.add("changed"); }
+      ed.innerHTML = render(cur.stressed[i]); updateStat();
+    });
+  });
+}
+
+function flaggedRows(){
+  const out=[]; document.querySelectorAll(".row").forEach(r=>{ if(lineHasFlag(cur.stressed[+r.dataset.i])) out.push(r); });
+  return out;
+}
+function jumpFlag(dir){
+  const fr = flaggedRows(); if(!fr.length) return;
+  const y = window.scrollY;
+  let target = dir>0 ? fr.find(r=>r.offsetTop>y+10) : [...fr].reverse().find(r=>r.offsetTop<y-10);
+  target = target || (dir>0?fr[0]:fr[fr.length-1]);
+  target.scrollIntoView({block:"center",behavior:"smooth"});
+  target.querySelector(".ed").focus();
+}
+
+function updateStat(){
+  const flags = cur ? cur.stressed.filter(lineHasFlag).length : 0;
+  const dirty = cur ? cur.dirty.size : 0;
+  $("#stat").textContent = cur ? `${cur.stressed.length} строк · ${flags} ё-флагов` + (dirty?` · ${dirty} правок`:"") : "";
+  $("#save").disabled = !dirty;
+  const chap = document.querySelector(`.chap[data-name="${cur?.name}"]`);
+  if(chap) chap.classList.toggle("dirty", !!dirty);
+}
+
+async function save(){
+  if(!cur || !cur.dirty.size) return;
+  const r = await fetch("/api/save?name="+encodeURIComponent(cur.name),{method:"POST",
+    headers:{"Content-Type":"application/json"}, body:JSON.stringify({stressed:cur.stressed})});
+  if(r.ok){ cur.dirty.clear(); document.querySelectorAll(".row.changed").forEach(x=>x.classList.remove("changed")); updateStat(); }
+  else alert("Ошибка сохранения: "+await r.text());
+}
+
+$("#next").onclick=()=>jumpFlag(1);
+$("#prev").onclick=()=>jumpFlag(-1);
+$("#save").onclick=save;
+document.addEventListener("keydown",e=>{
+  if((e.metaKey||e.ctrlKey) && e.key==="s"){ e.preventDefault(); save(); }
+  else if(e.key==="n" && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName) && !e.target.isContentEditable){ e.preventDefault(); jumpFlag(1); }
+});
+window.addEventListener("beforeunload",e=>{ if(cur&&cur.dirty.size){ e.preventDefault(); e.returnValue=""; }});
+loadList();
+</script>
+</body>
+</html>
