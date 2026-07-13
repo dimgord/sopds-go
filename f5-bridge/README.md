@@ -16,6 +16,10 @@ the cost is speed (F5 is a 336 M diffusion model — see below).
 | `f5_daemon.py` | `f5env` | resident F5 (load once, NDJSON `{text,output}` in → WAV out) |
 | `ruaccent_batch.py` | `ruaccent-env` | batch RUAccent stress (chunks in → stressed out, per-line fallback) |
 | `fb2-to-f5.sh` | — | orchestrator: split by part → chunk → stress → F5 daemons → per-part MP3 |
+| `merge_ellipsis.py` | — | graft `…` back into already-stressed text (RUAccent strips it — never re-stress) |
+
+The **synth half can already run native** (zero Python) — see *Native synth engine* below. The
+**stress half** is still RUAccent Python; porting it is [`FUTURE.md`](FUTURE.md) option B.
 
 **Two venvs on purpose.** RUAccent's ONNX omograph model needs `transformers < 5` (v5 dropped
 `token_type_ids`), but `f5-tts` pulls `transformers 5.x`. They can't share a venv — the classic
@@ -68,6 +72,23 @@ MODE=synth REMOVE_SILENCE=1 NFE=32 WORKERS=3 DEVICE=cuda ./fb2-to-f5.sh book.fb2
 ```
 
 Output: `out/NN_<title>.mp3`, one per top-level `<section>` (the book's own parts).
+
+### Native synth engine (no Python)
+
+`ENGINE=native` runs the SYNTH phase through **`sopds-tts-rs`** (Rust/`ort`) instead of
+`f5_daemon.py` — same NDJSON protocol, no `f5env`. The stress phase is unchanged (still RUAccent).
+
+```bash
+# build once (CUDA on a GPU box; CPU build works but is ~80 s/chunk — synth on a GPU)
+( cd ../sopds-tts-rs && cargo build --release )
+# F5MODEL = a dir with the 3 exported graphs + vocab.txt + ref.wav + ref.txt (see docs/decisions/001)
+MODE=synth ENGINE=native F5MODEL=/path/to/f5model WORKERS=1 ./fb2-to-f5.sh book.fb2 ./out
+```
+
+`native` **ignores** `NFE`/`DEVICE`/`REF*`/`CKPT`/`VOCAB`/`REMOVE_SILENCE` — they're baked into
+`F5MODEL` and the export (NFE is fixed at 32). `F5BIN` overrides the binary path; `THREADS` caps
+ORT intra-op threads when `WORKERS>1`. CUDA vs CPU is a compile-time choice (CUDA on Linux, CPU on
+macOS), so build the binary on the machine you'll synth on.
 
 **Why two-phase.** Russian ё/stress homographs are context-dependent (`берет` noun vs `берёт`
 verb; `десны` gen-sg vs `дёсны` plural). RUAccent's neural model gets most right but errs on

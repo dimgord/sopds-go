@@ -12,8 +12,13 @@
 #
 # env: NFE=16 WORKERS=1 MAXCHARS=250 DEVICE=cpu PARTS="1 2 3 4"(subset)  REMOVE_SILENCE=1
 #      FIX=corrections.json  REF/REF_TEXT/CKPT/VOCAB/F5_HOME
+#      ENGINE=python|native  — synth backend. native = sopds-tts-rs (Rust/ort, no Python):
+#         F5BIN=<repo>/sopds-tts-rs/target/release/sopds-tts-rs  F5MODEL=<dir: 3 onnx+vocab+ref>
+#         native ignores NFE/DEVICE/REF*/CKPT/VOCAB/REMOVE_SILENCE (baked into the model dir; NFE
+#         fixed at 32 by the export). Build CUDA on a GPU box — CPU is ~80s/chunk (use a GPU).
 #
-# BRIDGE ONLY — native Rust (ort) F5 replaces this Python; see docs/decisions/001.
+# The STRESS half is still Python (RUAccent); the SYNTH half goes native with ENGINE=native.
+# See docs/decisions/001; FUTURE.md option B tracks porting RUAccent too.
 set -euo pipefail
 
 FB2=${1:?usage: fb2-to-f5.sh <book.fb2> [out_dir]}
@@ -26,6 +31,10 @@ VOCAB=${VOCAB:-$F5_HOME/ru-model/vocab.txt}
 NFE=${NFE:-16}; WORKERS=${WORKERS:-1}; MAXCHARS=${MAXCHARS:-250}; DEVICE=${DEVICE:-cpu}
 MODE=${MODE:-all}; PARTS=${PARTS:-}; FIX=${FIX:-}
 F5PY="$F5_HOME/f5env/bin/python"; RUPY="$F5_HOME/ruaccent-env/bin/python"
+ENGINE=${ENGINE:-python}   # python (f5_daemon.py) | native (sopds-tts-rs, Rust/ort — no Python)
+REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+F5BIN=${F5BIN:-$REPO/sopds-tts-rs/target/release/sopds-tts-rs}
+F5MODEL=${F5MODEL:-/tmp/f5model}
 REVIEW="$OUT/review"
 mkdir -p "$OUT" "$REVIEW"
 xp() { xmllint --xpath "$1" "$FB2" 2>/dev/null; }
@@ -41,7 +50,7 @@ if [ "$MODE" = stress ] || [ "$MODE" = all ]; then
     safe=$(printf '%s' "${title:-part_$p}" | tr ' /' '__' | tr -cd 'A-Za-z0-9_А-Яа-яЁё.-')
     printf '%02d\t%s\t%s\n' "$p" "$safe" "$title" >> "$REVIEW/_titles.tsv"
     xp "$(sect "$p")//text()" | tr '\n' ' ' | sed -E 's/([.!?]["»)]*) +/\1\n/g' \
-      | gawk -v max="$MAXCHARS" '{gsub(/^ +| +$/,"");if($0=="")next;if(b=="")b=$0;else if(length(b)+1+length($0)<=max)b=b" "$0;else{print b;b=$0}}END{if(b!="")print b}' \
+      | awk -v max="$MAXCHARS" '{gsub(/^ +| +$/,"");if($0=="")next;if(b=="")b=$0;else if(length(b)+1+length($0)<=max)b=b" "$0;else{print b;b=$0}}END{if(b!="")print b}' \
       > "$REVIEW/$(printf '%02d' "$p")_${safe}.raw.txt"
     "$RUPY" "$F5_HOME/ruaccent_batch.py" ${FIX:+--fix "$FIX"} \
       < "$REVIEW/$(printf '%02d' "$p")_${safe}.raw.txt" \
@@ -84,19 +93,32 @@ while IFS=$'\t' read -r pp safe title; do
     [ -n "$line" ] || continue
     gidx=$((gidx+1))
     out=$(printf '%s/p%s_c%05d.wav' "$WORK" "$pp" "$gidx")
-    "$F5PY" -c 'import json,sys;print(json.dumps({"text":sys.argv[1],"output":sys.argv[2]},ensure_ascii=False))' "$line" "$out"
+    python3 -c 'import json,sys;print(json.dumps({"text":sys.argv[1],"output":sys.argv[2]},ensure_ascii=False))' "$line" "$out"
   done < "$f"
 done < "$REVIEW/_titles.tsv" > "$WORK/reqs.ndjson"
 N=$(wc -l < "$WORK/reqs.ndjson" | tr -d ' ')
 [ "$N" -gt 0 ] || { echo "no stressed text — run MODE=stress first"; exit 1; }
-echo "→ synthesizing $N chunks on $WORKERS daemon(s) (nfe=$NFE $DEVICE)"
+if [ "$ENGINE" = native ]; then
+  [ -x "$F5BIN" ] || { echo "native engine: F5BIN not built ($F5BIN) — cargo build --release in sopds-tts-rs"; exit 1; }
+  [ -f "$F5MODEL/F5_Transformer.onnx" ] || { echo "native engine: F5MODEL not a model dir ($F5MODEL)"; exit 1; }
+  echo "→ synthesizing $N chunks on $WORKERS native daemon(s) — $F5MODEL (nfe=32 baked)"
+else
+  echo "→ synthesizing $N chunks on $WORKERS python daemon(s) (nfe=$NFE $DEVICE)"
+fi
 
 SECONDS=0; pids=()
 for ((i=0;i<WORKERS;i++)); do
-  gawk -v W="$WORKERS" -v id="$i" 'NR%W==id' "$WORK/reqs.ndjson" > "$WORK/shard_$i"
-  "$F5PY" "$F5_HOME/f5_daemon.py" --ckpt "$CKPT" --vocab "$VOCAB" --ref "$REF" \
-     --ref-text "$REF_TEXT" --nfe "$NFE" --device "$DEVICE" ${REMOVE_SILENCE:+--remove-silence} \
-     < "$WORK/shard_$i" > "$WORK/resp_$i" 2>"$WORK/dlog_$i" &
+  awk -v W="$WORKERS" -v id="$i" 'NR%W==id' "$WORK/reqs.ndjson" > "$WORK/shard_$i"
+  if [ "$ENGINE" = native ]; then
+    # Rust/ort daemon: same NDJSON {text,output}. Cap ORT intra-op threads so WORKERS>1 don't
+    # oversubscribe; 0/unset = all cores (fine for WORKERS=1). ref/vocab/graphs live in F5MODEL.
+    SOPDS_TTS_THREADS="${THREADS:-0}" "$F5BIN" "$F5MODEL" \
+       < "$WORK/shard_$i" > "$WORK/resp_$i" 2>"$WORK/dlog_$i" &
+  else
+    "$F5PY" "$F5_HOME/f5_daemon.py" --ckpt "$CKPT" --vocab "$VOCAB" --ref "$REF" \
+       --ref-text "$REF_TEXT" --nfe "$NFE" --device "$DEVICE" ${REMOVE_SILENCE:+--remove-silence} \
+       < "$WORK/shard_$i" > "$WORK/resp_$i" 2>"$WORK/dlog_$i" &
+  fi
   pids+=($!)
 done
 while :; do
