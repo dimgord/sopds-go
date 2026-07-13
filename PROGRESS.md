@@ -1,7 +1,52 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.3.3
+## Current Version: 1.4.0
+
+---
+
+### Revision 87 - 2026-07-13
+**F5-TTS audiobook pipeline (`f5-bridge/`) + native Rust F5 engine + stress reviewer.**
+
+A whole audiobook-narration track built alongside the Piper TTS: narrate an FB2 in a **cloned voice**
+with correct Russian **stress**, one MP3 per chapter. F5-TTS quality is well above Piper; the design
+keeps two phases decoupled — cheap, proofreadable **stress** (RUAccent, CPU, once) vs expensive
+**synthesis** (F5). All in `f5-bridge/` (a temporary Python bridge) + a native Rust F5 engine in
+`sopds-tts-rs`. See `f5-bridge/README.md`, `f5-bridge/FUTURE.md`, `docs/decisions/001`.
+
+- **Native Rust F5 (`sopds-tts-rs`)**: the 336M flow-matching F5 model exported to 3 ONNX graphs
+  (DakeQQ), run via `ort` — zero Python at synth time. Folded into the resident daemon (`Engine`
+  enum dispatches Piper vs F5, same NDJSON protocol). `ENGINE=native` in `fb2-to-f5.sh` uses it
+  instead of the Python daemon. Gotcha fixed: `vocab.txt` is CRLF → `read_to_string` keeps `\r`,
+  so use `.lines()` not `split('\n')` (empty map → "from a barrel" garble otherwise).
+- **Extraction (`fb2_extract.py`)** replaces the old xmllint/awk: splits at the **second level**
+  (`<section>/<section>` = chapters) → one MP3 per chapter; a part with no chapters stays one MP3.
+  Each chapter opens with a **spoken heading** — the first chapter of a part carries the part title
+  ("Книга первая… Глава первая"), rest just "Глава вторая" (numeric titles → feminine ordinals, since
+  F5 reads a bare digit as a cardinal). Chapters numbered continuously (stable under `PARTS=`).
+- **Footnotes read INLINE** at the end of the referencing sentence (not dumped at the book's end where
+  no listener can match note 46) as "Примечание. <text>" — the note's own leading number dropped.
+- **Ellipsis**: RUAccent silently strips `…` (keeps `...`); the book had ~560, so every dramatic pause
+  was being lost before F5's tokenizer (which *does* know `…`). Fix: swap `…`↔`...` around RUAccent.
+  `merge_ellipsis.py` grafts `…` back into already-stressed text via difflib (never re-stress —
+  RUAccent is non-deterministic and would clobber hand edits).
+- **Stress reviewer (`f5-bridge/reviewer/`, Go + embedded HTML)**: two-pane line-aligned proofreader —
+  raw reference left, editable stressed right, `+` shown as real acute accents. Flags driven by
+  RUAccent's **own dictionaries** (`dict_flags.py` over `accents.json` 3.2M forms + `omographs.json`):
+  🔴 rare ё-homographs · 🟠 genuine unstressed skips (a polysyllable absent from `accents.json` — a
+  name/rare word F5 will botch — or an unresolved stress-homograph) · subtle glance for RUAccent's
+  chosen stress-homographs. это/перед/его (in dict, deliberately unstressed) are NOT flagged — no hand
+  stoplist. On the test book that's 74 + 88 actionable flags vs a 1440-noise heuristic. "Lazy stress"
+  edit: typing a new `+` drops the word's old one (hyphen-aware, one stress per part). Saves back to
+  the `.txt` (`.orig` backup) → feeds `MODE=synth`.
+- **Corrections** (`corrections.json`, applied by `ruaccent_batch.py`) made **whole-word** (regex
+  boundaries) so a short key like `обн+ял` can't corrupt `обн+яла`/`обн+ялся`. Recorded fixes for the
+  mobile-stress reflexive paradigm RUAccent/dict get wrong: принялся́/приняла́сь/приняло́сь, занялся́,
+  о́бнял (masc first-syllable).
+
+Files: `f5-bridge/` (`fb2-to-f5.sh`, `fb2_extract.py`, `ruaccent_batch.py`, `dict_flags.py`,
+`merge_ellipsis.py`, `f5_daemon.py`, `corrections.json`, `reviewer/`, `README.md`, `FUTURE.md`),
+`sopds-tts-rs/src/{main.rs,f5.rs,bin/f5.rs}`, `docs/decisions/001-f5-tts-onnx-integration.md`.
 
 ---
 
