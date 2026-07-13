@@ -44,7 +44,10 @@ def main():
             sys.stdout.write(t + "\n")
             continue
         try:
-            s = acc.process_all(t)
+            # RUAccent drops the ellipsis char '…' but keeps '...'; swap so it survives, then
+            # restore '…' (F5's trained token, id 1844) — preserves the book's ~560 pauses.
+            s = acc.process_all(t.replace("…", "..."))
+            s = s.replace("...", "…")
             for a, b in replace.items():
                 s = s.replace(a, b)
             sys.stdout.write(s + "\n")
