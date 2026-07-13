@@ -1,95 +1,88 @@
 # 001 — F5-TTS (Russian) ONNX backend for sopds-tts-rs
 
-**Status:** exploratory (branch `tts-quality`) · **Date:** 2026-07-12 · **Scope:** `sopds-tts-rs`
+**Status:** spec verified, ready to implement (branch `tts-quality`) · **Updated:** 2026-07-12 · **Scope:** `sopds-tts-rs`
 
 ## Problem
 
-Piper caps at **medium** quality for Russian/Ukrainian (no `-high` voices exist). We want a
-genuinely higher-quality Russian voice for audiobooks while keeping the ONNX-Runtime-only Rust
-runner (no PyTorch/libtorch, no Python at synth time).
+Piper caps at **medium** quality for Russian/Ukrainian. F5-TTS is the only higher-tier model
+that is Russian-capable **and** fully ONNX-runnable, so it can live in the same Rust `ort` runner
+with **no Python at synth time** (the whole point). The Python bridge in `../../f5-bridge/` proves
+the quality/pipeline today; this doc is the native replacement.
 
-From the survey ([research report](../tts-quality-research.md) / PROGRESS Rev 82 context),
-**F5-TTS** is the *only* higher-tier model that is both Russian-capable **and** has a real,
-full-ONNX inference pipeline. Kokoro (nicer than Piper) has **no ru/uk** at all; Silero (best free
-Russian) ships **PyTorch only**; XTTS is PyTorch + a dead licensor.
+## What changed: the spike de-risked it
 
-## What F5-TTS is
+Exporting `Misha24-10/F5-TTS_RUSSIAN` (v2) to ONNX with `DakeQQ/F5-TTS-ONNX` **works** — three
+graphs, and their built-in test synthesizes audio end-to-end via onnxruntime in ~20 s (CPU). Two
+findings make the Rust port **much smaller than originally feared**:
 
-A 336M-parameter **flow-matching DiT** text-to-speech model. Unlike Piper's single VITS graph, an
-F5 inference is a **3-stage pipeline** + an iterative sampler:
+1. **The flow-matching ODE sampler is *inside* the transformer graph.** Rust does not implement any
+   diffusion math — it just runs graph B in a loop, threading two tensors. No Euler solver, no
+   schedule.
+2. **For Russian the tokenizer is a plain char-split.** `convert_char_to_pinyin` (jieba + pinyin) is
+   Chinese-only; on Cyrillic its output is byte-for-byte `list(text)`. So the Rust front-end is
+   punctuation-normalize → chars → vocab-index. **No jieba, no pinyin.**
 
-1. **Preprocess** — tokenize target text (+ a *reference* audio clip and its transcript; F5 is a
-   zero-shot voice-cloning model, so it always conditions on a reference).
-2. **Transformer (DiT)** — run the flow-matching ODE for **N function evaluations** (NFE, e.g. 16–32
-   steps), producing a mel spectrogram. This is the expensive part.
-3. **Vocoder** — mel → 24 kHz waveform (Vocos).
+So the "large ODE + tokenizer" risk is gone. What remains is plumbing three `ort` sessions.
 
-- **Russian weights:** `Misha24-10/F5-TTS_RUSSIAN` (a ~5000 h finetune, uses **RUAccent** for stress).
-- **ONNX export:** `DakeQQ/F5-TTS-ONNX` exports the pipeline to ONNX-Runtime with pre-built CPU/GPU
-  variants; an Apple-Silicon MLX port also exists.
-- **License:** weights **CC-BY-NC** (fine for Dmitry's personal, non-distributed use; blocks
-  redistribution). Code MIT.
-- **Speed:** slower-than-realtime on CPU (batch/overnight); GPU RTFs are published but not for a
-  GTX 1070 — must measure.
+## Verified spec (build to this)
 
-## Why it does NOT drop into the current runner
+**Constants:** sample_rate 24000 · hop 256 · nfe_step 32 · speed 1.0.
 
-`sopds-tts-rs` today assumes the Piper contract: `espeak-ng → phoneme IDs → [input, input_lengths,
-scales] → 22.05 kHz PCM`. F5 breaks every part of that:
+**Vocab:** `vocab.txt`, line *i* → `{line_text_without_newline: i}`; OOV → 0.
 
-| Aspect | Piper (today) | F5-TTS |
+**Tokenizer (Russian):** `text = ref_text + gen_text`; translate `;→,`, curly quotes→straight;
+split into Unicode chars; map each char → vocab index (i32). (Equals the Python path for Cyrillic —
+verified.)
+
+**max_duration** (i64): `ref_audio_len + int(ref_audio_len / ref_text_len * gen_text_len / speed)`
+where `ref_audio_len = audio_samples // 256 + 1`, and `*_text_len = utf8_byte_len(text)` (the
+`+3·chinese_pause_punc` term is 0 for Russian).
+
+**Three ONNX graphs** (names/dtypes/shapes as exported):
+
+| graph | inputs | outputs |
 |---|---|---|
-| Front-end | espeak-ng IPA → `phoneme_id_map` | RUAccent stress + F5 tokenizer/vocab |
-| Graphs | 1 ONNX session | 3 ONNX sessions (preprocess / DiT / vocoder) |
-| Conditioning | none | **reference audio + its transcript** (voice cloning) |
-| Inference | single forward pass | **NFE-step ODE loop** in the DiT |
-| Sample rate | 22050 | 24000 |
-| Extra deps | — | RUAccent (Python? — availability in Rust is an open question) |
+| **A `F5_Preprocess`** (68 MB) | `audio` i16 `[1,1,L]`, `text_ids` i32 `[1,T]`, `max_duration` i64 `[1]` | `noise` f32, `rope_cos_q/sin_q` `[2,16,D,64]`, `rope_cos_k/sin_k` `[2,16,64,D]`, `cat_mel_text` f32 `[1,D,612]`, `cat_mel_text_drop` f32, `ref_signal_len` i64 |
+| **B `F5_Transformer`** (1.32 GB f32) | `noise` f32 `[1,D,100]`, the four ropes, `cat_mel_text`, `cat_mel_text_drop`, `time_step` i32 `[1]` | `denoised` f32 `[1,D,100]`, `time_step` i32 `[1]` |
+| **C `F5_Decode`** (63 MB, vocos) | `denoised` f32 `[1,D,100]`, `ref_signal_len` i64 | `output_audio` **i16** `[1,1,gen_len]` ← WAV-ready |
 
-## Proposed approach
+**Algorithm:**
+1. read ref audio → i16 mono @24k; build `text_ids`, `max_duration`.
+2. run **A** → noise, 4 ropes, cat_mel_text, cat_mel_text_drop, ref_signal_len.
+3. `time_step=[0]`; **loop nfe_step times:** run **B**(noise, ropes, cat_mel×2, time_step); feed
+   `denoised→noise`, `time_step→time_step`. Ropes/cat_mel stay constant across the loop.
+4. run **C**(final denoised, ref_signal_len) → i16 PCM → WAV. (An fp16 transformer export halves B.)
 
-**Do not touch the Piper path.** Add F5 as a *separate model type*, ideally behind the same CLI so
-sopds-go can pick it via `models_dir`/voice config.
+## Regenerating the ONNX (one-time, Python — build artifact only)
 
-1. **Prototype outside the main binary first.** Stand up `DakeQQ/F5-TTS-ONNX` (its Python runner) to
-   pin the exact ONNX I/O — tensor names, shapes, dtypes for all 3 graphs — and to hear the Russian
-   finetune quality on our hardware before committing Rust code. Deliverable: a notes file with the
-   verified tensor signatures + a sample WAV.
-2. **Reference audio + transcript.** Pick one fixed narrator clip (a few seconds) + its exact
-   transcript, ship it alongside the model. All chunks clone that voice → consistent narration.
-3. **Rust integration (a new `src/f5.rs`), gated by model-type detection:**
-   - Detect F5 vs Piper by a marker in the model dir (e.g. a `f5.json` / directory layout) rather
-     than overloading the Piper `.onnx.json`.
-   - Load the 3 ORT sessions.
-   - Front-end: RUAccent stress. **Open question** — is there a Rust RUAccent, or do we call it as a
-     subprocess (like espeak), or port the rules? This is the biggest unknown.
-   - Implement the NFE sampler loop (flow-matching Euler steps) in Rust around the DiT session.
-   - Vocoder session → 24 kHz PCM → resample to 22050 if we want a uniform pipeline (or keep 24 k).
-4. **Keep the daemon protocol identical** (NDJSON in, WAV out) so sopds-go and `fb2-to-wav.sh` work
-   unchanged; only per-chunk latency differs.
+The graphs are ~1.4 GB (don't commit). Export venv = `f5-tts==1.1.7` + jieba/pypinyin/pydub/
+omegaconf/onnx/soundfile; `DakeQQ/F5-TTS-ONNX/…/Export_F5.py --vocab_path … --f5safetensor_path
+model_v2.safetensors --{preprocess,transformer,decoder}model_path … --vocosmodel_dir vocos-mel-24khz
+--nfe_step 32`. It patches `f5_tts/…/dit.py` + `vocos/*` in that venv (hence a throwaway venv). Ship
+the 3 `.onnx` next to the binary (or fetch at deploy).
 
-## Effort & risks
+## Rust plan (sopds-tts-rs)
 
-- **Effort: LARGE.** Multi-graph orchestration + an ODE sampler loop + a new stress front-end + a
-  reference-audio path. Much more than a "swap the .onnx" change.
-- **CPU speed risk:** slower than realtime on the M5; a 50 h book could take many hours. Mostly an
-  overnight-batch concern (acceptable for audiobooks, painful for the interactive web button).
-- **RUAccent-in-Rust risk:** if there's no clean Rust/subprocess path, stress handling becomes its
-  own project (bad Russian stress = the classic tell of low-quality Russian TTS).
-- **License:** CC-BY-NC — OK for personal listening, **must not** ship generated audio publicly.
+- New `src/f5.rs`: `F5 { pre, transformer, decode: Session, vocab: HashMap<char,i64> }`.
+- Detect model type by a marker (an `f5/` dir with the 3 graphs + `vocab.txt`) vs Piper's `.onnx.json`.
+- Tokenizer + `max_duration` (trivial). Reference audio + its transcript ship alongside (voice clone).
+- Run A → loop B (nfe) → C. Keep the **daemon NDJSON protocol** unchanged so `fb2-to-f5.sh`/sopds-go
+  don't care. RUAccent stress still happens upstream (see below).
+- CUDA on Linux / CPU on macOS via the same EP block as Piper.
 
-## Recommendation
+## Effort & risks (revised)
 
-Worth a **prototype spike** (step 1) before any Rust: verify the ONNX I/O and, more importantly,
-listen to whether the Russian finetune is clearly better than `ru_RU-irina-medium` *on our
-hardware/speed budget*. If the quality jump justifies the large integration + slow synth, proceed;
-otherwise prefer [002 — train a Piper-high ru voice](002-piper-high-ru-uk-training.md), which is
-zero-integration.
+- **Effort: MEDIUM** (was "large"): three sessions + a loop + a char tokenizer. The hard parts are
+  in the graphs; the work is tensor plumbing + reference-audio handling.
+- **RUAccent** (Russian stress) is still Python in the bridge. Native options: it's ONNX models +
+  dicts — port the lookup + run its ONNX from Rust, or keep a tiny stress sidecar. Separate task;
+  F5 audio works without it (just poorer stress).
+- **Speed:** F5 is heavy regardless of language; GPU strongly preferred (RTF ~5–7 CPU on M5 Pro,
+  ~1.2× on GTX 1070; a modern GPU is the real target). Batch, not interactive.
+- **License:** F5-Russian weights CC-BY-NC — personal use only, don't redistribute model or audio.
 
-## Open questions
+## Open questions (small)
 
-- Exact ONNX tensor signatures of the current `DakeQQ/F5-TTS-ONNX` export (verify per-file; the
-  `speed` input dtype is reportedly inconsistent across exports).
-- RUAccent availability off-PyTorch (Rust crate? CLI? rules port?).
-- NFE step count vs quality vs speed on CPU.
-- Real RTF on M5 Pro (CPU) and GTX 1070.
+- fp16 vs fp32 transformer graph — quality vs size/speed on the target GPU.
+- Read `nfe_step`/`hop` from ONNX metadata (written with `--onnx_add_metadata`) vs hardcode.
+- Bundle the 3 graphs (1.4 GB) with the binary or fetch on first use.
