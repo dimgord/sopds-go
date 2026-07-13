@@ -84,10 +84,14 @@ def inline_notes(text, notes):
         note = notes.get(m.group(1), "")
         ins = f" Примечание. {note} " if note else " "
         before, after = text[: m.start()], text[m.end():]
-        if re.search(r"[.!?…][\"»)\]]*\s*$", before):  # marker sat right after a sentence end
+        # closing punctuation that may sit between a sentence terminator and the ref: straight AND
+        # typographic quotes/brackets (»”“„’‘› …). Without the typographic ones a ref after e.g.
+        # `Здрайцы!“` isn't seen as a sentence end, so the note wrongly slides into the next sentence.
+        cq = "[\"'»«”“„’‘›)\\]]*"
+        if re.search(r"[.!?…]" + cq + r"\s*$", before):  # marker sat right after a sentence end
             text = before + ins + after
         else:
-            se = re.search(r"[.!?…][\"»)\]]*", after)  # else attach after the next sentence end
+            se = re.search(r"[.!?…]" + cq, after)  # else attach after the next sentence end
             cut = se.end() if se else len(after)
             text = before + after[:cut] + ins + after[cut:]
     return text
