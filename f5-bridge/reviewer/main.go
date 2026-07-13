@@ -82,11 +82,17 @@ func main() {
 		w.Write(indexHTML)
 	})
 
-	// list of chapters + the ambiguous-homograph vocabulary (client computes per-word flags).
+	// chapters + the flag vocabularies (client computes per-word flags): _homographs.txt = RUAccent's
+	// ё/stress homograph set (ё flags); _omographs.txt / _unknown.txt = dict_flags.py sidecars
+	// (stress-homograph glance + genuine unstressed skips).
 	http.HandleFunc("/api/list", func(w http.ResponseWriter, r *http.Request) {
 		files, _ := titles()
-		homs := lines(filepath.Join(reviewDir, "_homographs.txt"))
-		writeJSON(w, map[string]any{"files": files, "homographs": homs})
+		writeJSON(w, map[string]any{
+			"files":      files,
+			"homographs": lines(filepath.Join(reviewDir, "_homographs.txt")),
+			"omographs":  lines(filepath.Join(reviewDir, "_omographs.txt")),
+			"unknown":    lines(filepath.Join(reviewDir, "_unknown.txt")),
+		})
 	})
 
 	// one chapter's aligned raw + stressed lines.

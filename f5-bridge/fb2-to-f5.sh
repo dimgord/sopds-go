@@ -55,6 +55,11 @@ if [ "$MODE" = stress ] || [ "$MODE" = all ]; then
   # Ambiguous-homograph report: only flag ё-restorations on genuine homographs (берет, десны, …),
   # not the always-ё words (ещё, всё, её). These are the ones worth eyeballing in the review text.
   "$RUPY" "$F5_HOME/ruaccent_batch.py" --dump-homographs "$REVIEW/_homographs.txt" </dev/null 2>/dev/null || true
+  # Dict-based reviewer flags from RUAccent's own accents.json/omographs.json: genuine unstressed
+  # skips (names/rare words) + stress-homographs. Skipped if the dicts aren't present.
+  DICT=${DICT:-$F5_HOME/ru-dict}
+  [ -f "$DICT/accents.json" ] && python3 "$F5_HOME/dict_flags.py" \
+    "$DICT/accents.json" "$DICT/omographs.json" "$REVIEW" || true
   "$F5PY" - "$REVIEW" "$REVIEW/_homographs.txt" > "$REVIEW/_check-yo.tsv" <<'PY'
 import glob, os, sys
 rev, homf = sys.argv[1], sys.argv[2]

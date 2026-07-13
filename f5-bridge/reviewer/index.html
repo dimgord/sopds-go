@@ -55,6 +55,8 @@
   .row.note .raw::before{content:"✎ ";color:var(--accent-soft)}
   mark.hom{background:var(--flag-bg);color:var(--flag);border-radius:3px;padding:0 2px;
     box-shadow:inset 0 -2px 0 var(--flag)}
+  mark.nostress{background:#f4e6c4;color:#7a5a12;border-radius:3px;padding:0 2px;  /* RUAccent skipped it */
+    box-shadow:inset 0 -2px 0 #c98a1a}
   .soft{box-shadow:inset 0 -1px 0 var(--rule)}  /* frequent near-always-ё (всё, чём…): shown, not counted */
   .empty{color:var(--muted);padding:60px 26px;font-style:italic}
 </style>
@@ -89,12 +91,14 @@ function setCaret(el,off){
   r.collapse(true);
   const s=window.getSelection(); s.removeAllRanges(); s.addRange(r);
 }
-// lazy stress: one '+' per word — when a new '+' is typed, drop the word's previous '+'
+// lazy stress: one '+' per stress-unit — when a new '+' is typed, drop that unit's previous '+'.
+// Unit boundary is whitespace OR '-', so a hyphen compound keeps a stress per part
+// (когд+а-ниб+удь, бл+едно-зелёный) instead of one part clobbering the other.
 function dedupePlus(el){
   const text=el.textContent, caret=caretOffset(el);
   if(caret==null || caret<1 || text[caret-1]!=="+") return;
-  let a=caret-1; while(a>0 && !/\s/.test(text[a-1])) a--;      // word start
-  let b=caret;   while(b<text.length && !/\s/.test(text[b])) b++; // word end
+  let a=caret-1; while(a>0 && !/[\s-]/.test(text[a-1])) a--;      // unit start
+  let b=caret;   while(b<text.length && !/[\s-]/.test(text[b])) b++; // unit end
   const word=text.slice(a,b);
   if((word.match(/\+/g)||[]).length<2) return;                 // only one '+' → nothing to do
   const keep=(caret-1)-a;                                       // keep the just-typed '+'
@@ -106,8 +110,11 @@ function dedupePlus(el){
   el.textContent=text.slice(0,a)+nw+text.slice(b);
   setCaret(el, caret-removedBefore);
 }
-let HOM = new Set();          // ё-folded lemmas of ambiguous homographs
+let HOM = new Set();          // ё-folded lemmas of ambiguous ё/stress homographs (for ё flags)
+let OMO = new Set();          // stress-homograph words present in the book (после/один/руки…)
+let UNK = new Set();          // polysyllables absent from accents.json, left unstressed (names/rare)
 let cur = null;               // {name, title, raw:[], stressed:[], dirty:Set}
+let navLine = -1;             // line index the flag-navigation cursor is parked on
 const dirtyFiles = new Set();
 
 const VOW = "аеёиоуыэюяАЕЁИОУЫЭЮЯ";
@@ -117,29 +124,51 @@ const trimPunct = s => s.replace(/^[«»"'([{.,!?;:—\-–…]+|[«»"')\]}.,!?
 // so the 'hard' flags are the rarer genuinely-ambiguous homographs (нёбо, колёса, самоё, берёте…).
 const COMMON = new Set(["все","всем","чем","нем","ее","еще","мое","твое","свое","чье","нее","чьем"]);
 
-// tier of a stressed token: "hard" (rare homograph, count it), "soft" (frequent ё), or null
-function flagTier(tok){
-  const base = trimPunct(tok.replace(/\+/g,"").toLowerCase());
-  if(!base.includes("ё")) return null;
-  const lemma = base.replace(/ё/g,"е");
-  if(!HOM.has(lemma)) return null;
-  return COMMON.has(lemma) ? "soft" : "hard";
+// classify a token via RUAccent's own dicts (sets from the sidecars) → per hyphen-segment so
+// compounds keep a stress each (когд+а-ниб+удь). Priority hom > nostress > soft.
+//   "hom"      rare ambiguous ё-homograph (red, counted)
+//   "nostress" a part left unstressed that's an omograph miss OR absent from accents.json — a genuine
+//              skip F5 will botch (amber, counted)
+//   "soft"     frequent ё (всё/чём) or a stress-homograph RUAccent already chose (после/один) — a
+//              subtle glance mark, not counted
+function classify(tok){
+  let worst = null;
+  for(const seg of tok.split("-")){
+    const hasPlus = seg.includes("+");
+    const base = trimPunct(seg.replace(/\+/g,"").toLowerCase());
+    if(!base) continue;
+    let c = null;
+    if(base.includes("ё")){                                   // ё carries the stress
+      const lemma = base.replace(/ё/g,"е");
+      c = HOM.has(lemma) ? (COMMON.has(lemma) ? "soft" : "hom") : null;
+    } else if(hasPlus){
+      c = OMO.has(base) ? "soft" : null;                      // RUAccent chose a homograph stress → glance
+    } else if(OMO.has(base) || UNK.has(base)){
+      c = "nostress";                                         // unstressed omograph miss or unknown word
+    }
+    if(c==="hom") return "hom";
+    if(c==="nostress") worst = "nostress";
+    else if(c==="soft" && worst!=="nostress") worst = "soft";
+  }
+  return worst;
 }
-// display: '+' before a vowel → real acute accent; mark ё-homographs by tier
+// display: '+' before a vowel → real acute accent; mark flagged tokens by class
 function render(line){
   return line.split(/(\s+)/).map(t=>{
     if(/^\s+$/.test(t) || t==="") return esc(t);
     const disp = esc(t).replace(new RegExp("\\+(["+VOW+"])","g"),"$1́");
-    const tier = flagTier(t);
-    return tier==="hard" ? `<mark class="hom">${disp}</mark>`
-         : tier==="soft" ? `<span class="soft">${disp}</span>` : disp;
+    const c = classify(t);
+    return c==="hom" ? `<mark class="hom">${disp}</mark>`
+         : c==="nostress" ? `<mark class="nostress">${disp}</mark>`
+         : c==="soft" ? `<span class="soft">${disp}</span>` : disp;
   }).join("");
 }
-function lineHasFlag(line){ return line.split(/\s+/).some(t=>flagTier(t)==="hard"); }
+function lineHasFlag(line){ return line.split(/\s+/).some(t=>{const c=classify(t);return c==="hom"||c==="nostress";}); }
 
 async function loadList(){
   const d = await (await fetch("/api/list")).json();
-  HOM = new Set(d.homographs.map(w=>w.trim().toLowerCase()).filter(Boolean));
+  const S = a => new Set((a||[]).map(w=>w.trim().toLowerCase()).filter(Boolean));
+  HOM = S(d.homographs); OMO = S(d.omographs); UNK = S(d.unknown);
   const box = $("#chaps"); box.innerHTML="";
   d.files.forEach(f=>{
     const el = document.createElement("div");
@@ -156,6 +185,7 @@ async function openFile(name, title, el){
   el?.classList.add("on");
   const d = await (await fetch("/api/file?name="+encodeURIComponent(name))).json();
   cur = {name, title, raw:d.raw||[], stressed:d.stressed||[], dirty:new Set()};
+  navLine = -1;
   $("#title").textContent = title;
   renderRows();
   updateStat();
@@ -175,12 +205,20 @@ function renderRows(){
     rows.appendChild(row);
   }
   rows.querySelectorAll(".ed").forEach(ed=>{
-    ed.addEventListener("focus",()=>{ ed.textContent = cur.stressed[+ed.dataset.i]; ed.closest(".row").classList.add("focus"); });
-    ed.addEventListener("input",()=>dedupePlus(ed));
+    ed.addEventListener("focus",()=>{
+      ed.dataset.touched="";                                 // fresh focus — no edit yet
+      ed.textContent = cur.stressed[+ed.dataset.i];
+      ed.closest(".row").classList.add("focus");
+      if(lineHasFlag(cur.stressed[+ed.dataset.i])) navLine=+ed.dataset.i;  // clicking a flag re-anchors nav
+    });
+    ed.addEventListener("input",()=>{ ed.dataset.touched="1"; dedupePlus(ed); });
     ed.addEventListener("blur",()=>{
-      const i=+ed.dataset.i, v=ed.textContent.replace(/\n/g," ").trim();
+      const i=+ed.dataset.i;
       ed.closest(".row").classList.remove("focus");
-      if(v!==cur.stressed[i]){ cur.stressed[i]=v; cur.dirty.add(i); ed.closest(".row").classList.add("changed"); }
+      if(ed.dataset.touched){                                // only a real edit dirties — nav/focus never does
+        const v=ed.textContent.replace(/ /g," ").replace(/[ \t\n]+/g," ").trim();
+        if(v!==cur.stressed[i]){ cur.stressed[i]=v; cur.dirty.add(i); ed.closest(".row").classList.add("changed"); }
+      }
       ed.innerHTML = render(cur.stressed[i]); updateStat();
     });
   });
@@ -192,17 +230,26 @@ function flaggedRows(){
 }
 function jumpFlag(dir){
   const fr = flaggedRows(); if(!fr.length) return;
-  const y = window.scrollY;
-  let target = dir>0 ? fr.find(r=>r.offsetTop>y+10) : [...fr].reverse().find(r=>r.offsetTop<y-10);
-  target = target || (dir>0?fr[0]:fr[fr.length-1]);
-  target.scrollIntoView({block:"center",behavior:"smooth"});
-  target.querySelector(".ed").focus();
+  let idx = fr.findIndex(r=>+r.dataset.i===navLine);   // where the cursor is parked
+  if(idx<0){                                            // first jump / parked off a flag: pick by viewport
+    const y = window.scrollY + innerHeight/2;
+    if(dir>0){ idx = fr.findIndex(r=>r.offsetTop>y); if(idx<0) idx = fr.length-1; }
+    else { idx = 0; for(let j=0;j<fr.length;j++) if(fr[j].offsetTop < y) idx = j; }
+  } else {
+    idx = Math.max(0, Math.min(fr.length-1, idx+dir));  // step exactly one flag, clamp at ends
+  }
+  const t = fr[idx]; navLine = +t.dataset.i;
+  t.scrollIntoView({block:"center",behavior:"smooth"});
+  t.querySelector(".ed").focus();
 }
 
 function updateStat(){
-  const flags = cur ? cur.stressed.filter(lineHasFlag).length : 0;
+  let hom=0, nos=0;
+  if(cur) for(const ln of cur.stressed) for(const t of ln.split(/\s+/)){
+    const c=classify(t); if(c==="hom") hom++; else if(c==="nostress") nos++;
+  }
   const dirty = cur ? cur.dirty.size : 0;
-  $("#stat").textContent = cur ? `${cur.stressed.length} строк · ${flags} ё-флагов` + (dirty?` · ${dirty} правок`:"") : "";
+  $("#stat").textContent = cur ? `${cur.stressed.length} строк · ${hom} ё-омогр. · ${nos} без удар.` + (dirty?` · ${dirty} правок`:"") : "";
   $("#save").disabled = !dirty;
   const chap = document.querySelector(`.chap[data-name="${cur?.name}"]`);
   if(chap) chap.classList.toggle("dirty", !!dirty);
