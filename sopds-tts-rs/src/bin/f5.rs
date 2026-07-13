@@ -6,7 +6,7 @@
 //!
 //!   f5 <onnx_dir> <vocab.txt> <ref.wav> <ref_text> <gen_text> <out.wav>
 //!
-//! Standalone for now (validate against the DakeQQ Python ONNX output); folds into the daemon later.
+//! Standalone for now (validated against the DakeQQ Python ONNX output); folds into the daemon later.
 use std::collections::HashMap;
 
 use hound::{SampleFormat, WavSpec, WavWriter};
@@ -42,9 +42,11 @@ fn load_session(path: &str) -> Result<Session, String> {
 impl F5 {
     fn load(onnx_dir: &str, vocab_path: &str) -> Result<Self, String> {
         let vocab_txt = std::fs::read_to_string(vocab_path).map_err(|e| format!("vocab: {e}"))?;
-        // vocab.txt: line i -> {line_text (sans newline): i}
+        // vocab.txt: single-char line i -> {char: i}. Use .lines() (strips \n AND a trailing \r) —
+        // the file is CRLF, which Python's text-mode open() normalizes but read_to_string does not,
+        // so split('\n') would leave '\r' and match no single char -> empty map -> all ids 0.
         let mut vocab = HashMap::new();
-        for (i, line) in vocab_txt.split('\n').enumerate() {
+        for (i, line) in vocab_txt.lines().enumerate() {
             let mut chars = line.chars();
             if let Some(c) = chars.next() {
                 if chars.next().is_none() {
@@ -95,25 +97,27 @@ impl F5 {
             .run(ort::inputs!["audio" => audio_t, "text_ids" => ids_t, "max_duration" => md_t])
             .map_err(|e| format!("preprocess: {e}"))?;
 
-        // pull constants (owned) that stay fixed across the B loop
+        // pull the constants (owned) that stay fixed across the B loop
         let owned = |name: &str| -> Result<(Vec<i64>, Vec<f32>), String> {
             let (shape, data) = a[name]
                 .try_extract_tensor::<f32>()
                 .map_err(|e| format!("extract {name}: {e}"))?;
             Ok((shape.to_vec(), data.to_vec()))
         };
-        let (noise_shape0, mut noise) = owned("noise")?;
-        let mut noise_shape = noise_shape0;
+        let (mut noise_shape, mut noise) = {
+            let n = owned("noise")?;
+            (n.0, n.1)
+        };
         let rope_cos_q = owned("rope_cos_q")?;
         let rope_sin_q = owned("rope_sin_q")?;
         let rope_cos_k = owned("rope_cos_k")?;
         let rope_sin_k = owned("rope_sin_k")?;
         let cat_mel_text = owned("cat_mel_text")?;
         let cat_mel_text_drop = owned("cat_mel_text_drop")?;
-        let (_rsl_shape, rsl_data) = a["ref_signal_len"]
+        let ref_signal_len = a["ref_signal_len"]
             .try_extract_tensor::<i64>()
-            .map_err(|e| format!("extract rsl: {e}"))?;
-        let ref_signal_len = rsl_data[0];
+            .map_err(|e| format!("extract rsl: {e}"))?
+            .1[0];
         drop(a);
 
         let mk = |s: &(Vec<i64>, Vec<f32>)| -> Result<Tensor<f32>, String> {
@@ -122,8 +126,8 @@ impl F5 {
         };
 
         // ---- Graph B: NFE-step ODE loop (denoised -> noise, time_step threaded) ----
-        // The graph's time schedule has NFE_STEP-1 entries and increments time_step itself, so we
-        // call it NFE_STEP-1 times (Python: `range(0, NFE_STEP-1)`); a 32nd call indexes out of range.
+        // The graph's time schedule has NFE_STEP-1 entries and increments time_step itself, so it's
+        // called NFE_STEP-1 times (Python: `range(0, NFE_STEP-1)`); a 32nd call indexes out of range.
         let mut time_step: i32 = 0;
         for _ in 0..(NFE_STEP - 1) {
             let noise_t = {
@@ -150,10 +154,10 @@ impl F5 {
                 .map_err(|e| format!("extract denoised: {e}"))?;
             noise = ds.to_vec();
             noise_shape = ds_shape.to_vec();
-            let (_, ts) = b["time_step"]
+            time_step = b["time_step"]
                 .try_extract_tensor::<i32>()
-                .map_err(|e| format!("extract ts: {e}"))?;
-            time_step = ts[0];
+                .map_err(|e| format!("extract ts: {e}"))?
+                .1[0];
         }
 
         // ---- Graph C: decode (vocos) -> int16 PCM ----
@@ -176,7 +180,7 @@ impl F5 {
 
 fn read_wav_i16(path: &str) -> Result<Vec<i16>, String> {
     let mut r = hound::WavReader::open(path).map_err(|e| format!("open {path}: {e}"))?;
-    // assume mono 16-bit; the reference should already be 24k mono
+    // reference must already be 24 kHz mono 16-bit
     r.samples::<i16>().collect::<Result<Vec<_>, _>>().map_err(|e| format!("read: {e}"))
 }
 
