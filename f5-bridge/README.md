@@ -14,6 +14,7 @@ the cost is speed (F5 is a 336 M diffusion model — see below).
 | file | venv | role |
 |------|------|------|
 | `f5_daemon.py` | `f5env` | resident F5 (load once, NDJSON `{text,output}` in → WAV out) |
+| `fb2_extract.py` | — | FB2 → per-chapter narration text: part→chapter split, spoken headings, inline footnotes |
 | `ruaccent_batch.py` | `ruaccent-env` | batch RUAccent stress (chunks in → stressed out, per-line fallback) |
 | `fb2-to-f5.sh` | — | orchestrator: split by part → chunk → stress → F5 daemons → per-part MP3 |
 | `merge_ellipsis.py` | — | graft `…` back into already-stressed text (RUAccent strips it — never re-stress) |
@@ -71,7 +72,21 @@ MODE=stress FIX=corrections.json ./fb2-to-f5.sh book.fb2 ./out
 MODE=synth REMOVE_SILENCE=1 NFE=32 WORKERS=3 DEVICE=cuda ./fb2-to-f5.sh book.fb2 ./out
 ```
 
-Output: `out/NN_<title>.mp3`, one per top-level `<section>` (the book's own parts).
+Output: `out/NN_<title>.mp3`, **one per chapter** (see below).
+
+### Structure & footnotes (`fb2_extract.py`)
+
+The extractor splits the book at the **second level** — one MP3 per chapter (`<section>/<section>`);
+a part with no chapters stays one MP3. Each chapter opens with a **spoken heading**: the first
+chapter of a part is prefixed with the part title (`Книга первая. Дети вора Самуила. Глава первая.`),
+the rest just `Глава вторая.` — numeric chapter titles are voiced as feminine ordinals (F5 would read
+a bare digit as a cardinal). `NN` numbers chapters **continuously** across parts and stays stable even
+with `PARTS=` set (which still filters by top-level part).
+
+**Footnotes** (`<body name="notes">`) are read **inline, at the end of the sentence that references
+them** — not dumped at the end where a listener can't match note 46 to anything — as
+`Примечание. <text>` (the note's own leading number is dropped). All handled by `fb2_extract.py`
+during the stress phase, so the review `.txt` already shows exactly what will be spoken.
 
 ### Native synth engine (no Python)
 

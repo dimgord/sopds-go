@@ -4,11 +4,16 @@
 #   fb2-to-f5.sh <book.fb2> [out_dir]
 #
 # Three modes (env MODE):
-#   MODE=stress  extract -> chunk -> RUAccent -> write reviewable out/review/NN_<title>.txt
+#   MODE=stress  fb2_extract.py (part→chapter split, spoken "Глава N" headings, footnotes read
+#                INLINE at the referencing sentence) -> RUAccent -> reviewable out/review/NN_<t>.txt
 #                (one stressed chunk per line) + out/review/_check-yo.tsv (ё-additions to eyeball).
 #                Edit those .txt files to fix any stress, then run MODE=synth.
-#   MODE=synth   read out/review/NN_*.txt (as edited) -> F5 daemons -> out/NN_<title>.mp3
+#   MODE=synth   read out/review/NN_*.txt (as edited) -> F5 daemons -> one out/NN_<title>.mp3 each
 #   MODE=all     (default) stress then synth in one pass, no review stop.
+#
+# One MP3 per SECOND-level <section> (chapter); a part with no chapters stays one MP3. The first
+# chapter of each part is announced with the part title ("Книга первая… Глава первая"); numeric
+# chapter titles are voiced as feminine ordinals. PARTS filters by top-level section (part).
 #
 # env: NFE=16 WORKERS=1 MAXCHARS=250 DEVICE=cpu PARTS="1 2 3 4"(subset)  REMOVE_SILENCE=1
 #      FIX=corrections.json  REF/REF_TEXT/CKPT/VOCAB/F5_HOME
@@ -37,26 +42,16 @@ F5BIN=${F5BIN:-$REPO/sopds-tts-rs/target/release/sopds-tts-rs}
 F5MODEL=${F5MODEL:-/tmp/f5model}
 REVIEW="$OUT/review"
 mkdir -p "$OUT" "$REVIEW"
-xp() { xmllint --xpath "$1" "$FB2" 2>/dev/null; }
-sect() { echo "//*[local-name()=\"body\"][not(@name)]/*[local-name()=\"section\"][$1]"; }
-
-# ---- STRESS phase: produce per-part reviewable stressed text --------------------------------
+# ---- STRESS phase: extract chapters (part→chapter split, spoken headings, inline notes) ------
 if [ "$MODE" = stress ] || [ "$MODE" = all ]; then
-  NPARTS=${PARTS:-$(seq 1 "$(xp "count(//*[local-name()=\"body\"][not(@name)]/*[local-name()=\"section\"])" | cut -d. -f1)")}
-  echo "→ stressing parts: $NPARTS  (chars≤$MAXCHARS)"
-  : > "$REVIEW/_titles.tsv"
-  for p in $NPARTS; do
-    title=$(xp "$(sect "$p")/*[local-name()=\"title\"]" | sed 's/<[^>]*>//g' | tr '\n' ' ' | sed -E 's/ +/ /g; s/^ | $//g' | cut -c1-40)
-    safe=$(printf '%s' "${title:-part_$p}" | tr ' /' '__' | tr -cd 'A-Za-z0-9_А-Яа-яЁё.-')
-    printf '%02d\t%s\t%s\n' "$p" "$safe" "$title" >> "$REVIEW/_titles.tsv"
-    xp "$(sect "$p")//text()" | tr '\n' ' ' | sed -E 's/([.!?]["»)]*) +/\1\n/g' \
-      | awk -v max="$MAXCHARS" '{gsub(/^ +| +$/,"");if($0=="")next;if(b=="")b=$0;else if(length(b)+1+length($0)<=max)b=b" "$0;else{print b;b=$0}}END{if(b!="")print b}' \
-      > "$REVIEW/$(printf '%02d' "$p")_${safe}.raw.txt"
+  echo "→ extracting chapters + stressing (chars≤$MAXCHARS${PARTS:+, parts $PARTS})"
+  rm -f "$REVIEW"/[0-9]*.raw.txt "$REVIEW"/[0-9]*.txt   # drop stale units from a prior split
+  python3 "$F5_HOME/fb2_extract.py" "$FB2" "$REVIEW" "$MAXCHARS" "${PARTS:-}"
+  while IFS=$'\t' read -r pp safe title; do
     "$RUPY" "$F5_HOME/ruaccent_batch.py" ${FIX:+--fix "$FIX"} \
-      < "$REVIEW/$(printf '%02d' "$p")_${safe}.raw.txt" \
-      > "$REVIEW/$(printf '%02d' "$p")_${safe}.txt" 2>>"$REVIEW/_ruaccent.log"
-    echo "  ✓ part $p: $(wc -l < "$REVIEW/$(printf '%02d' "$p")_${safe}.txt") chunks — $title"
-  done
+      < "$REVIEW/${pp}_${safe}.raw.txt" > "$REVIEW/${pp}_${safe}.txt" 2>>"$REVIEW/_ruaccent.log"
+    echo "  ✓ $pp $title ($(wc -l < "$REVIEW/${pp}_${safe}.txt") chunks)"
+  done < "$REVIEW/_titles.tsv"
   # Ambiguous-homograph report: only flag ё-restorations on genuine homographs (берет, десны, …),
   # not the always-ё words (ещё, всё, её). These are the ones worth eyeballing in the review text.
   "$RUPY" "$F5_HOME/ruaccent_batch.py" --dump-homographs "$REVIEW/_homographs.txt" </dev/null 2>/dev/null || true
