@@ -80,7 +80,15 @@ def split_line(raw, stressed, note_texts):
     rp = [raw[cuts[i]:cuts[i + 1]].strip() for i in range(len(cuts) - 1)]
     scuts = [0] + [to_str(c) for s, e in spans for c in (s, e)] + [len(stressed)]
     sp = [stressed[scuts[i]:scuts[i + 1]].strip() for i in range(len(scuts) - 1)]
-    pairs = [(r, s) for r, s in zip(rp, sp) if r or s]   # drop empty pieces (both sides in lockstep)
+    # Keep only pieces with non-empty RAW (raw is authoritative for chunk boundaries); if a stressed
+    # piece is orphaned (raw empty from an alignment wobble), fold it into the previous piece — avoids
+    # a single-sided blank line that would break the raw/txt 1:1 alignment.
+    pairs = []
+    for r, s in zip(rp, sp):
+        if r:
+            pairs.append([r, s])
+        elif s and pairs:
+            pairs[-1][1] = (pairs[-1][1] + " " + s).strip()
     return pairs if len(pairs) > 1 else None
 
 
@@ -108,6 +116,20 @@ def main():
             else:
                 nr.append(r)
                 ns.append(s)
+        # Post: (a) an orphaned "Примечание." — whose note text the old chunker already put in the NEXT
+        # chunk — is merged with that next line so the note stays whole; (b) drop blank lines. Both
+        # applied to raw+txt in lockstep to keep them 1:1.
+        cr, cs, i = [], [], 0
+        while i < len(ns):
+            if re.match(r"^\s*Примеч\+?ание\.\s*$", ns[i]) and i + 1 < len(ns):
+                cs.append((ns[i].strip() + " " + ns[i + 1].strip()).strip())
+                cr.append((nr[i].strip() + " " + nr[i + 1].strip()).strip())
+                i += 2
+            elif ns[i].strip() == "" and nr[i].strip() == "":
+                i += 1
+            else:
+                cs.append(ns[i]); cr.append(nr[i]); i += 1
+        nr, ns = cr, cs
         if split:
             open(raw, "w", encoding="utf-8").write("\n".join(nr) + "\n")
             open(txt, "w", encoding="utf-8").write("\n".join(ns) + "\n")
