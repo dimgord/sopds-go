@@ -1,7 +1,37 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.4.0
+## Current Version: 1.5.0
+
+---
+
+### Revision 88 - 2026-07-13
+**F5 footnote voices (isolate → route to distinct voice(s) → pause-bracket) + stress-reviewer nav.**
+
+Follows Rev 87. Makes footnotes an audible "aside" and the reviewer pleasant to drive by keyboard.
+
+- **Footnote isolation** (`fb2_extract.py`): each note is now bracketed by a hard chunk separator
+  (`SEP`) so `chunk()` keeps it in its **own chunk**, never packed with the surrounding narrative —
+  a prerequisite for giving it a different voice/pause. (Plus the earlier fix: typographic quotes
+  `“”„` count as sentence ends, so a ref after `Здрайцы!“` lands in the right sentence.)
+- **Footnote voice(s)** (`fb2-to-f5.sh`, ENGINE=native): note chunks (each begins "Примеч+ание.")
+  are split off from narrative and synthesized by a **different voice**. Two modes:
+  - single 2nd voice via `F5MODEL_NOTES` (a "dry footnote" voice), or
+  - **cast mode** via `NOTES_VOICES` (a dir of voice model-dirs + `manifest.txt`): each footnote gets
+    a different voice, rotated in book order; the note-daemons run one at a time (bounded memory:
+    1 note voice + WORKERS narrative daemons). Since F5 clones one voice per model-dir, a "voice" is
+    just that dir's `ref.wav`/`ref.txt` — building a cast = one dir per reference clip (shared ONNX
+    graphs via symlink). Pitch/character variants come from the reference recording itself.
+- **Pause bracket** (`NOTE_PAUSE`, default 0.3 s): the join wraps every note wav in silence before &
+  after, so the aside is clearly delimited even beyond the voice change.
+- **Stress reviewer** (`reviewer/index.html`): browse-mode flag navigation — `n`/`p` (also `j`/`k`)
+  step flags **without** entering edit mode (previously the first jump focused the textbox and
+  captured the keys), `Enter`/click to edit, `Enter`/`Esc` to commit & return to browsing. New
+  **"mark valid"** (`v`/Space): a ✓'d flag is skipped in navigation and persisted per-file in
+  localStorage, so you don't re-walk verified ё's after every save. Dirty is now set only on real
+  input (nav/focus never false-marks a row).
+
+Files: `f5-bridge/fb2_extract.py`, `f5-bridge/fb2-to-f5.sh`, `f5-bridge/reviewer/index.html`.
 
 ---
 
