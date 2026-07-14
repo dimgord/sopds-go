@@ -51,6 +51,10 @@
   .ed:focus{background:#fff;box-shadow:0 0 0 2px var(--edit)}
   .row.changed .ed{box-shadow:inset 3px 0 0 var(--dirty)}
   .row.changed.focus .ed{box-shadow:inset 3px 0 0 var(--dirty),0 0 0 2px var(--edit)}
+  .row.current{background:#efe7d3;border-radius:6px}                 /* browse cursor (not editing) */
+  .row.current .ed{box-shadow:inset 3px 0 0 var(--edit)}
+  .row.done mark.hom, .row.done mark.nostress{background:none;color:inherit;box-shadow:none;opacity:.55}
+  .row.done .ix::after{content:" ✓";color:#2e7d32}                  /* flag marked valid — skipped in nav */
   .row.note{opacity:.86}
   .row.note .raw::before{content:"✎ ";color:var(--accent-soft)}
   mark.hom{background:var(--flag-bg);color:var(--flag);border-radius:3px;padding:0 2px;
@@ -67,8 +71,9 @@
   <header>
     <span class="title" id="title">—</span>
     <span class="stat" id="stat"></span>
-    <button id="prev" title="предыдущий флаг (Shift+Tab область)">↑ флаг</button>
-    <button id="next" title="следующий ё-омограф — клавиша n">↓ флаг <kbd>n</kbd></button>
+    <button id="prev" title="предыдущий флаг — p">↑ <kbd>p</kbd></button>
+    <button id="next" title="следующий флаг — n">↓ <kbd>n</kbd></button>
+    <button id="ok" title="пометить проверенным и дальше — v / пробел">✓ <kbd>v</kbd></button>
     <button id="save" class="primary" title="сохранить — ⌘/Ctrl+S" disabled>Сохранить</button>
   </header>
   <div class="rows" id="rows"><div class="empty">Выберите главу слева.</div></div>
@@ -115,7 +120,10 @@ let OMO = new Set();          // stress-homograph words present in the book (п�
 let UNK = new Set();          // polysyllables absent from accents.json, left unstressed (names/rare)
 let cur = null;               // {name, title, raw:[], stressed:[], dirty:Set}
 let navLine = -1;             // line index the flag-navigation cursor is parked on
+let checked = new Set();      // line indices marked "проверено" — skipped in nav (persisted per file)
 const dirtyFiles = new Set();
+const chkKey = () => "f5chk_" + (cur ? cur.name : "");
+const saveChecked = () => localStorage.setItem(chkKey(), JSON.stringify([...checked]));
 
 const VOW = "аеёиоуыэюяАЕЁИОУЫЭЮЯ";
 const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -186,6 +194,7 @@ async function openFile(name, title, el){
   const d = await (await fetch("/api/file?name="+encodeURIComponent(name))).json();
   cur = {name, title, raw:d.raw||[], stressed:d.stressed||[], dirty:new Set()};
   navLine = -1;
+  checked = new Set(JSON.parse(localStorage.getItem(chkKey())||"[]"));
   $("#title").textContent = title;
   renderRows();
   updateStat();
@@ -198,7 +207,7 @@ function renderRows(){
   for(let i=0;i<n;i++){
     const raw = cur.raw[i]||"", str = cur.stressed[i]||"";
     const row = document.createElement("div");
-    row.className = "row" + (/^\s*Примечание\./.test(raw)?" note":"");
+    row.className = "row" + (/^\s*Примечание\./.test(raw)?" note":"") + (checked.has(i)?" done":"");
     row.dataset.i = i;
     const ed = `<div class="ed" contenteditable="true" spellcheck="false" data-i="${i}">${render(str)}</div>`;
     row.innerHTML = `<div class="ix">${i+1}</div><div class="raw">${esc(raw)}</div>${ed}`;
@@ -209,7 +218,7 @@ function renderRows(){
       ed.dataset.touched="";                                 // fresh focus — no edit yet
       ed.textContent = cur.stressed[+ed.dataset.i];
       ed.closest(".row").classList.add("focus");
-      if(lineHasFlag(cur.stressed[+ed.dataset.i])) navLine=+ed.dataset.i;  // clicking a flag re-anchors nav
+      if(lineHasFlag(cur.stressed[+ed.dataset.i])) setCurrent(+ed.dataset.i);  // clicking a flag re-anchors nav
     });
     ed.addEventListener("input",()=>{ ed.dataset.touched="1"; dedupePlus(ed); });
     ed.addEventListener("blur",()=>{
@@ -224,23 +233,42 @@ function renderRows(){
   });
 }
 
-function flaggedRows(){
-  const out=[]; document.querySelectorAll(".row").forEach(r=>{ if(lineHasFlag(cur.stressed[+r.dataset.i])) out.push(r); });
+function flaggedRows(){   // rows with an actionable flag, minus the ones marked проверено
+  const out=[]; document.querySelectorAll(".row").forEach(r=>{
+    const i=+r.dataset.i; if(lineHasFlag(cur.stressed[i]) && !checked.has(i)) out.push(r);
+  });
   return out;
 }
+// browse cursor: highlight a row WITHOUT entering edit mode, so n/p keep working
+function setCurrent(line){
+  navLine = line;
+  document.querySelectorAll(".row.current").forEach(r=>r.classList.remove("current"));
+  if(line!=null && line>=0){ const r=document.querySelector(`.row[data-i="${line}"]`); if(r) r.classList.add("current"); }
+}
 function jumpFlag(dir){
-  const fr = flaggedRows(); if(!fr.length) return;
-  let idx = fr.findIndex(r=>+r.dataset.i===navLine);   // where the cursor is parked
-  if(idx<0){                                            // first jump / parked off a flag: pick by viewport
+  if(document.activeElement && document.activeElement.classList && document.activeElement.classList.contains("ed"))
+    document.activeElement.blur();                       // leave edit mode so keys go to the document
+  const fr = flaggedRows(); if(!fr.length){ setCurrent(-1); return; }
+  let idx = fr.findIndex(r=>+r.dataset.i===navLine);
+  if(idx<0){                                             // first jump / parked off a flag: pick by viewport
     const y = window.scrollY + innerHeight/2;
     if(dir>0){ idx = fr.findIndex(r=>r.offsetTop>y); if(idx<0) idx = fr.length-1; }
     else { idx = 0; for(let j=0;j<fr.length;j++) if(fr[j].offsetTop < y) idx = j; }
   } else {
-    idx = Math.max(0, Math.min(fr.length-1, idx+dir));  // step exactly one flag, clamp at ends
+    idx = Math.max(0, Math.min(fr.length-1, idx+dir));   // step exactly one flag, clamp at ends
   }
-  const t = fr[idx]; navLine = +t.dataset.i;
-  t.scrollIntoView({block:"center",behavior:"smooth"});
-  t.querySelector(".ed").focus();
+  const t = fr[idx]; setCurrent(+t.dataset.i);
+  t.scrollIntoView({block:"center",behavior:"smooth"});  // no .ed focus — stays in browse mode
+}
+function editCurrent(){   // Enter / click → edit the current flag
+  if(navLine<0) return;
+  const r=document.querySelector(`.row[data-i="${navLine}"]`); if(r) r.querySelector(".ed").focus();
+}
+function markValid(){     // ✓ this flag is fine → skip it in nav (persisted), advance
+  if(navLine<0) return;
+  checked.add(navLine); saveChecked();
+  const r=document.querySelector(`.row[data-i="${navLine}"]`); if(r) r.classList.add("done");
+  updateStat(); jumpFlag(1);
 }
 
 function updateStat(){
@@ -249,7 +277,9 @@ function updateStat(){
     const c=classify(t); if(c==="hom") hom++; else if(c==="nostress") nos++;
   }
   const dirty = cur ? cur.dirty.size : 0;
-  $("#stat").textContent = cur ? `${cur.stressed.length} строк · ${hom} ё-омогр. · ${nos} без удар.` + (dirty?` · ${dirty} правок`:"") : "";
+  const done = cur ? checked.size : 0;
+  $("#stat").textContent = cur ? `${cur.stressed.length} строк · ${hom} ё-омогр. · ${nos} без удар.`
+    + (done?` · ✓${done}`:"") + (dirty?` · ${dirty} правок`:"") : "";
   $("#save").disabled = !dirty;
   const chap = document.querySelector(`.chap[data-name="${cur?.name}"]`);
   if(chap) chap.classList.toggle("dirty", !!dirty);
@@ -265,10 +295,21 @@ async function save(){
 
 $("#next").onclick=()=>jumpFlag(1);
 $("#prev").onclick=()=>jumpFlag(-1);
+$("#ok").onclick=markValid;
 $("#save").onclick=save;
 document.addEventListener("keydown",e=>{
-  if((e.metaKey||e.ctrlKey) && e.key==="s"){ e.preventDefault(); save(); }
-  else if(e.key==="n" && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName) && !e.target.isContentEditable){ e.preventDefault(); jumpFlag(1); }
+  if((e.metaKey||e.ctrlKey) && e.key==="s"){ e.preventDefault(); save(); return; }
+  if(e.target.isContentEditable){                         // editing: Enter/Esc commit & return to browse
+    if(e.key==="Enter"||e.key==="Escape"){ e.preventDefault(); e.target.blur(); }
+    return;                                               // everything else types normally
+  }
+  switch(e.key){                                          // browse mode
+    case "n": case "j": e.preventDefault(); jumpFlag(1); break;
+    case "p": case "k": e.preventDefault(); jumpFlag(-1); break;
+    case "v": e.preventDefault(); markValid(); break;
+    case " ": if(navLine>=0){ e.preventDefault(); markValid(); } break;  // else let Space scroll
+    case "Enter": if(navLine>=0){ e.preventDefault(); editCurrent(); } break;
+  }
 });
 window.addEventListener("beforeunload",e=>{ if(cur&&cur.dirty.size){ e.preventDefault(); e.returnValue=""; }});
 loadList();
