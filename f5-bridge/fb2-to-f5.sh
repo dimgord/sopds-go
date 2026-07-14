@@ -21,6 +21,9 @@
 #         F5BIN=<repo>/sopds-tts-rs/target/release/sopds-tts-rs  F5MODEL=<dir: 3 onnx+vocab+ref>
 #         native ignores NFE/DEVICE/REF*/CKPT/VOCAB/REMOVE_SILENCE (baked into the model dir; NFE
 #         fixed at 32 by the export). Build CUDA on a GPU box — CPU is ~80s/chunk (use a GPU).
+#      Footnote voice(s): F5MODEL_NOTES=<dir> (single 2nd voice) or NOTES_VOICES=<dir of voice
+#         model-dirs + manifest.txt> (cast: a different voice per footnote). NOTE_CHIME=<wav>
+#         (default: built-in A5→E5 bell) plays before each note; NOTE_PAUSE=0.3 silence after.
 #
 # The STRESS half is still Python (RUAccent); the SYNTH half goes native with ENGINE=native.
 # See docs/decisions/001; FUTURE.md option B tracks porting RUAccent too.
@@ -168,11 +171,22 @@ done
 wait "${pids[@]}" 2>/dev/null || true
 printf '\r\033[K  %d/%d done in %dm%02ds\n' "$(find "$WORK" -maxdepth 1 -name 'p*_c*.wav'|wc -l|tr -d ' ')" "$N" $((SECONDS/60)) $((SECONDS%60))
 
-# A footnote is read in a different voice — bracket each note chunk with NOTE_PAUSE (default 0.3s) of
-# silence so the listener clearly hears where the aside starts and ends.
+# A footnote is read in a different voice; bracket it so the listener hears the aside start/end:
+# a gentle airport-style "пім-пуум" chime BEFORE (NOTE_CHIME wav, or a built-in A5→E5 bell), and
+# NOTE_PAUSE (default 0.3s) of silence AFTER.
 NOTE_PAUSE=${NOTE_PAUSE:-0.3}
-if [ -f "$WORK/notes.ndjson" ] && awk "BEGIN{exit !($NOTE_PAUSE>0)}"; then
-  ffmpeg -y -hide_banner -loglevel error -f lavfi -i anullsrc=r=24000:cl=mono -t "$NOTE_PAUSE" -c:a pcm_s16le "$WORK/pause.wav"
+NOTE_CHIME=${NOTE_CHIME:-}   # path to a chime wav; empty ⇒ generate the built-in bell
+if [ -f "$WORK/notes.ndjson" ]; then
+  awk "BEGIN{exit !($NOTE_PAUSE>0)}" && \
+    ffmpeg -y -hide_banner -loglevel error -f lavfi -i anullsrc=r=24000:cl=mono -t "$NOTE_PAUSE" -c:a pcm_s16le "$WORK/pause.wav"
+  if [ -n "$NOTE_CHIME" ] && [ -f "$NOTE_CHIME" ]; then
+    ffmpeg -y -hide_banner -loglevel error -i "$NOTE_CHIME" -ar 24000 -ac 1 -c:a pcm_s16le "$WORK/chime.wav"
+  else   # built-in soft two-tone bell: A5(880) short + E5(659) longer, exp decay, lowpass+echo
+    ffmpeg -y -hide_banner -loglevel error -f lavfi -i "sine=frequency=880:duration=0.6" -af "volume='exp(-7*t)':eval=frame,afade=t=in:d=0.008" -ar 24000 -ac 1 "$WORK/ch1.wav"
+    ffmpeg -y -hide_banner -loglevel error -f lavfi -i "sine=frequency=659:duration=1.1" -af "volume='exp(-3.5*t)':eval=frame,afade=t=in:d=0.008" -ar 24000 -ac 1 "$WORK/ch2.wav"
+    printf "file '%s/ch1.wav'\nfile '%s/ch2.wav'\n" "$WORK" "$WORK" > "$WORK/chl.txt"
+    ffmpeg -y -hide_banner -loglevel error -f concat -safe 0 -i "$WORK/chl.txt" -af "lowpass=f=6500,aecho=0.8:0.6:60:0.25,volume=0.5" -ar 24000 -ac 1 -c:a pcm_s16le "$WORK/chime.wav"
+  fi
   grep -ho '"output": *"[^"]*"' "$WORK/notes.ndjson" | sed 's/.*"output": *"//; s/"$//' | while read -r p; do basename "$p"; done > "$WORK/note_wavs.txt"
 fi
 
@@ -182,8 +196,10 @@ while IFS=$'\t' read -r pp safe title; do
   : > "$WORK/list_$pp.txt"
   while IFS= read -r wf; do
     [ -n "$wf" ] || continue
-    if [ -f "$WORK/pause.wav" ] && grep -qxF "$(basename "$wf")" "$WORK/note_wavs.txt" 2>/dev/null; then
-      printf "file '%s'\nfile '%s'\nfile '%s'\n" "$WORK/pause.wav" "$wf" "$WORK/pause.wav" >> "$WORK/list_$pp.txt"
+    if [ -f "$WORK/note_wavs.txt" ] && grep -qxF "$(basename "$wf")" "$WORK/note_wavs.txt" 2>/dev/null; then
+      [ -f "$WORK/chime.wav" ] && printf "file '%s'\n" "$WORK/chime.wav" >> "$WORK/list_$pp.txt"  # пім-пуум before
+      printf "file '%s'\n" "$wf" >> "$WORK/list_$pp.txt"
+      [ -f "$WORK/pause.wav" ] && printf "file '%s'\n" "$WORK/pause.wav" >> "$WORK/list_$pp.txt"  # pause after
     else
       printf "file '%s'\n" "$wf" >> "$WORK/list_$pp.txt"
     fi
