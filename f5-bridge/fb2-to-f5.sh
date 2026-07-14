@@ -40,6 +40,10 @@ ENGINE=${ENGINE:-python}   # python (f5_daemon.py) | native (sopds-tts-rs, Rust/
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 F5BIN=${F5BIN:-$REPO/sopds-tts-rs/target/release/sopds-tts-rs}
 F5MODEL=${F5MODEL:-/tmp/f5model}
+F5MODEL_NOTES=${F5MODEL_NOTES:-/tmp/f5model-notes}  # 2nd voice for footnotes (ENGINE=native); the
+# note chunks (each starts with "Примечание.") are routed here for a distinct "dry footnote" voice
+NOTES_VOICES=${NOTES_VOICES:-/tmp/f5voices}  # optional cast: a dir of voice model-dirs + manifest.txt.
+# If present, each footnote gets a different voice (rotated in order) instead of the single F5MODEL_NOTES
 REVIEW="$OUT/review"
 mkdir -p "$OUT" "$REVIEW"
 # ---- STRESS phase: extract chapters (part→chapter split, spoken headings, inline notes) ------
@@ -107,20 +111,54 @@ else
 fi
 
 SECONDS=0; pids=()
-for ((i=0;i<WORKERS;i++)); do
-  awk -v W="$WORKERS" -v id="$i" 'NR%W==id' "$WORK/reqs.ndjson" > "$WORK/shard_$i"
-  if [ "$ENGINE" = native ]; then
-    # Rust/ort daemon: same NDJSON {text,output}. Cap ORT intra-op threads so WORKERS>1 don't
-    # oversubscribe; 0/unset = all cores (fine for WORKERS=1). ref/vocab/graphs live in F5MODEL.
+if [ "$ENGINE" = native ]; then
+  # Route footnote chunks (each begins "Примечание.", RUAccent → "Примеч+ание.") to the 2nd voice;
+  # everything else to the main voice. Both write p*_c*.wav by global index, so the join is unaffected.
+  grep -E '"text": *"Примеч[+]?ание\.' "$WORK/reqs.ndjson" > "$WORK/notes.ndjson" || true
+  grep -vE '"text": *"Примеч[+]?ание\.' "$WORK/reqs.ndjson" > "$WORK/narr.ndjson" || true
+  for ((i=0;i<WORKERS;i++)); do
+    awk -v W="$WORKERS" -v id="$i" 'NR%W==id' "$WORK/narr.ndjson" > "$WORK/shard_$i"
+    # Rust/ort daemon: same NDJSON {text,output}. THREADS caps ORT intra-op so WORKERS>1 don't oversubscribe.
     SOPDS_TTS_THREADS="${THREADS:-0}" "$F5BIN" "$F5MODEL" \
        < "$WORK/shard_$i" > "$WORK/resp_$i" 2>"$WORK/dlog_$i" &
-  else
+    pids+=($!)
+  done
+  if [ -s "$WORK/notes.ndjson" ]; then
+    if [ -f "$NOTES_VOICES/manifest.txt" ]; then
+      # CAST MODE: each footnote → a different voice, rotated in book order. Voices run one at a time
+      # in a bg subshell (bounded memory: 1 note-daemon + WORKERS narrative daemons); join by index.
+      VOICES=(); while IFS= read -r v; do [ -n "$v" ] && VOICES+=("$v"); done < "$NOTES_VOICES/manifest.txt"
+      K=${#VOICES[@]}
+      i=0
+      while IFS= read -r line; do
+        printf '%s\n' "$line" >> "$WORK/notes_${VOICES[$((i % K))]}.ndjson"; i=$((i+1))
+      done < "$WORK/notes.ndjson"
+      echo "  ($i footnote chunks → $K voices: ${VOICES[*]})"
+      (
+        for v in "${VOICES[@]}"; do
+          [ -s "$WORK/notes_$v.ndjson" ] || continue
+          SOPDS_TTS_THREADS="${THREADS:-0}" "$F5BIN" "$NOTES_VOICES/$v" \
+            < "$WORK/notes_$v.ndjson" >> "$WORK/resp_notes" 2>>"$WORK/dlog_notes"
+        done
+      ) &
+      pids+=($!)
+    else
+      [ -f "$F5MODEL_NOTES/F5_Transformer.onnx" ] || { echo "footnote voice: F5MODEL_NOTES not a model dir ($F5MODEL_NOTES)"; exit 1; }
+      echo "  ($(wc -l < "$WORK/notes.ndjson"|tr -d ' ') footnote chunks → $F5MODEL_NOTES)"
+      SOPDS_TTS_THREADS="${THREADS:-0}" "$F5BIN" "$F5MODEL_NOTES" \
+         < "$WORK/notes.ndjson" > "$WORK/resp_notes" 2>>"$WORK/dlog_notes" &
+      pids+=($!)
+    fi
+  fi
+else
+  for ((i=0;i<WORKERS;i++)); do
+    awk -v W="$WORKERS" -v id="$i" 'NR%W==id' "$WORK/reqs.ndjson" > "$WORK/shard_$i"
     "$F5PY" "$F5_HOME/f5_daemon.py" --ckpt "$CKPT" --vocab "$VOCAB" --ref "$REF" \
        --ref-text "$REF_TEXT" --nfe "$NFE" --device "$DEVICE" ${REMOVE_SILENCE:+--remove-silence} \
        < "$WORK/shard_$i" > "$WORK/resp_$i" 2>"$WORK/dlog_$i" &
-  fi
-  pids+=($!)
-done
+    pids+=($!)
+  done
+fi
 while :; do
   alive=0; for pd in "${pids[@]}"; do kill -0 "$pd" 2>/dev/null && { alive=1; break; }; done
   done=$(find "$WORK" -maxdepth 1 -name 'p*_c*.wav' | wc -l | tr -d ' ')
@@ -130,10 +168,26 @@ done
 wait "${pids[@]}" 2>/dev/null || true
 printf '\r\033[K  %d/%d done in %dm%02ds\n' "$(find "$WORK" -maxdepth 1 -name 'p*_c*.wav'|wc -l|tr -d ' ')" "$N" $((SECONDS/60)) $((SECONDS%60))
 
+# A footnote is read in a different voice — bracket each note chunk with NOTE_PAUSE (default 0.3s) of
+# silence so the listener clearly hears where the aside starts and ends.
+NOTE_PAUSE=${NOTE_PAUSE:-0.3}
+if [ -f "$WORK/notes.ndjson" ] && awk "BEGIN{exit !($NOTE_PAUSE>0)}"; then
+  ffmpeg -y -hide_banner -loglevel error -f lavfi -i anullsrc=r=24000:cl=mono -t "$NOTE_PAUSE" -c:a pcm_s16le "$WORK/pause.wav"
+  grep -ho '"output": *"[^"]*"' "$WORK/notes.ndjson" | sed 's/.*"output": *"//; s/"$//' | while read -r p; do basename "$p"; done > "$WORK/note_wavs.txt"
+fi
+
 echo "→ joining parts…"
 while IFS=$'\t' read -r pp safe title; do
   files=$(find "$WORK" -maxdepth 1 -name "p${pp}_c*.wav" | sort); [ -n "$files" ] || continue
-  echo "$files" | sed "s|^|file '|; s|$|'|" > "$WORK/list_$pp.txt"
+  : > "$WORK/list_$pp.txt"
+  while IFS= read -r wf; do
+    [ -n "$wf" ] || continue
+    if [ -f "$WORK/pause.wav" ] && grep -qxF "$(basename "$wf")" "$WORK/note_wavs.txt" 2>/dev/null; then
+      printf "file '%s'\nfile '%s'\nfile '%s'\n" "$WORK/pause.wav" "$wf" "$WORK/pause.wav" >> "$WORK/list_$pp.txt"
+    else
+      printf "file '%s'\n" "$wf" >> "$WORK/list_$pp.txt"
+    fi
+  done <<< "$files"
   o="$OUT/${pp}_${safe}.mp3"
   ffmpeg -y -hide_banner -loglevel error -f concat -safe 0 -i "$WORK/list_$pp.txt" -c:a libmp3lame -b:a 64k -ac 1 "$o"
   echo "  ✓ $o ($(du -h "$o"|cut -f1))"

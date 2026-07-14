@@ -17,6 +17,8 @@ import sys
 import xml.etree.ElementTree as ET
 
 NOTE_OPEN, NOTE_CLOSE = "", ""  # private-use markers for a footnote ref in the text
+SEP = "\ue002"  # hard chunk boundary: brackets a footnote so it becomes its own
+                # chunk(s), never packed with the surrounding narrative
 
 # Feminine ordinals (глава f.) 1..40; compose 21+ from tens + unit. Fallback = the digit itself.
 _ORD = {1:"первая",2:"вторая",3:"третья",4:"четвёртая",5:"пятая",6:"шестая",7:"седьмая",
@@ -82,7 +84,7 @@ def inline_notes(text, notes):
         if not m:
             break
         note = notes.get(m.group(1), "")
-        ins = f" Примечание. {note} " if note else " "
+        ins = f" {SEP}Примечание. {note}{SEP} " if note else " "  # SEP → note becomes its own chunk
         before, after = text[: m.start()], text[m.end():]
         # closing punctuation that may sit between a sentence terminator and the ref: straight AND
         # typographic quotes/brackets (»”“„’‘› …). Without the typographic ones a ref after e.g.
@@ -98,23 +100,28 @@ def inline_notes(text, notes):
 
 
 def chunk(text, maxchars):
-    """collapse ws → sentence-split (after . ! ? + closing quotes) → greedy pack to <=maxchars."""
-    text = re.sub(r"\s+", " ", text).strip()
-    sents = re.sub(r'([.!?]["»)]*)\s+', r"\1\n", text).split("\n")
-    out, buf = [], ""
-    for s in sents:
-        s = s.strip()
-        if not s:
+    """SEP-isolate footnotes → collapse ws → sentence-split → greedy pack to <=maxchars.
+    Splitting on SEP first keeps each footnote in its own chunk(s), never packed with narrative."""
+    out = []
+    for seg in text.split(SEP):
+        seg = re.sub(r"\s+", " ", seg).strip()
+        if not seg:
             continue
-        if not buf:
-            buf = s
-        elif len(buf) + 1 + len(s) <= maxchars:
-            buf += " " + s
-        else:
+        sents = re.sub(r'([.!?]["»)]*)\s+', r"\1\n", seg).split("\n")
+        buf = ""
+        for s in sents:
+            s = s.strip()
+            if not s:
+                continue
+            if not buf:
+                buf = s
+            elif len(buf) + 1 + len(s) <= maxchars:
+                buf += " " + s
+            else:
+                out.append(buf)
+                buf = s
+        if buf:
             out.append(buf)
-            buf = s
-    if buf:
-        out.append(buf)
     return out
 
 
