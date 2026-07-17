@@ -105,6 +105,49 @@ while IFS=$'\t' read -r pp safe title; do
 done < "$REVIEW/_titles.tsv" > "$WORK/reqs.ndjson"
 N=$(wc -l < "$WORK/reqs.ndjson" | tr -d ' ')
 [ "$N" -gt 0 ] || { echo "no stressed text — run MODE=stress first"; exit 1; }
+# PUNCT_PAUSE (default on): give each chunk a deterministic pause AFTER it, keyed to its trailing
+# punctuation (.?!→PAUSE_DOT ,→PAUSE_COMMA —→PAUSE_DASH …→PAUSE_ELLIPSIS ;→PAUSE_SEMI :→PAUSE_COLON,
+# else PAUSE_DEFAULT). We build the map (wav-basename → seconds) here from the ORIGINAL trailing mark;
+# then, unless PUNCT_CLEAN=0, the text we synth gets its trailing '…'/'...'→'.' and a trailing spaced
+# em-dash dropped (F5 renders those poorly). The pause itself is inserted at join time. This is what
+# lets rechunk.py split by commas freely — the pause length, not the split point, sets the prosody.
+if [ "${PUNCT_PAUSE:-1}" = 1 ]; then
+  PAUSE_DOT=${PAUSE_DOT:-0.5} PAUSE_COMMA=${PAUSE_COMMA:-0.25} PAUSE_DASH=${PAUSE_DASH:-0.7} \
+  PAUSE_ELLIPSIS=${PAUSE_ELLIPSIS:-0.8} PAUSE_SEMI=${PAUSE_SEMI:-0.4} PAUSE_COLON=${PAUSE_COLON:-0.3} \
+  PAUSE_DEFAULT=${PAUSE_DEFAULT:-0.15} PUNCT_CLEAN=${PUNCT_CLEAN:-1} \
+  python3 - "$WORK/reqs.ndjson" "$WORK/pausemap.tsv" <<'PY'
+import json, os, re, sys
+reqs, pm = sys.argv[1], sys.argv[2]
+P = {k: float(os.environ["PAUSE_" + e]) for k, e in dict(
+    dot="DOT", comma="COMMA", dash="DASH", ell="ELLIPSIS", semi="SEMI", colon="COLON", default="DEFAULT").items()}
+CLEAN = os.environ.get("PUNCT_CLEAN", "1") == "1"
+TRIM = '"»)]”“„’\'( '   # trailing quotes/brackets/space to skip when finding the real last mark
+def dur(t):
+    s = t.rstrip().rstrip(TRIM).replace("+", "")
+    if s.endswith("…") or s.endswith("..."): return P["ell"]
+    c = s[-1:] if s else ""
+    if c in ".!?": return P["dot"]
+    if c == ",":   return P["comma"]
+    if c in "—-":  return P["dash"]
+    if c == ";":   return P["semi"]
+    if c == ":":   return P["colon"]
+    return P["default"]
+def clean(t):
+    if not CLEAN: return t
+    t = re.sub(r"\s*(…|\.\.\.)\s*$", ".", t.rstrip())   # trailing ellipsis → period
+    return re.sub(r"\s+[—-]\s*$", "", t)                # drop a trailing spaced em-dash
+rows = []
+with open(pm, "w", encoding="utf-8") as w:
+    for line in open(reqs, encoding="utf-8"):
+        line = line.strip()
+        if not line: continue
+        o = json.loads(line)
+        w.write("%s\t%.3f\n" % (os.path.basename(o["output"]), dur(o["text"])))
+        o["text"] = clean(o["text"])
+        rows.append(json.dumps(o, ensure_ascii=False))
+open(reqs, "w", encoding="utf-8").write("\n".join(rows) + "\n")
+PY
+fi
 if [ "$ENGINE" = native ]; then
   [ -x "$F5BIN" ] || { echo "native engine: F5BIN not built ($F5BIN) — cargo build --release in sopds-tts-rs"; exit 1; }
   [ -f "$F5MODEL/F5_Transformer.onnx" ] || { echo "native engine: F5MODEL not a model dir ($F5MODEL)"; exit 1; }
@@ -176,7 +219,7 @@ printf '\r\033[K  %d/%d done in %dm%02ds\n' "$(find "$WORK" -maxdepth 1 -name 'p
 # NOTE_PAUSE (default 0.3s) of silence AFTER.
 NOTE_PAUSE=${NOTE_PAUSE:-0.3}
 NOTE_CHIME=${NOTE_CHIME:-}   # path to a chime wav; empty ⇒ generate the built-in bell
-if [ -f "$WORK/notes.ndjson" ]; then
+if [ -s "$WORK/notes.ndjson" ]; then   # -s: only when notes exist (empty ⇒ skip; else grep-1 kills set -e)
   awk "BEGIN{exit !($NOTE_PAUSE>0)}" && \
     ffmpeg -y -hide_banner -loglevel error -f lavfi -i anullsrc=r=24000:cl=mono -t "$NOTE_PAUSE" -c:a pcm_s16le "$WORK/pause.wav"
   if [ -n "$NOTE_CHIME" ] && [ -f "$NOTE_CHIME" ]; then
@@ -187,25 +230,64 @@ if [ -f "$WORK/notes.ndjson" ]; then
     printf "file '%s/ch1.wav'\nfile '%s/ch2.wav'\n" "$WORK" "$WORK" > "$WORK/chl.txt"
     ffmpeg -y -hide_banner -loglevel error -f concat -safe 0 -i "$WORK/chl.txt" -af "lowpass=f=6500,aecho=0.8:0.6:60:0.25,volume=0.5" -ar 24000 -ac 1 -c:a pcm_s16le "$WORK/chime.wav"
   fi
+  # closing chime AFTER the note: gentle ascending E5→A5 "пуум-пім" (mirror of the opener) so the
+  # listener hears the aside end and the narration return. NOTE_CHIME_END overrides the built-in.
+  NOTE_CHIME_END=${NOTE_CHIME_END:-}
+  if [ -n "$NOTE_CHIME_END" ] && [ -f "$NOTE_CHIME_END" ]; then
+    ffmpeg -y -hide_banner -loglevel error -i "$NOTE_CHIME_END" -ar 24000 -ac 1 -c:a pcm_s16le "$WORK/chime_end.wav"
+  else
+    ffmpeg -y -hide_banner -loglevel error -f lavfi -i "sine=frequency=659:duration=0.5" -af "volume='exp(-7*t)':eval=frame,afade=t=in:d=0.008" -ar 24000 -ac 1 "$WORK/ce1.wav"
+    ffmpeg -y -hide_banner -loglevel error -f lavfi -i "sine=frequency=880:duration=0.9" -af "volume='exp(-4*t)':eval=frame,afade=t=in:d=0.008" -ar 24000 -ac 1 "$WORK/ce2.wav"
+    printf "file '%s/ce1.wav'\nfile '%s/ce2.wav'\n" "$WORK" "$WORK" > "$WORK/cel.txt"
+    ffmpeg -y -hide_banner -loglevel error -f concat -safe 0 -i "$WORK/cel.txt" -af "lowpass=f=6500,aecho=0.8:0.6:60:0.25,volume=0.5" -ar 24000 -ac 1 -c:a pcm_s16le "$WORK/chime_end.wav"
+  fi
   grep -ho '"output": *"[^"]*"' "$WORK/notes.ndjson" | sed 's/.*"output": *"//; s/"$//' | while read -r p; do basename "$p"; done > "$WORK/note_wavs.txt"
 fi
 
 echo "→ joining parts…"
+# F5 pads each chunk with silence + a phrase-final cadence; trim the leading/trailing silence off
+# every chunk so consecutive narration flows together (no "period pause" at chunk seams). Internal
+# silence is untouched. TRIM_SILENCE=0 disables. Keeps ~20ms so words don't collide.
+TRIM_SILENCE=${TRIM_SILENCE:-1}
+TRIMAF="silenceremove=start_periods=1:start_threshold=-50dB,areverse,silenceremove=start_periods=1:start_threshold=-50dB,areverse"
+trimw() {  # $1 in wav → echoes a path to use (trimmed if enabled, else original)
+  if [ "$TRIM_SILENCE" = 1 ]; then
+    local t="$WORK/t_$(basename "$1")"
+    ffmpeg -nostdin -y -hide_banner -loglevel error -i "$1" -af "$TRIMAF" -ar 24000 -ac 1 -c:a pcm_s16le "$t" && echo "$t" || echo "$1"
+  else echo "$1"; fi
+}
+pausew() {  # $1 seconds → path to a cached silence wav of that length (echo "" when 0)
+  awk "BEGIN{exit !($1>0)}" || { echo ""; return; }
+  local p="$WORK/sil_$1.wav"
+  [ -f "$p" ] || ffmpeg -nostdin -y -hide_banner -loglevel error -f lavfi -i anullsrc=r=24000:cl=mono -t "$1" -c:a pcm_s16le "$p"
+  echo "$p"
+}
+# load the wav→pause map (basename → seconds) once for the PUNCT_PAUSE inserts in the join below
+declare -A PAUSE
+if [ "${PUNCT_PAUSE:-1}" = 1 ] && [ -f "$WORK/pausemap.tsv" ]; then
+  while IFS=$'\t' read -r _b _d; do PAUSE["$_b"]="$_d"; done < "$WORK/pausemap.tsv"
+fi
 while IFS=$'\t' read -r pp safe title; do
   files=$(find "$WORK" -maxdepth 1 -name "p${pp}_c*.wav" | sort); [ -n "$files" ] || continue
   : > "$WORK/list_$pp.txt"
   while IFS= read -r wf; do
     [ -n "$wf" ] || continue
+    tw=$(trimw "$wf")
     if [ -f "$WORK/note_wavs.txt" ] && grep -qxF "$(basename "$wf")" "$WORK/note_wavs.txt" 2>/dev/null; then
-      [ -f "$WORK/chime.wav" ] && printf "file '%s'\n" "$WORK/chime.wav" >> "$WORK/list_$pp.txt"  # пім-пуум before
-      printf "file '%s'\n" "$wf" >> "$WORK/list_$pp.txt"
-      [ -f "$WORK/pause.wav" ] && printf "file '%s'\n" "$WORK/pause.wav" >> "$WORK/list_$pp.txt"  # pause after
+      [ -f "$WORK/chime.wav" ] && printf "file '%s'\n" "$WORK/chime.wav" >> "$WORK/list_$pp.txt"          # пім-пуум before
+      printf "file '%s'\n" "$tw" >> "$WORK/list_$pp.txt"
+      [ -f "$WORK/chime_end.wav" ] && printf "file '%s'\n" "$WORK/chime_end.wav" >> "$WORK/list_$pp.txt"  # пуум-пім after
+      [ -f "$WORK/pause.wav" ] && printf "file '%s'\n" "$WORK/pause.wav" >> "$WORK/list_$pp.txt"          # pause
     else
-      printf "file '%s'\n" "$wf" >> "$WORK/list_$pp.txt"
+      printf "file '%s'\n" "$tw" >> "$WORK/list_$pp.txt"
+      if [ "${PUNCT_PAUSE:-1}" = 1 ]; then   # deterministic pause after this narration chunk
+        _pw=$(pausew "${PAUSE[$(basename "$wf")]:-0}")
+        [ -n "$_pw" ] && printf "file '%s'\n" "$_pw" >> "$WORK/list_$pp.txt"
+      fi
     fi
   done <<< "$files"
   o="$OUT/${pp}_${safe}.mp3"
-  ffmpeg -y -hide_banner -loglevel error -f concat -safe 0 -i "$WORK/list_$pp.txt" -c:a libmp3lame -b:a 64k -ac 1 "$o"
+  ffmpeg -nostdin -y -hide_banner -loglevel error -f concat -safe 0 -i "$WORK/list_$pp.txt" -c:a libmp3lame -b:a 64k -ac 1 "$o"
   echo "  ✓ $o ($(du -h "$o"|cut -f1))"
 done < "$REVIEW/_titles.tsv"
 echo "✓ done → $OUT"

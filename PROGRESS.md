@@ -1,7 +1,52 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.5.0
+## Current Version: 1.6.0
+
+---
+
+### Revision 89 - 2026-07-17
+**Deterministic punctuation pauses + free-comma rechunk + a full stress-reviewer proofreading overhaul
+(type × mode filters over accepted rows, original-type recovery via word-alignment).** Follows Rev 88.
+Used to (re)generate all three books of "Пасынки восьмой заповеди" in Dmitry's cloned voice.
+
+- **Deterministic punctuation pauses** (`fb2-to-f5.sh`, `PUNCT_PAUSE`, default on): instead of relying on
+  F5's own (inconsistent) end-of-chunk silence, the join now inserts a fixed pause AFTER each narration
+  chunk keyed to its **trailing punctuation** — `.?!`→`PAUSE_DOT` (0.5s), `,`→`PAUSE_COMMA` (0.25),
+  spaced em-dash→`PAUSE_DASH` (0.7), `…`/`...`→`PAUSE_ELLIPSIS` (0.8), `;`→0.4, `:`→0.3, else
+  `PAUSE_DEFAULT` (0.15). All env-tunable, applied at the join (retune without re-synth). A `pausemap.tsv`
+  (wav-basename→seconds) is built from the ORIGINAL trailing mark; then, unless `PUNCT_CLEAN=0`, the text
+  we synth has its trailing `…`/`...`→`.` and a trailing spaced em-dash dropped (F5 renders those poorly).
+  This is what lets `rechunk.py` split by commas freely — the pause length, not the split point, sets prosody.
+- **`rechunk.py`**: `split_units()` now splits at EVERY punctuation boundary (incl. commas) + the spaced
+  em-dash (kept on the left so the chunk ends in `—`), greedily packs to `maxchars`, keeps the merge pass
+  (fold a stressed-vowel-initial or tiny chunk into the previous — F5 drops a chunk-initial stressed vowel).
+  Added `acc_to_plus()`: normalize a stray combining acute (U+0301) → `+vowel` as a backstop before synth.
+- **`fb2-to-f5.sh` bug fix**: note/chime block guard `[ -f "$WORK/notes.ndjson" ]` → `[ -s ]`. An empty
+  notes file (a note-less chapter/subset) made an unguarded `grep` return 1 and `set -e`+pipefail killed
+  the script **before the join** → no MP3. Now the block is skipped when there are no notes.
+- **Stress reviewer** (`reviewer/index.html` + `reviewer/main.go`) — a large proofreading overhaul:
+  - **`nomark` flag** (blue "без +"): every **polysyllabic** token with **no `+`** and **no ё** is flagged —
+    a comprehensive catch of RUAccent's skips, beyond the dict-based `nostress` set.
+  - **Accepted-review navigation**: `[`/`]` step through the already-`✓`'d rows (re-review), `u` un-accepts
+    the current row, `v` advances within whichever nav (flag vs accepted) the cursor is in.
+  - **Type × mode filters over accepted rows**: 3 type toggles (`1`/`2`/`3` = ё / без удар / без +) ×
+    3 mutually-exclusive groups (`4` изм = you fixed a flag, `5` как есть = still flagged, `6` проч =
+    never flagged) — the counts sum to the ✓ total. `изм` rows are typed by their **ORIGINAL** flag.
+  - **Original-type recovery** (`main.go` `alignedOrig`): a compact difflib-style word-alignment of the
+    pristine `.txt.orig` ↔ current `.txt`, aligned by WORD not line so it **survives any rechunk**; returns
+    the pre-edit text per current row. Classification stays client-side (no duplicated dicts) — the client
+    derives each fixed row's original type from the returned text. Per-type counts show
+    `<unresolved> (<изм>/<как есть>)`.
+  - **`⌘S` while editing** now blurs (commits) the in-progress edit before saving (previously `dirty` was
+    empty so a keyboard save was a no-op; the button worked because clicking it blurred first).
+  - **Combining-acute normalization on load** (`toPlus`): source rows carrying a real `́` (U+0301) instead
+    of `+` now show an editable `+` in edit mode and save as `+`.
+  - **Stressed vowels rendered in colour** (`.ac`, blue) — the stressed vowel pops for at-a-glance review.
+
+**Files:** `f5-bridge/fb2-to-f5.sh`, `f5-bridge/rechunk.py`, `f5-bridge/reviewer/index.html`,
+`f5-bridge/reviewer/main.go`, `.gitignore` (ignore `__pycache__`), `PROGRESS.md`. No `version.*` files in
+this repo — version tracked here (1.5.0 → 1.6.0).
 
 ---
 
