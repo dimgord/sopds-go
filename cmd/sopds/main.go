@@ -124,6 +124,11 @@ func main() {
 		Short: "List books readers requested audio for (most-wanted first)",
 		RunE:  runTTSRequests,
 	}
+	ttsListCmd := &cobra.Command{
+		Use:   "tts-list",
+		Short: "Show every book's audio state (requests + tts_audio_id), fulfilled first",
+		RunE:  runTTSList,
+	}
 	ttsLinkCmd := &cobra.Command{
 		Use:   "tts-link <text_book_id> <audio_book_id>",
 		Short: "Link a text book to its generated audiobook (fulfills the request)",
@@ -136,9 +141,15 @@ func main() {
 		Args:  cobra.ExactArgs(1),
 		RunE:  runTTSUnlink,
 	}
+	audioListCmd := &cobra.Command{
+		Use:   "audio-list [count]",
+		Short: "List audiobooks newest-first (find a scanned book's id for tts-link; count<=0 ⇒ all, default 30)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE:  runAudioList,
+	}
 
 	rootCmd.AddCommand(startCmd, stopCmd, statusCmd, scanCmd, migrateCmd, initCmd, versionCmd, importCmd,
-		ttsRequestsCmd, ttsLinkCmd, ttsUnlinkCmd)
+		ttsRequestsCmd, ttsListCmd, ttsLinkCmd, ttsUnlinkCmd, audioListCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

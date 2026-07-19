@@ -40,6 +40,66 @@ func runTTSRequests(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// runTTSList prints every book with audio requests or a link, showing tts_audio_id (fulfilled first).
+func runTTSList(cmd *cobra.Command, args []string) error {
+	svc, err := ttsService()
+	if err != nil {
+		return err
+	}
+	defer svc.Close()
+	rows, err := svc.ListTTSBooks(context.Background())
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		fmt.Println("No books with audio requests or links.")
+		return nil
+	}
+	fmt.Printf("%-8s %-4s %-28s  %s\n", "book_id", "req", "audio_id", "title")
+	for _, r := range rows {
+		audio := "—"
+		if r.AudioID != nil {
+			audio = strconv.FormatInt(*r.AudioID, 10)
+			if r.AudioTitle != nil {
+				audio += " (" + *r.AudioTitle + ")"
+			}
+		}
+		fmt.Printf("%-8d %-4d %-28s  %s\n", r.BookID, r.Requests, audio, r.Title)
+	}
+	return nil
+}
+
+// runAudioList prints audiobooks newest-first, so a freshly-scanned one's book_id can be found for tts-link.
+func runAudioList(cmd *cobra.Command, args []string) error {
+	limit := 30
+	if len(args) == 1 {
+		n, err := strconv.Atoi(args[0])
+		if err != nil {
+			return fmt.Errorf("invalid count %q: %w", args[0], err)
+		}
+		limit = n // n<=0 ⇒ all
+	}
+	svc, err := ttsService()
+	if err != nil {
+		return err
+	}
+	defer svc.Close()
+	rows, err := svc.ListAudiobooks(context.Background(), limit)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		fmt.Println("No audiobooks in the library yet.")
+		return nil
+	}
+	fmt.Printf("Audiobooks, newest first (%d). Copy a book_id into: sopds tts-link <text_id> <audio_id>\n", len(rows))
+	fmt.Printf("%-8s %-6s %-16s  %s\n", "book_id", "trks", "added", "title")
+	for _, r := range rows {
+		fmt.Printf("%-8d %-6d %-16s  %s\n", r.BookID, r.TrackCount, r.RegisterDate, r.Title)
+	}
+	return nil
+}
+
 // runTTSLink links a text book to its generated audiobook (fulfills the request).
 func runTTSLink(cmd *cobra.Command, args []string) error {
 	textID, err := strconv.ParseInt(args[0], 10, 64)

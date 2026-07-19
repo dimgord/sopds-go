@@ -1,7 +1,37 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.7.0
+## Current Version: 1.7.1
+
+---
+
+### Revision 91 - 2026-07-19
+**See the audio ids you need to fulfill a request: find a scanned audiobook's `book_id` (`audio-list` + a
+book-id on the audiobook page), then verify the link (`tts-list` + a "🎧 #id" badge). All visible to everyone.**
+Follows Rev 90.
+
+The fulfillment gap: after generating F5 audio and scanning it in, that audiobook is a **separate** book
+with a **new** `book_id` — and you must know that id to run `tts-link`. Rev 90 only surfaced the id *after*
+linking. This adds the *before* half.
+
+- **Find the audiobook id (before linking):**
+  - **`sopds audio-list [count]`** (`service_tts.go` `ListAudiobooks` / `AudiobookRow`, `cmd/sopds/tts.go`):
+    audiobooks newest-first (`is_audiobook = true`), `book_id · tracks · added · title`; `count<=0` ⇒ all,
+    default 30. Header points straight at `sopds tts-link <text_id> <audio_id>`.
+  - **Web** (`web.go` `audiodetail`): the audiobook's `book_id` shown in the meta row (muted `# <id>`,
+    title "book id (for tts-link)"), so it's readable from the browser too (the id was already in the URL).
+- **Verify the link (after linking):**
+  - **`sopds tts-list`** (`ListTTSBooks` / `TTSBookRow`): every book with requests or a link, fulfilled
+    first, showing `tts_audio_id` and the linked audiobook's title (LEFT JOIN on `books`). `tts-requests`
+    still lists only the pending (unfulfilled) ones.
+  - **Web** (`web.go` book lists): a small muted "🎧 #<id>" badge next to the Listen button on fulfilled
+    books, visible to all users (not admin-only).
+
+Full flow now: `tts-requests` → generate F5 audio → scan it in → **`audio-list`** (grab the new id) →
+`tts-link <text> <audio>` → **`tts-list`** / badge to confirm.
+
+**Files:** `internal/infrastructure/persistence/service_tts.go`, `cmd/sopds/{tts,main}.go`,
+`internal/server/web.go`, `PROGRESS.md`. Version 1.7.0 → 1.7.1.
 
 ---
 

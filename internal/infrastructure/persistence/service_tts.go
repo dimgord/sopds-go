@@ -65,6 +65,55 @@ func (s *Service) TTSStatesFor(ctx context.Context, bookIDs []int64) (map[int64]
 	return out, nil
 }
 
+// TTSBookRow is one book's full on-demand-audio state (for the `tts-list` overview).
+type TTSBookRow struct {
+	BookID     int64
+	Title      string
+	Requests   int
+	AudioID    *int64
+	AudioTitle *string // title of the linked audiobook (nil when not fulfilled or missing)
+}
+
+// ListTTSBooks returns every book that has any audio requests or a linked audiobook (fulfilled first),
+// joining in the audiobook's title so a link can be eyeballed.
+func (s *Service) ListTTSBooks(ctx context.Context) ([]TTSBookRow, error) {
+	var out []TTSBookRow
+	if err := s.GORM().WithContext(ctx).Raw(
+		`SELECT b.book_id, b.title, b.tts_requests AS requests, b.tts_audio_id AS audio_id, a.title AS audio_title
+		 FROM books b LEFT JOIN books a ON a.book_id = b.tts_audio_id
+		 WHERE b.tts_requests > 0 OR b.tts_audio_id IS NOT NULL
+		 ORDER BY (b.tts_audio_id IS NOT NULL) DESC, b.tts_requests DESC, b.book_id`).
+		Scan(&out).Error; err != nil {
+		return nil, fmt.Errorf("list tts books: %w", err)
+	}
+	return out, nil
+}
+
+// AudiobookRow is one audiobook, for the `audio-list` overview (find a freshly-scanned book's id to link).
+type AudiobookRow struct {
+	BookID       int64
+	Title        string
+	TrackCount   int
+	RegisterDate string
+}
+
+// ListAudiobooks returns audiobooks newest-first (limit<=0 ⇒ all), so a just-added one's book_id can be
+// found to pass to `tts-link`.
+func (s *Service) ListAudiobooks(ctx context.Context, limit int) ([]AudiobookRow, error) {
+	var out []AudiobookRow
+	q := s.GORM().WithContext(ctx).Table("books").
+		Select("book_id, title, track_count, to_char(registerdate, 'YYYY-MM-DD HH24:MI') AS register_date").
+		Where("is_audiobook = true").
+		Order("registerdate DESC, book_id DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if err := q.Scan(&out).Error; err != nil {
+		return nil, fmt.Errorf("list audiobooks: %w", err)
+	}
+	return out, nil
+}
+
 // SetTTSAudioID links a text book to its generated audiobook (fulfillment), or clears the link when
 // audioID is nil (back to request mode). The Listen button then points at /audio/<audioID>.
 func (s *Service) SetTTSAudioID(ctx context.Context, bookID int64, audioID *int64) error {
