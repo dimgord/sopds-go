@@ -1,7 +1,47 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.6.0
+## Current Version: 1.7.0
+
+---
+
+### Revision 90 - 2026-07-19
+**On-demand audio via a request/counter "Listen" button (replaces piper auto-generation as the default);
+real audio is produced in batch with F5-TTS and linked back.** Follows Rev 89.
+
+Piper (even "high" models) sounds mechanical, so the web "Listen" button no longer auto-generates. Instead
+it collects demand, and the good audio is generated offline in batch (F5-TTS, cloned voice) and linked.
+
+- **Schema** (`migrations/014_tts_requests.sql`): two columns on `books` — `tts_requests` (cached count of
+  unique requesters) and `tts_audio_id` (NULL until fulfilled, then the book_id of the generated audiobook)
+  — plus a `tts_request_log(book_id, requester)` dedup table so each user/guest is counted once.
+- **Config** (`TTSConfig.Mode`, `tts.mode: request|generate`, default `request`): `RequestMode()` gates the
+  button behaviour. Piper only runs in `generate` mode now.
+- **Service** (`service_tts.go`): `RecordTTSRequest` (ON CONFLICT DO NOTHING + increment, returns new count
+  & whether fresh), `TTSStatesFor` (one batch query for a whole book-list page), `SetTTSAudioID`
+  (link/unlink for fulfillment), `PendingTTSRequests` (report). No DDD/domain intrusion — raw SQL via
+  `s.GORM()`; the counter is never touched by the scanner's targeted saves.
+- **Requester identity**: the logged-in username (`u:<name>`) or the existing anonymous-session cookie
+  (`a:<id>`, set if absent) — server-side dedup, same mechanism the anonymous bookshelf already uses.
+- **Handler + route** (`handleTTSRequest`, `POST /book/{id}/tts/request`): records the click, returns JSON
+  `{count, created}`. The button has three states — **Listen** (→`/audio/{tts_audio_id}`) when fulfilled;
+  **Request audio / Requested (N)** in request mode (AJAX POST, updates the count, one-time toast
+  "we've received your request"); the legacy player link in `generate` mode. State is preloaded per page
+  via `TTSStatesFor` into `BookView.{AudioRequests,AudioID}`; `PageData.TTSRequestMode` + a widened `HasTTS`
+  (also true in request mode without piper) drive the template. AJAX handler lives once in the base layout.
+- **Scan report**: `logStats()` prints the pending requests (most-wanted first) at the end of every scan.
+- **Fulfillment CLI** (`cmd/sopds/tts.go`): `sopds tts-requests` (list demand), `sopds tts-link
+  <text_book_id> <audio_book_id>` (point Listen at the generated audiobook), `sopds tts-unlink <id>`.
+- **i18n**: `tts.request` / `tts.requested` / `tts.request_received` in en + uk.
+
+Fulfillment flow: `sopds tts-requests` → generate the top book(s) with F5-TTS (proofread stress) → add the
+MP3s as an audiobook so it gets a `/audio/{id}` → `sopds tts-link <text> <audio>`. **TODO:** automated
+on-demand F5 generation on Fedya's GPU as a future `tts.mode` (unproofread, phase 2).
+
+**Files:** `internal/infrastructure/persistence/migrations/014_tts_requests.sql`, `.../service_tts.go`,
+`.../models.go`, `internal/database/models.go`, `internal/config/config.go`, `internal/server/{server,web}.go`,
+`internal/scanner/scanner.go`, `internal/i18n/locales/{en,uk}.yaml`, `cmd/sopds/{main,tts}.go`, `PROGRESS.md`.
+Version 1.6.0 → 1.7.0.
 
 ---
 

@@ -575,6 +575,14 @@ func (s *Scanner) logStats() {
 	log.Printf("Archives skipped: %d", s.stats.ArchivesSkipped)
 	log.Printf("Bad archives: %d", s.stats.BadArchives)
 	log.Printf("Books in archives: %d", s.stats.BooksInArchives)
+
+	// On-demand audio: surface books readers have requested (request mode) so they can be batch-fulfilled.
+	if pending, err := s.svc.PendingTTSRequests(context.Background()); err == nil && len(pending) > 0 {
+		log.Printf("TTS audio requested — %d book(s), most-wanted first:", len(pending))
+		for _, p := range pending {
+			log.Printf("  [%2d req] %s (book_id=%d)", p.Requests, p.Title, p.BookID)
+		}
+	}
 }
 
 // processAudioFolders groups audio files by folder and creates single audiobook entries

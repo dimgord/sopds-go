@@ -57,6 +57,9 @@ type Book struct {
 	IsAudiobook     bool   `db:"is_audiobook"`
 	TrackCount      int    `db:"track_count"`
 	Chapters        string `db:"chapters"` // JSON array
+	// On-demand TTS: tts_audio_id set → link to the generated audiobook; else tts_requests = unique request count
+	TTSRequests int    `db:"tts_requests"`
+	TTSAudioID  *int64 `db:"tts_audio_id"`
 }
 
 // Author represents an author

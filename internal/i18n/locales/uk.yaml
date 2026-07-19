@@ -176,6 +176,9 @@ reader:
 # TTS (Text-to-Speech)
 tts:
   listen: "Слухати"
+  request: "Запросити озвучку"
+  requested: "Запитано"
+  request_received: "Ми отримали ваш запит — розглянемо додавання озвучки для цієї книги."
   generate: "Створити аудіо"
   generating: "Створення аудіо..."
   queued: "У черзі"

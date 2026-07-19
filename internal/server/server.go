@@ -175,6 +175,7 @@ func (s *Server) setupRouter() chi.Router {
 		r.Get("/read/{id}", s.handleWebReader)
 
 		// TTS routes (text-to-speech)
+		r.Post("/book/{id}/tts/request", s.handleTTSRequest) // request mode: record demand, no auto-gen
 		r.Post("/book/{id}/tts/generate", s.handleTTSGenerate)
 		r.Get("/book/{id}/tts/status", s.handleTTSStatus)
 		r.Get("/book/{id}/tts", s.handleTTSPlayer)

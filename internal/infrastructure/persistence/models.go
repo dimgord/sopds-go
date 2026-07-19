@@ -30,6 +30,9 @@ type BookModel struct {
 	IsAudiobook     bool    `gorm:"column:is_audiobook;default:false;index:idx_books_is_audiobook"`
 	TrackCount      int     `gorm:"column:track_count;default:0"`
 	Chapters        *string `gorm:"column:chapters;type:jsonb"` // NULL when empty, valid JSON when set
+	// On-demand TTS request/counter
+	TTSRequests int    `gorm:"column:tts_requests;default:0"`
+	TTSAudioID  *int64 `gorm:"column:tts_audio_id"`
 
 	// Relationships (loaded via Preload)
 	Authors       []AuthorModel `gorm:"many2many:bauthors;joinForeignKey:book_id;joinReferences:author_id"`

@@ -30,7 +30,11 @@ type TTSConfig struct {
 	CacheDir     string            `yaml:"cache_dir"`     // Generated audio storage
 	Workers      int               `yaml:"workers"`       // Parallel generation jobs
 	ChunkSize    int               `yaml:"chunk_size"`    // Bytes of text per audio chunk (keep ~1000: Piper/VITS attention is O(n²) — big chunks OOM the GPU)
+	Mode         string            `yaml:"mode"`          // "request" (collect demand, no auto-gen — default) | "generate" (legacy piper auto-gen)
 }
+
+// RequestMode reports whether the Listen button collects requests instead of auto-generating (default).
+func (t TTSConfig) RequestMode() bool { return t.Mode != "generate" }
 
 // SMTPConfig holds email sending settings
 type SMTPConfig struct {
@@ -215,6 +219,7 @@ func DefaultConfig() *Config {
 			CacheDir:     "/var/lib/sopds/tts_cache",
 			Workers:      2,
 			ChunkSize:    1000, // ~1000 bytes; Piper/VITS attention is O(n²) — larger chunks blow up GPU memory (a ~2.3 KB chunk needs >8 GB)
+			Mode:         "request",
 		},
 	}
 }

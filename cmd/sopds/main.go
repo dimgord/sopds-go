@@ -118,7 +118,27 @@ func main() {
 	importCmd.Flags().String("mysql-db", "sopds", "MySQL database name")
 	importCmd.Flags().Bool("clear", false, "Clear PostgreSQL tables before import")
 
-	rootCmd.AddCommand(startCmd, stopCmd, statusCmd, scanCmd, migrateCmd, initCmd, versionCmd, importCmd)
+	// On-demand audio (request mode) fulfillment
+	ttsRequestsCmd := &cobra.Command{
+		Use:   "tts-requests",
+		Short: "List books readers requested audio for (most-wanted first)",
+		RunE:  runTTSRequests,
+	}
+	ttsLinkCmd := &cobra.Command{
+		Use:   "tts-link <text_book_id> <audio_book_id>",
+		Short: "Link a text book to its generated audiobook (fulfills the request)",
+		Args:  cobra.ExactArgs(2),
+		RunE:  runTTSLink,
+	}
+	ttsUnlinkCmd := &cobra.Command{
+		Use:   "tts-unlink <text_book_id>",
+		Short: "Clear a text book's audio link (back to request mode)",
+		Args:  cobra.ExactArgs(1),
+		RunE:  runTTSUnlink,
+	}
+
+	rootCmd.AddCommand(startCmd, stopCmd, statusCmd, scanCmd, migrateCmd, initCmd, versionCmd, importCmd,
+		ttsRequestsCmd, ttsLinkCmd, ttsUnlinkCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

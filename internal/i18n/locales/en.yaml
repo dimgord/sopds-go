@@ -176,6 +176,9 @@ reader:
 # TTS (Text-to-Speech)
 tts:
   listen: "Listen"
+  request: "Request audio"
+  requested: "Requested"
+  request_received: "We've received your request — we'll consider adding audio for this book."
   generate: "Generate Audio"
   generating: "Generating audio..."
   queued: "Queued"

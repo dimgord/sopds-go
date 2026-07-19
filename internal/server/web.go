@@ -80,7 +80,8 @@ type PageData struct {
 	CurrentPath string
 	HasEPUB     bool
 	HasMOBI     bool
-	HasTTS      bool // TTS enabled and available
+	HasTTS         bool // TTS available (piper generator, or request mode enabled)
+	TTSRequestMode bool // request mode: the Listen button collects demand instead of auto-generating
 	// Search scope - if set, search only within this context
 	ScopeAuthorID  int64
 	ScopeGenreID   int64
@@ -109,10 +110,11 @@ func (s *Server) newPageData(r *http.Request, title string) PageData {
 		SiteTitle:  s.config.Site.Title,
 		WebPrefix:  s.config.Server.WebPrefix,
 		OPDSPrefix: s.config.Server.OPDSPrefix,
-		HasEPUB:    true, // Internal converter always available
-		HasMOBI:    checkEbookConvert(s.config.Converters.FB2ToMOBI),
-		HasTTS:     s.ttsGenerator != nil,
-		Lang:       lang,
+		HasEPUB:        true, // Internal converter always available
+		HasMOBI:        checkEbookConvert(s.config.Converters.FB2ToMOBI),
+		HasTTS:         s.ttsGenerator != nil || (s.config.TTS.Enabled && s.config.TTS.RequestMode()),
+		TTSRequestMode: s.config.TTS.RequestMode(),
+		Lang:           lang,
 		Languages:  i18n.GetSupportedLanguages(),
 		Auth:       GetAuthInfo(r),
 	}
@@ -123,7 +125,8 @@ func (s *Server) addI18n(pd *PageData, r *http.Request) {
 	pd.Lang = getLang(r)
 	pd.Languages = i18n.GetSupportedLanguages()
 	pd.Auth = GetAuthInfo(r)
-	pd.HasTTS = s.ttsGenerator != nil
+	pd.HasTTS = s.ttsGenerator != nil || (s.config.TTS.Enabled && s.config.TTS.RequestMode())
+	pd.TTSRequestMode = s.config.TTS.RequestMode()
 }
 
 func getPageSize(r *http.Request) int {
@@ -198,6 +201,9 @@ type BookView struct {
 	DurationSeconds int
 	TrackCount      int
 	Narrators       []LinkedItem
+	// On-demand TTS: AudioID set → fulfilled (link to audiobook); else AudioRequests = unique request count
+	AudioRequests int
+	AudioID       *int64
 }
 
 type LinkedItem struct {
@@ -2212,6 +2218,38 @@ func (s *Server) renderReaderTemplate(w http.ResponseWriter, data ReaderData) {
 // ============================================================================
 
 // handleTTSGenerate queues a book for TTS generation
+// handleTTSRequest records a user's request for on-demand audio (request mode — no piper auto-generation;
+// real audio is produced in batch with F5-TTS and linked back). One request is counted per user/guest via
+// the tts_request_log dedup table; returns the book's new request count.
+func (s *Server) handleTTSRequest(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid book ID", http.StatusBadRequest)
+		return
+	}
+	// Requester identity: the logged-in username, else the anonymous-session cookie (set one if absent so
+	// a guest's repeat clicks don't inflate the count).
+	var requester string
+	if u := s.getUser(r); u != "" {
+		requester = "u:" + u
+	} else {
+		anon := GetAnonCookie(r)
+		if anon == "" {
+			anon = generateAnonID()
+			SetAnonCookie(w, anon)
+		}
+		requester = "a:" + anon
+	}
+	count, created, err := s.svc.RecordTTSRequest(r.Context(), id, requester)
+	if err != nil {
+		http.Error(w, "Failed to record request", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"count": count, "created": created})
+}
+
 func (s *Server) handleTTSGenerate(w http.ResponseWriter, r *http.Request) {
 	if s.ttsGenerator == nil {
 		http.Error(w, "TTS not enabled", http.StatusServiceUnavailable)
@@ -2993,6 +3031,13 @@ func (s *Server) booksToViewForUser(ctx context.Context, books []database.Book, 
 func (s *Server) booksToViewWithFilters(ctx context.Context, books []database.Book, bookshelfIDs map[int64]bool) ([]BookView, SearchFilterOptions) {
 	var views []BookView
 
+	// On-demand TTS state for every book on the page, in one query (request count / fulfilled audio link).
+	ttsIDs := make([]int64, len(books))
+	for i, b := range books {
+		ttsIDs[i] = b.ID
+	}
+	ttsStates, _ := s.svc.TTSStatesFor(ctx, ttsIDs)
+
 	// Maps to collect unique values
 	langSet := make(map[string]bool)
 	firstNameSet := make(map[string]bool)
@@ -3087,6 +3132,8 @@ func (s *Server) booksToViewWithFilters(ctx context.Context, books []database.Bo
 			DurationSeconds: b.DurationSeconds,
 			TrackCount:      b.TrackCount,
 			Narrators:       narratorLinks,
+			AudioRequests:   ttsStates[b.ID].Requests,
+			AudioID:         ttsStates[b.ID].AudioID,
 		})
 	}
 
@@ -3920,6 +3967,29 @@ const baseTemplate = `<!DOCTYPE html>
         document.cookie = 'lang=' + code + ';path=/;max-age=31536000';
         location.reload();
     }
+    // On-demand audio (request mode): record the click, update the button, toast once per fresh request.
+    document.addEventListener('click', function(e) {
+        const btn = e.target.closest('.tts-request-btn');
+        if (!btn) return;
+        e.preventDefault();
+        if (btn.dataset.busy) return;
+        btn.dataset.busy = '1';
+        fetch("{{.WebPrefix}}/book/" + btn.dataset.book + "/tts/request", {method: 'POST'})
+            .then(r => r.ok ? r.json() : Promise.reject(r.status))
+            .then(d => {
+                const lbl = btn.querySelector('.tts-lbl');
+                if (lbl) lbl.textContent = "{{t "tts.requested"}} (" + d.count + ")";
+                if (d.created) ttsToast("{{t "tts.request_received"}}");
+            })
+            .catch(() => { delete btn.dataset.busy; });
+    });
+    function ttsToast(msg) {
+        const t = document.createElement('div');
+        t.textContent = msg;
+        t.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:12px 20px;border-radius:8px;z-index:9999;box-shadow:0 2px 12px rgba(0,0,0,.3);font-size:14px;max-width:90%';
+        document.body.appendChild(t);
+        setTimeout(() => t.remove(), 4000);
+    }
     </script>
 </body>
 </html>
@@ -4122,7 +4192,7 @@ function goToPage(page) {
         <div class="book-actions">
             {{if .IsAudiobook}}<a href="{{$.WebPrefix}}/audio/{{.ID}}" class="btn btn-primary"><i class="fas fa-headphones"></i> {{if gt .TrackCount 1}}{{.TrackCount}} {{t "audio.tracks"}}{{else}}{{t "audio.book"}}{{end}}</a>{{else}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/download" class="btn btn-primary"><i class="fas fa-download"></i> {{.Format}}</a>{{end}}
             {{if or (eq .Format "FB2") (eq .Format "EPUB") (eq .Format "MOBI")}}<a href="{{$.WebPrefix}}/read/{{.ID}}" class="btn btn-info"><i class="fas fa-book-open"></i> {{t "reader.read"}}</a>{{end}}
-            {{if and $.HasTTS (eq .Format "FB2")}}<a href="{{$.WebPrefix}}/book/{{.ID}}/tts" class="btn btn-info"><i class="fas fa-volume-up"></i> {{t "tts.listen"}}</a>{{end}}
+            {{if and $.HasTTS (eq .Format "FB2")}}{{if .AudioID}}<a href="{{$.WebPrefix}}/audio/{{.AudioID}}" class="btn btn-info"><i class="fas fa-headphones"></i> {{t "tts.listen"}}</a>{{else if $.TTSRequestMode}}<button type="button" class="btn btn-info tts-request-btn" data-book="{{.ID}}"><i class="fas fa-volume-up"></i> <span class="tts-lbl">{{if gt .AudioRequests 0}}{{t "tts.requested"}} ({{.AudioRequests}}){{else}}{{t "tts.request"}}{{end}}</span></button>{{else}}<a href="{{$.WebPrefix}}/book/{{.ID}}/tts" class="btn btn-info"><i class="fas fa-volume-up"></i> {{t "tts.listen"}}</a>{{end}}{{end}}
             {{if and $.HasEPUB .CanEPUB}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/epub" class="btn btn-success"><i class="fas fa-file-arrow-down"></i> EPUB</a>{{end}}
             {{if and $.HasMOBI .CanMOBI}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/mobi" class="btn btn-warning"><i class="fas fa-file-arrow-down"></i> MOBI</a>{{end}}
             {{if .OnBookshelf}}<span class="btn btn-secondary disabled"><i class="fas fa-check"></i> Added</span>{{else}}<a href="#" onclick="return bookshelfAction(this, '{{$.WebPrefix}}/bookshelf/add/{{.ID}}')" class="btn btn-secondary"><i class="fas fa-bookmark"></i> {{t "books.addshelf"}}</a>{{end}}
@@ -5262,7 +5332,7 @@ function downloadSelected() {
         <div class="book-actions">
             {{if .IsAudiobook}}<a href="{{$.WebPrefix}}/audio/{{.ID}}" class="btn btn-primary"><i class="fas fa-headphones"></i> {{if gt .TrackCount 1}}{{.TrackCount}} {{t "audio.tracks"}}{{else}}{{t "audio.book"}}{{end}}</a>{{else}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/download" class="btn btn-primary"><i class="fas fa-download"></i> {{.Format}}</a>{{end}}
             {{if or (eq .Format "FB2") (eq .Format "EPUB") (eq .Format "MOBI")}}<a href="{{$.WebPrefix}}/read/{{.ID}}" class="btn btn-info"><i class="fas fa-book-open"></i> {{t "reader.read"}}</a>{{end}}
-            {{if and $.HasTTS (eq .Format "FB2")}}<a href="{{$.WebPrefix}}/book/{{.ID}}/tts" class="btn btn-info"><i class="fas fa-volume-up"></i> {{t "tts.listen"}}</a>{{end}}
+            {{if and $.HasTTS (eq .Format "FB2")}}{{if .AudioID}}<a href="{{$.WebPrefix}}/audio/{{.AudioID}}" class="btn btn-info"><i class="fas fa-headphones"></i> {{t "tts.listen"}}</a>{{else if $.TTSRequestMode}}<button type="button" class="btn btn-info tts-request-btn" data-book="{{.ID}}"><i class="fas fa-volume-up"></i> <span class="tts-lbl">{{if gt .AudioRequests 0}}{{t "tts.requested"}} ({{.AudioRequests}}){{else}}{{t "tts.request"}}{{end}}</span></button>{{else}}<a href="{{$.WebPrefix}}/book/{{.ID}}/tts" class="btn btn-info"><i class="fas fa-volume-up"></i> {{t "tts.listen"}}</a>{{end}}{{end}}
             {{if and $.HasEPUB .CanEPUB}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/epub" class="btn btn-success"><i class="fas fa-file-arrow-down"></i> EPUB</a>{{end}}
             {{if and $.HasMOBI .CanMOBI}}<a href="{{$.OPDSPrefix}}/book/{{.ID}}/mobi" class="btn btn-warning"><i class="fas fa-file-arrow-down"></i> MOBI</a>{{end}}
             {{if or (gt .DuplicateCount 0) (gt .DuplicateOf 0)}}<a href="{{$.WebPrefix}}/duplicates/{{.ID}}" class="btn btn-secondary"><i class="fas fa-copy"></i> {{t "books.duplicates"}}{{if gt .DuplicateCount 0}} ({{.DuplicateCount}}){{end}}</a>{{end}}
