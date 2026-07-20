@@ -139,8 +139,8 @@ help:
     lang: "everything grouped by language"
   download:
     title: "Downloads & formats"
-    p1: "Every book downloads in its original format. FB2 books convert on the fly to EPUB or MOBI."
-    example: "Found an FB2 but your Kindle wants MOBI? Hit the MOBI button and SOPDS converts it for you."
+    p1: "Every book downloads in its original format. FB2 books also convert to EPUB on the fly."
+    example: "Found an FB2 but your reader wants EPUB? Hit the EPUB button and SOPDS converts it for you."
   opds:
     title: "OPDS access"
     p1: "Point any OPDS reader at this address and your whole library shows up inside the app:"

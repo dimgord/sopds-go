@@ -1,7 +1,20 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.7.3
+## Current Version: 1.7.4
+
+---
+
+### Revision 94 - 2026-07-20
+**Help copy: EPUB-only downloads (there is no MOBI button).** Follows Rev 93.
+
+The `help.download` copy claimed FB2 converts to "EPUB or MOBI" with a "Hit the MOBI button" example, but
+MOBI conversion needs calibre's `ebook-convert` (optional, absent on Fedya) so no MOBI button is shown —
+only EPUB (always available via the internal converter). Reworded `download.p1` + `download.example` to
+EPUB-only in both locales (`en`/`uk`).
+
+**Files:** `internal/i18n/locales/{en,uk}.yaml`, `cmd/sopds/main.go` (revision 93→94), `PROGRESS.md`.
+Version 1.7.3 → 1.7.4 (tag `v1.7.4`).
 
 ---
 
