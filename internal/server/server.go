@@ -31,10 +31,12 @@ type Server struct {
 	ttsGenerator *tts.Generator
 	httpServer   *http.Server
 	router       chi.Router
+	version      string // semver from the git tag (ldflags); "dev" in source builds
+	revision     string // PROGRESS.md Rev number
 }
 
 // New creates a new HTTP server
-func New(cfg *config.Config, svc *persistence.Service) *Server {
+func New(cfg *config.Config, svc *persistence.Service, version, revision string) *Server {
 	// Determine ebook-convert path for MOBI conversion
 	ebookConvertPath := cfg.Converters.FB2ToMOBI
 	if ebookConvertPath == "" {
@@ -58,6 +60,8 @@ func New(cfg *config.Config, svc *persistence.Service) *Server {
 		converter:    converter.New(ebookConvertPath),
 		userRepo:     svc.Repos().Users,
 		emailService: NewEmailService(&cfg.SMTP, cfg.Site.Title, baseURL),
+		version:      version,
+		revision:     revision,
 	}
 
 	// Initialize TTS generator if enabled
@@ -172,6 +176,7 @@ func (s *Server) setupRouter() chi.Router {
 		r.Post("/bookshelf/remove/{id}", s.handleBookshelfRemove)
 		r.Get("/duplicates/{id}", s.handleWebDuplicates)
 		r.Get("/help", s.handleWebHelp)
+		r.Get("/about", s.handleWebAbout)
 		r.Get("/read/{id}", s.handleWebReader)
 
 		// TTS routes (text-to-speech)

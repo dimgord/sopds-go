@@ -1,7 +1,32 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.7.2
+## Current Version: 1.7.3
+
+---
+
+### Revision 93 - 2026-07-20
+**About page (Version + Revision), a fixed & rewritten Help page (it was silently broken), and a global
+`CGO_ENABLED=0` in the Taskfile.** Follows Rev 92.
+
+- **About page** (`/web/about`): a centered card showing **Version** (semver from the git tag via
+  `-X main.version`; "dev" in source builds) and **Revision** (`Rev N`). New compiled-in `main.revision`
+  const carries the PROGRESS Rev number (git tags carry the semver; this carries the Rev) — **bump it each
+  docompush** alongside the tag. `sopds version` now prints `(Rev N)` too. Plumbing: `server.New` gained
+  `version, revision` params → stored on `Server` → surfaced via `PageData.{Version,Revision}` (set in both
+  `newPageData` and `addI18n`); `handleWebAbout` + `AboutData` + nav link + `case AboutData` in
+  `renderTemplate` (without it the page would always render in English). Bilingual (en/uk).
+- **Help page fix** (`/web/help`): the template used **dotted** keys (`help.search.title`) but the locales
+  had **underscored** flat keys (`help.search_title`). Since i18n `flatten()` only produces dots from
+  *nesting*, every sub-key fell through to the raw-key fallback — the page literally displayed
+  `help.search.title`, `help.browse.cat`, … instead of text. Fixed by nesting the `help:` block in both
+  locales to match the template, then **rewriting all copy** to be human and **adding worked examples**
+  (search, scoped search, combined URL filters, format conversion) rendered in green `💡` callout boxes.
+- **Taskfile** (`env: CGO_ENABLED: "0"`): all Go tasks now default to pure-Go (no C compiler); `build`
+  simplified back to plain `go build`; `build-tts` keeps its inline `CGO_ENABLED=1` override. Extends Rev 92.
+
+**Files:** `cmd/sopds/main.go`, `internal/server/{server,web}.go`, `internal/i18n/locales/{en,uk}.yaml`,
+`Taskfile.yml`, `CLAUDE.md`, `PROGRESS.md`. Version 1.7.2 → 1.7.3 (tag `v1.7.3`).
 
 ---
 

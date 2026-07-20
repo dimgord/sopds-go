@@ -31,6 +31,10 @@ var (
 	// `-ldflags "-X main.version=<tag>"`. "dev" is the default for
 	// `go run`/`go install` from a source tree.
 	version = "dev"
+
+	// revision is the PROGRESS.md Rev number, bumped by hand each docompush
+	// (git tags carry the semver; this carries the Rev). Shown on /web/about.
+	revision = "93"
 )
 
 func main() {
@@ -101,7 +105,7 @@ func main() {
 		Use:   "version",
 		Short: "Print version information",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("SOPDS %s (Go rewrite)\n", version)
+			fmt.Printf("SOPDS %s (Rev %s, Go rewrite)\n", version, revision)
 		},
 	}
 
@@ -192,7 +196,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	// Start HTTP server
-	srv := server.New(cfg, svc)
+	srv := server.New(cfg, svc, version, revision)
 	go func() {
 		if err := srv.Start(); err != nil {
 			log.Printf("Server error: %v", err)

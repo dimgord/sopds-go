@@ -5,6 +5,11 @@ vars:
   BUILD_DIR: .
   CONFIG: config.yaml
 
+# Default all Go tasks to pure-Go (no C compiler): the only cgo code is the
+# legacy piper TTS, which builds via `build-tts` with an inline override.
+env:
+  CGO_ENABLED: "0"
+
 tasks:
   default:
     desc: Show available tasks
@@ -14,7 +19,7 @@ tasks:
   build:
     desc: Build sopds (pure Go — no piper/cgo, needs no C compiler; the default everywhere)
     cmds:
-      - CGO_ENABLED=0 go build -o {{.BINARY}} ./cmd/sopds
+      - go build -o {{.BINARY}} ./cmd/sopds
     sources:
       - "**/*.go"
     generates:

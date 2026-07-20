@@ -22,7 +22,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Also update CLAUDE.md** when architecture, route layout, config schema, or major features change — not for ordinary bug fixes.
 
-**Tag every version bump.** When a Rev bumps the version (in PROGRESS.md `## Current Version` + the version files), create a matching annotated git tag `vX.Y.Z` on that commit and push it *in the same docompush* — `git tag -a vX.Y.Z -m "Rev N (X.Y.Z): <title>"`. Tagging lapsed once between `v1.3.3` and `v1.7.1` (releases 1.4.0–1.7.0 shipped untagged, later backfilled), which is exactly what this rule prevents. Tags go to `github` (the writable remote), not `origin` (read-only Forgejo mirror).
+**Tag every version bump.** When a Rev bumps the version (in PROGRESS.md `## Current Version` + the version files), create a matching annotated git tag `vX.Y.Z` on that commit and push it *in the same docompush* — `git tag -a vX.Y.Z -m "Rev N (X.Y.Z): <title>"`. Tagging lapsed once between `v1.3.3` and `v1.7.1` (releases 1.4.0–1.7.0 shipped untagged, later backfilled), which is exactly what this rule prevents. Tags go to `github` (the writable remote), not `origin` (read-only Forgejo mirror). Pushing a `v*` tag triggers the GoReleaser Release workflow (binaries + ghcr docker + homebrew formula) — a single tag push runs it; **pushing >3 tags in one `git push` suppresses the workflow events entirely** (GitHub limit), so backfill tags won't build.
+
+**Bump `main.revision` each docompush.** `cmd/sopds/main.go` has a `revision` const (the PROGRESS Rev number) shown on the `/web/about` page and by `sopds version`. The git tag carries the semver; this const carries the Rev. Bump it in the same docompush that bumps `## Current Version` — they should always agree (Rev N ↔ 1.y.z).
 
 ---
 

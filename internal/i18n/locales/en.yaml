@@ -13,6 +13,7 @@ nav:
   audio: "Audio"
   bookshelf: "Bookshelf"
   help: "Help"
+  about: "About"
 
 # Main page
 main:
@@ -96,36 +97,57 @@ error:
   title: "Error"
   back: "Back to Home"
 
+# About page
+about:
+  title: "About"
+  tagline: "Your library, everywhere"
+  version: "Version"
+  revision: "Revision"
+  desc: "SOPDS keeps your e-books and audiobooks in one place and opens them in any OPDS reader — or right here in your browser."
+
 # Help page
 help:
   title: "Help"
-  welcome: "Welcome to SOPDS Library"
-  intro: "SOPDS is an OPDS catalog server for your e-book collection."
-  search_title: "Search"
-  search_p1: "The search bar has two fields:"
-  search_field1: "Title field — searches in book titles"
-  search_field2: "Author field — searches in author names (first and last)"
-  search_p2: "Both fields can be used together (AND logic). Check '+desc' to also search in book descriptions."
-  scope_title: "Scoped Search"
-  scope_p1: "When browsing authors, genres, series, or languages, search is automatically scoped to that context."
-  filters_title: "Advanced Filters"
-  filters_p1: "You can add URL parameters for advanced filtering:"
-  filters_lang: "lang_pattern=uk — filter by language"
-  filters_genre: "genre_pattern=comedy — filter by genre name"
-  filters_series: "series_pattern=Silo — filter by series name"
-  browse_title: "Browsing"
-  browse_p1: "Use the navigation menu to browse by:"
-  browse_cat: "Catalogs — folder structure of your library"
-  browse_auth: "Authors — alphabetical list with drill-down"
-  browse_genre: "Genres — grouped by category"
-  browse_series: "Series — alphabetical with drill-down"
-  browse_lang: "Languages — books by language"
-  download_title: "Downloads"
-  download_p1: "Each book can be downloaded in its original format. FB2 books can also be converted to EPUB or MOBI."
-  opds_title: "OPDS Access"
-  opds_p1: "Use the OPDS endpoint with e-book readers like Moon+ Reader, FBReader, or Calibre:"
-  bookshelf_title: "Bookshelf"
-  bookshelf_p1: "Add books to your personal bookshelf for quick access. Click 'Add to Shelf' on any book."
+  welcome: "Welcome to your SOPDS library"
+  intro: "SOPDS serves your e-books and audiobooks over OPDS and the web. Here's how to find your way around."
+  search:
+    title: "Search"
+    p1: "The search bar has two fields — use either on its own, or both together:"
+    field1: "searches book titles"
+    field2: "searches author names, first or last"
+    example: "Type “dune” in Title and “herbert” in Author to land straight on Dune by Frank Herbert."
+    p2: "Filling both fields narrows the results (title AND author). Tick “+desc” to search inside book descriptions too."
+  scope:
+    title: "Scoped search"
+    p1: "Open an author, genre, series, or language first, and your next search only looks inside that context."
+    example: "Open the author Stephen King, then search “tower” — you'll see only his books, not everyone's."
+  filters:
+    title: "URL filters"
+    p1: "For precise filtering, add parameters straight to the address bar:"
+    lang: "?lang_pattern=uk — only Ukrainian books"
+    genre: "?genre_pattern=sci — genres containing “sci” (sci-fi, science…)"
+    series: "?series_pattern=Silo — series whose name contains “Silo”"
+    combine: "Stack them with “&” to combine filters:"
+    example: "/web/new?lang_pattern=en&genre_pattern=fantasy"
+  browse:
+    title: "Browsing"
+    p1: "Prefer to explore? Use the menu to browse by:"
+    cat: "the folder layout of your library, as scanned from disk"
+    auth: "an A–Z list you can drill into by first letters"
+    genre: "grouped by category, e.g. Fiction › Fantasy"
+    series: "A–Z, with every book in reading order"
+    lang: "everything grouped by language"
+  download:
+    title: "Downloads & formats"
+    p1: "Every book downloads in its original format. FB2 books convert on the fly to EPUB or MOBI."
+    example: "Found an FB2 but your Kindle wants MOBI? Hit the MOBI button and SOPDS converts it for you."
+  opds:
+    title: "OPDS access"
+    p1: "Point any OPDS reader at this address and your whole library shows up inside the app:"
+    readers: "Works with Moon+ Reader, FBReader, KOReader, Calibre, and most others."
+  bookshelf:
+    title: "Bookshelf"
+    p1: "Tap “Add to shelf” on any book to keep it handy on your personal bookshelf — it works even before you sign in."
 
 # Auth pages
 auth:

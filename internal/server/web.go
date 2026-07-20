@@ -95,6 +95,9 @@ type PageData struct {
 	Languages []i18n.Language // Available languages for switcher
 	// Auth info
 	Auth AuthInfo // User authentication state
+	// Build info (for the About page)
+	Version  string // semver from the git tag; "dev" in source builds
+	Revision string // PROGRESS.md Rev number
 }
 
 // Available page sizes
@@ -117,6 +120,8 @@ func (s *Server) newPageData(r *http.Request, title string) PageData {
 		Lang:           lang,
 		Languages:  i18n.GetSupportedLanguages(),
 		Auth:       GetAuthInfo(r),
+		Version:    s.version,
+		Revision:   s.revision,
 	}
 }
 
@@ -127,6 +132,8 @@ func (s *Server) addI18n(pd *PageData, r *http.Request) {
 	pd.Auth = GetAuthInfo(r)
 	pd.HasTTS = s.ttsGenerator != nil || (s.config.TTS.Enabled && s.config.TTS.RequestMode())
 	pd.TTSRequestMode = s.config.TTS.RequestMode()
+	pd.Version = s.version
+	pd.Revision = s.revision
 }
 
 func getPageSize(r *http.Request) int {
@@ -2102,6 +2109,17 @@ func (s *Server) handleWebHelp(w http.ResponseWriter, r *http.Request) {
 	s.renderTemplate(w, "help", data)
 }
 
+// AboutData contains data for the About page (build info comes from PageData).
+type AboutData struct {
+	PageData
+}
+
+func (s *Server) handleWebAbout(w http.ResponseWriter, r *http.Request) {
+	pd := s.newPageData(r, "")
+	pd.Title = i18n.T(pd.Lang, "about.title")
+	s.renderTemplate(w, "about", AboutData{PageData: pd})
+}
+
 // ReaderData contains data for the book reader page
 type ReaderData struct {
 	PageData
@@ -3270,6 +3288,8 @@ func (s *Server) renderTemplate(w http.ResponseWriter, name string, data interfa
 			lang = d.Lang
 		case HelpData:
 			lang = d.Lang
+		case AboutData:
+			lang = d.Lang
 		}
 	}
 	if lang == "" {
@@ -3905,6 +3925,7 @@ const baseTemplate = `<!DOCTYPE html>
                     <a href="{{.WebPrefix}}/bookshelf"><i class="fas fa-bookmark"></i> {{t "nav.bookshelf"}}</a>
                     <a href="{{.OPDSPrefix}}/"><i class="fas fa-rss"></i> OPDS</a>
                     <a href="{{.WebPrefix}}/help"><i class="fas fa-circle-question"></i> {{t "nav.help"}}</a>
+                    <a href="{{.WebPrefix}}/about"><i class="fas fa-circle-info"></i> {{t "nav.about"}}</a>
                     <span class="lang-switch">{{range .Languages}}<a href="javascript:void(0)" onclick="switchLang('{{.Code}}')"{{if eq $.Lang .Code}} class="active"{{end}}>{{.Code}}</a>{{end}}</span>
                     <div class="user-dropdown">
                         <button class="user-btn"><i class="fas fa-user-circle"></i>{{if .Auth.IsAuthenticated}} {{.Auth.Username}}{{else if .Auth.IsAnonymous}} {{t "auth.guest"}}{{end}}</button>
@@ -5495,6 +5516,36 @@ function downloadSelected() {
 <a href="{{.WebPrefix}}/" class="btn btn-primary" style="margin-top: 20px;"><i class="fas fa-home"></i> {{t "error.back"}}</a>
 {{end}}`,
 
+	"about": `{{define "content"}}
+<div class="about-page">
+    <div class="about-card">
+        <div class="about-logo"><i class="fas fa-book-open"></i></div>
+        <h1>{{.SiteTitle}}</h1>
+        <p class="about-tagline">{{t "about.tagline"}}</p>
+        <dl class="about-build">
+            <dt>{{t "about.version"}}</dt>
+            <dd>{{if eq .Version "dev"}}<span class="about-dev">dev</span>{{else}}v{{.Version}}{{end}}</dd>
+            <dt>{{t "about.revision"}}</dt>
+            <dd>Rev {{.Revision}}</dd>
+        </dl>
+        <p class="about-desc">{{t "about.desc"}}</p>
+        <p class="about-link"><a href="https://github.com/dimgord/sopds-go" target="_blank" rel="noopener"><i class="fab fa-github"></i> github.com/dimgord/sopds-go</a></p>
+    </div>
+</div>
+<style>
+.about-page{display:flex;justify-content:center;padding:2rem 1rem}
+.about-card{max-width:460px;width:100%;text-align:center;background:var(--card-bg,#fff);border:1px solid var(--border,#e0e0e0);border-radius:12px;padding:2.5rem 2rem;box-shadow:0 2px 12px rgba(0,0,0,.06)}
+.about-logo{font-size:3rem;color:var(--accent,#4a7);margin-bottom:.5rem}
+.about-card h1{margin:.2rem 0;font-size:1.6rem}
+.about-tagline{color:var(--muted,#888);margin:0 0 1.5rem}
+.about-build{display:grid;grid-template-columns:auto auto;gap:.4rem 1rem;justify-content:center;align-items:center;margin:1.5rem 0;font-size:1.05rem}
+.about-build dt{text-align:right;color:var(--muted,#888)}
+.about-build dd{text-align:left;margin:0;font-weight:600;font-variant-numeric:tabular-nums}
+.about-dev{color:#c60;font-weight:600}
+.about-desc{color:var(--muted,#888);font-size:.95rem;margin:1.5rem 0 1rem}
+.about-link a{color:var(--accent,#4a7);text-decoration:none}
+</style>
+{{end}}`,
 	"help": `{{define "content"}}
 <div class="help-page">
 <h2><i class="fas fa-circle-question"></i> {{t "help.welcome"}}</h2>
@@ -5507,12 +5558,14 @@ function downloadSelected() {
         <li><strong>{{t "search.title"}}</strong> — {{t "help.search.field1"}}</li>
         <li><strong>{{t "search.author"}}</strong> — {{t "help.search.field2"}}</li>
     </ul>
+    <p class="eg"><i class="fas fa-lightbulb"></i> {{t "help.search.example"}}</p>
     <p>{{t "help.search.p2"}}</p>
 </section>
 
 <section>
     <h3><i class="fas fa-crosshairs"></i> {{t "help.scope.title"}}</h3>
     <p>{{t "help.scope.p1"}}</p>
+    <p class="eg"><i class="fas fa-lightbulb"></i> {{t "help.scope.example"}}</p>
 </section>
 
 <section>
@@ -5523,6 +5576,8 @@ function downloadSelected() {
         <li><code>{{t "help.filters.genre"}}</code></li>
         <li><code>{{t "help.filters.series"}}</code></li>
     </ul>
+    <p>{{t "help.filters.combine"}}</p>
+    <code class="url">{{t "help.filters.example"}}</code>
 </section>
 
 <section>
@@ -5540,12 +5595,14 @@ function downloadSelected() {
 <section>
     <h3><i class="fas fa-download"></i> {{t "help.download.title"}}</h3>
     <p>{{t "help.download.p1"}}</p>
+    <p class="eg"><i class="fas fa-lightbulb"></i> {{t "help.download.example"}}</p>
 </section>
 
 <section>
     <h3><i class="fas fa-rss"></i> {{t "help.opds.title"}}</h3>
     <p>{{t "help.opds.p1"}}</p>
     <code class="url">{{.OPDSPrefix}}/</code>
+    <p class="eg"><i class="fas fa-lightbulb"></i> {{t "help.opds.readers"}}</p>
 </section>
 
 <section>
@@ -5565,6 +5622,8 @@ function downloadSelected() {
 .help-page .code-list li { background: #f8fafc; padding: 8px 15px; border-radius: 6px; margin: 5px 0; }
 .help-page code { background: #f1f5f9; padding: 2px 8px; border-radius: 4px; font-family: monospace; }
 .help-page code.url { display: block; background: var(--dark); color: #22c55e; padding: 12px 15px; border-radius: 8px; margin-top: 10px; }
+.help-page .eg { background: #f0fdf4; border-left: 3px solid #22c55e; padding: 10px 15px; border-radius: 6px; color: #166534; margin: 12px 0; line-height: 1.6; }
+.help-page .eg i { color: #22c55e; margin-right: 4px; }
 </style>
 {{end}}`,
 }
