@@ -1,7 +1,30 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.7.1
+## Current Version: 1.7.2
+
+---
+
+### Revision 92 - 2026-07-20
+**`task build` no longer needs a C compiler: split the cgo `sopds-tts` out of the default build so
+`migrate`/`start`/`scan`/… run on machines without gcc (e.g. Fedya).** Follows Rev 91.
+
+On Fedya (no gcc in the Go dev shell — it uses the native Rust `sopds-tts-rs` for TTS, not piper),
+`task migrate` failed at the `build` step: `cgo: C compiler "gcc" not found`. Root cause: the `build`
+task compiled **both** `sopds` and `sopds-tts`, and everything cgo (piper via `onnxruntime_go`) lives in
+`cmd/sopds-tts` + `internal/tts/piper.go` (both `//go:build cgo`). Under `CGO_ENABLED=0`, `sopds` builds
+pure-Go (piper.go excluded) but `cmd/sopds-tts` has *zero* buildable files → `build constraints exclude all
+Go files`. Since every sopds-only task (`migrate`, `init`, `start`, `scan`, `dupes`, `import-mysql`,
+`version`, `dev`) `deps: [build]`, the whole toolchain was gated on gcc for no reason.
+
+- **`Taskfile.yml`**: `build` now builds **only** `sopds` with `CGO_ENABLED=0` (pure Go, no C compiler) —
+  the sane default everywhere. New **`build-tts`** task builds the standalone piper binary `sopds-tts` with
+  `CGO_ENABLED=1` (opt-in; needs gcc + onnxruntime). All existing `deps: [build]` now succeed without gcc.
+- Piper generate-mode is legacy (superseded by F5 batch + the Rev 90 request/counter model); the main
+  `sopds` binary no longer ships it by default. Build with `build-tts` (or `CGO_ENABLED=1`) if piper is
+  wanted. No Go code changed.
+
+**Files:** `Taskfile.yml`, `PROGRESS.md`. Version 1.7.1 → 1.7.2 (tag `v1.7.2`).
 
 ---
 

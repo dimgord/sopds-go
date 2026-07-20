@@ -12,14 +12,22 @@ tasks:
       - task --list
 
   build:
-    desc: Build all binaries (sopds and sopds-tts)
+    desc: Build sopds (pure Go — no piper/cgo, needs no C compiler; the default everywhere)
     cmds:
-      - go build -o {{.BINARY}} ./cmd/sopds
-      - go build -o sopds-tts ./cmd/sopds-tts
+      - CGO_ENABLED=0 go build -o {{.BINARY}} ./cmd/sopds
     sources:
       - "**/*.go"
     generates:
       - "{{.BINARY}}"
+
+  build-tts:
+    desc: Build the standalone piper TTS binary sopds-tts (cgo — needs gcc + onnxruntime)
+    cmds:
+      - CGO_ENABLED=1 go build -o sopds-tts ./cmd/sopds-tts
+    sources:
+      - "cmd/sopds-tts/**/*.go"
+      - "internal/tts/**/*.go"
+    generates:
       - "sopds-tts"
 
   init:
