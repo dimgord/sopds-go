@@ -1,7 +1,34 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.7.4
+## Current Version: 1.7.5
+
+---
+
+### Revision 95 - 2026-07-21
+**CI follow-up: bump all GitHub Actions to their Node 24 majors, and migrate the deprecated GoReleaser
+`brews:` (formula) to `homebrew_casks:`.** Follows Rev 94.
+
+- **Node 20 → 24** (GitHub deprecated the Node 20 action runtime; actions were being force-run on 24). Bumped
+  to the first Node-24 major of each and dropped the `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` workaround env:
+  - `release.yml`: `checkout@v4→v5`, `setup-go@v5→v6`, `setup-qemu-action@v3→v4`, `setup-buildx-action@v3→v4`,
+    `login-action@v3→v4`, `goreleaser-action@v6→v7`.
+  - `ci.yml`: `checkout@v4→v5`, `setup-go@v5→v6` (×3 jobs), `golangci-lint-action@v7→v9` (v7/v8 were Node 20;
+    v9 needs golangci-lint ≥ v2.1.0, which `version: latest` satisfies).
+- **`brews:` → `homebrew_casks:`** (`.goreleaser.yaml`): GoReleaser deprecated formula publishing (Homebrew
+  is moving pre-built binaries to casks). A cask installs the binaries directly — no Ruby `install`/`test`
+  block — so `binaries: [sopds, zipdupes]` replaces the install block; the extra data files
+  (`init.sql`, `config.yaml.example`) now ship only in the release archive (pointed to from caveats).
+  Added a `hooks.post.install` that strips the macOS Gatekeeper quarantine flag (`xattr -dr
+  com.apple.quarantine`) since the binaries are unsigned. Dropped the `recommended` postgres dep (cask deps
+  are hard) — kept in caveats. Validated with `goreleaser check` (config valid, `brews` warning gone).
+  - ⚠️ **Manual step after the first cask release:** delete the old `Formula/sopds-go.rb` from
+    `dimgord/homebrew-tap`, or `brew install sopds-go` becomes formula/cask-ambiguous.
+- Remaining CI deprecation (not addressed, still works): GoReleaser `dockers`/`docker_manifests` →
+  `dockers_v2` (surfaced by `goreleaser check`).
+
+**Files:** `.github/workflows/{ci,release}.yml`, `.goreleaser.yaml`, `cmd/sopds/main.go` (revision 94→95),
+`PROGRESS.md`. Version 1.7.4 → 1.7.5 (tag `v1.7.5` — the first release built with the cask migration).
 
 ---
 
