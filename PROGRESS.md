@@ -5,6 +5,38 @@
 
 ---
 
+### Revision 96 - 2026-07-21
+**Auto-F5 Phase 2a: RUAccent stress runtime as a pure-Nix flake (no pip/venv).** Follows Rev 95.
+No app-version bump / tag — this is a subproject Nix flake; the Go binary is unchanged (so
+`main.revision` stays 95 and `## Current Version` stays 1.7.5).
+
+Enabler for auto-F5 audio generation on Fedya: `fb2-to-f5.sh`'s STRESS half (RUAccent) needs to run
+there without pip/venvs. Key finding: RUAccent 1.5.8.3 loads its accent models via **onnxruntime, not
+torch** — so the stress env is plain CPU python; no torch/CUDA. Everything but RUAccent itself is in
+nixpkgs (razdel, python-crfsuite, onnxruntime, transformers, sentencepiece, huggingface-hub).
+
+- **`f5-bridge/flake.nix`** (new, + `flake.lock`):
+  - `ruaccent` — `buildPythonPackage` of RUAccent 1.5.8.3 from PyPI. `format = "setuptools"` (the sdist
+    ships setup.py; its pyproject.toml declares a flit backend we skip). `postPatch` makes the model
+    workdir honor `$RUACCENT_HOME` (default `~/.cache/ruaccent`) instead of the read-only store path.
+  - `ruaccent-koziev` — FOD (`snapshot_download('ruaccent/accentuator', allow_patterns=['koziev/**'])`,
+    needs `cacert` + writable `$HF_HOME`). koziev is a 189 MB python subpackage RUAccent imports as
+    `from .koziev...`, so it must sit **inside** the (read-only) package dir → bundled at build via
+    `postInstall`, which also makes the runtime koziev-download branch a no-op.
+  - `ruaccent-python` (RUPY) + `devShells.default` = RUPY + p7zip + ffmpeg (for `fb2-to-f5.sh`).
+- Validated on macOS: full-quality stress (`Тьм+а сгуст+илась…`, omograph disambiguation, 0 fallbacks),
+  works with and without `$RUACCENT_HOME`. Same env runs on Fedya (CPU onnx). dictionary+nn models
+  still download once at runtime into `$RUACCENT_HOME`.
+- **Multi-language direction (for Phase 2b):** the synth engine (`sopds-tts-rs`) is language-agnostic
+  (char tokenizer + per-language model dir), so languages plug in as `{stress_engine, f5_model, ref_voice}`
+  per lang. **ru** done here; **en** — export the official `F5TTS_v1_Base` to ONNX + an English ref
+  (no stress tool needed); **uk** — nixify a uk stress tool (`ukrainian-word-stress`/`ukrainian-accentor`)
+  later + a self-trained uk F5 checkpoint (no ready one exists). Phase 2b is built language-keyed.
+
+**Files:** `f5-bridge/flake.nix`, `f5-bridge/flake.lock`, `PROGRESS.md`. No version change.
+
+---
+
 ### Revision 95 - 2026-07-21
 **CI follow-up: bump all GitHub Actions to their Node 24 majors, and migrate the deprecated GoReleaser
 `brews:` (formula) to `homebrew_casks:`.** Follows Rev 94.
