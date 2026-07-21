@@ -151,9 +151,16 @@ func main() {
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runAudioList,
 	}
+	ttsWorkerCmd := &cobra.Command{
+		Use:   "tts-worker",
+		Short: "Auto-fulfill the most-requested audio requests with F5-TTS (run as the F5-env user on the GPU box)",
+		RunE:  runTTSWorker,
+	}
+	ttsWorkerCmd.Flags().Int("max", 1, "max books to generate this pass (GPU is serial)")
+	ttsWorkerCmd.Flags().Bool("dry-run", false, "print the planned fb2-to-f5.sh invocation without generating")
 
 	rootCmd.AddCommand(startCmd, stopCmd, statusCmd, scanCmd, migrateCmd, initCmd, versionCmd, importCmd,
-		ttsRequestsCmd, ttsListCmd, ttsLinkCmd, ttsUnlinkCmd, audioListCmd)
+		ttsRequestsCmd, ttsListCmd, ttsLinkCmd, ttsUnlinkCmd, audioListCmd, ttsWorkerCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

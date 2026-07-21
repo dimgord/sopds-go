@@ -31,10 +31,34 @@ type TTSConfig struct {
 	Workers      int               `yaml:"workers"`       // Parallel generation jobs
 	ChunkSize    int               `yaml:"chunk_size"`    // Bytes of text per audio chunk (keep ~1000: Piper/VITS attention is O(n²) — big chunks OOM the GPU)
 	Mode         string            `yaml:"mode"`          // "request" (collect demand, no auto-gen — default) | "generate" (legacy piper auto-gen)
+	Worker       WorkerConfig      `yaml:"worker"`        // auto-F5 fulfillment worker (`sopds tts-worker`)
 }
 
 // RequestMode reports whether the Listen button collects requests instead of auto-generating (default).
 func (t TTSConfig) RequestMode() bool { return t.Mode != "generate" }
+
+// WorkerConfig drives `sopds tts-worker` — a separate process (run as the F5-env user on the GPU box)
+// that auto-fulfills the most-requested pending books with F5-TTS via f5-bridge/fb2-to-f5.sh.
+type WorkerConfig struct {
+	Threshold    int                         `yaml:"threshold"`     // min unique requests before a book is generated
+	Review       string                      `yaml:"review"`        // "gate" (stress → editor review → synth) | "auto" (one-shot MODE=all)
+	OutputSubdir string                      `yaml:"output_subdir"` // subfolder under library.root for generated .7z audiobooks
+	F5Home       string                      `yaml:"f5_home"`       // f5-spike path (scripts + models + ref); configurable
+	Script       string                      `yaml:"script"`        // fb2-to-f5.sh path (defaults to <f5_home>/fb2-to-f5.sh)
+	F5Bin        string                      `yaml:"f5_bin"`        // sopds-tts-rs binary (native synth); empty ⇒ fb2-to-f5.sh default
+	MaxChars     int                         `yaml:"max_chars"`     // MAXCHARS: max chars per synth chunk (fb2-to-f5.sh default 250)
+	Languages    map[string]WorkerLangConfig `yaml:"languages"`     // per-language assets; a book whose lang is absent here is skipped
+}
+
+// WorkerLangConfig is one language's synthesis assets for the auto-F5 worker.
+type WorkerLangConfig struct {
+	F5Model    string `yaml:"f5_model"`    // model dir: 3 ONNX graphs + vocab.txt + ref.wav/ref.txt
+	NotesModel string `yaml:"notes_model"` // optional 2nd voice dir for footnotes (e.g. luka)
+	Stress     string `yaml:"stress"`      // "ruaccent" | "none" (en) | "uk-stress" (later); how to accent before synth
+}
+
+// ReviewGate reports whether the worker pauses for stress-editor review before synthesis (default gate).
+func (w WorkerConfig) ReviewGate() bool { return w.Review != "auto" }
 
 // SMTPConfig holds email sending settings
 type SMTPConfig struct {
@@ -220,6 +244,13 @@ func DefaultConfig() *Config {
 			Workers:      2,
 			ChunkSize:    1000, // ~1000 bytes; Piper/VITS attention is O(n²) — larger chunks blow up GPU memory (a ~2.3 KB chunk needs >8 GB)
 			Mode:         "request",
+			Worker: WorkerConfig{
+				Threshold:    3,
+				Review:       "gate",
+				OutputSubdir: "_tts",
+				MaxChars:     250, // matches fb2-to-f5.sh MAXCHARS default
+				Languages:    map[string]WorkerLangConfig{},
+			},
 		},
 	}
 }
