@@ -21,11 +21,16 @@ fn is_allowed(c: char) -> bool {
         || ('А'..='Я').contains(&c)
         || c == 'ё'
         || c == 'Ё'
+        // Exactly RUAccent's normalize class (verified against the compiled pattern's codepoints):
+        // em-dash, . , ! ? : ; , STRAIGHT apostrophe ' (U+0027), ( ) { } [ ] backslash, « », and the
+        // curly DOUBLE quotes „ “ ” (U+201E/201C/201D), hyphen. NOT the straight double quote " (U+0022)
+        // and NOT the curly SINGLE quotes ‘ ’ (U+2018/2019) — RUAccent strips those, so we must too
+        // (else e.g. "d’etre"/"кат’ликом" keep an apostrophe Python drops, splitting the word).
         || matches!(
             c,
             '—' | '.' | ',' | '!' | '?' | ':' | ';'
-                | '"' | '\'' | '(' | ')' | '{' | '}' | '[' | ']'
-                | '«' | '»' | '„' | '“' | '”' | '‘' | '’' | '-'
+                | '\'' | '(' | ')' | '{' | '}' | '[' | ']' | '\\'
+                | '«' | '»' | '„' | '\u{201C}' | '\u{201D}' | '-'
         )
 }
 
@@ -201,6 +206,13 @@ mod tests {
     fn normalize_strips() {
         assert_eq!(normalize("абв🎧xyz—«»"), "абвxyz—«»");
         assert_eq!(normalize("ёЁ"), "ёЁ");
+        // Quote/apostrophe class must match RUAccent exactly: keep straight ' (U+0027), « », „ “ ”;
+        // STRIP the straight double quote " (U+0022) and the curly single quotes ‘ ’ (U+2018/2019).
+        assert_eq!(normalize("d\u{2019}etre"), "detre"); // curly ' dropped (Python does)
+        assert_eq!(normalize("it's"), "it's"); // straight ' kept
+        assert_eq!(normalize("\u{0022}hi\u{0022}"), "hi"); // straight " dropped
+        assert_eq!(normalize("\u{201C}hi\u{201D}"), "\u{201C}hi\u{201D}"); // curly " kept
+        assert_eq!(normalize("a\u{2018}b"), "ab"); // curly ' dropped
     }
 
     #[test]
