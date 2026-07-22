@@ -74,9 +74,12 @@
           inherit pname version;
           hash = "sha256-E0NNiUl5F1csplvh+LTfvtP0YhZX/TvPochE868l1f4=";
         };
-        dependencies = with py.pkgs; [
-          huggingface-hub onnxruntime transformers sentencepiece numpy python-crfsuite razdel
-        ];
+        # NB: py.pkgs.onnxruntime is qualified — an unqualified `onnxruntime` under `with py.pkgs`
+        # would resolve to this flake's let-bound CUDA C++ onnxruntime (name collision), not the
+        # python module, giving "No module named 'onnxruntime'".
+        dependencies = [ py.pkgs.onnxruntime ] ++ (with py.pkgs; [
+          huggingface-hub transformers sentencepiece numpy python-crfsuite razdel
+        ]);
         postPatch = ''
           substituteInPlace ruaccent/ruaccent.py \
             --replace-fail \
