@@ -14,6 +14,7 @@ mod dicts;
 mod models;
 mod ner;
 mod preprocess;
+mod razdel;
 mod tok_bert;
 
 use dicts::Dicts;
@@ -48,7 +49,7 @@ impl RuAccent {
     pub fn process_all(&mut self, text: &str) -> io::Result<String> {
         let text = preprocess::normalize(text);
         let mut out = String::new();
-        for sentence in split_by_sentences_naive(&text) {
+        for sentence in razdel::split_by_sentences(&text) {
             let (words, remaining) = preprocess::split_by_words(&sentence);
             if words.is_empty() {
                 out.push_str(&remaining.concat());
@@ -149,21 +150,38 @@ impl RuAccent {
     }
 }
 
-/// Naive stand-in for RUAccent's razdel `split_by_sentences` (Phase 3 replaces this with a faithful
-/// razdel port). Treats the whole input as one sentence, which is bit-exact with Python for
-/// single-sentence inputs (the common case for the fb2-to-f5 line-by-line feed). An empty input
-/// yields no sentences (matches razdel, which returns []).
-fn split_by_sentences_naive(text: &str) -> Vec<String> {
-    if text.is_empty() {
-        Vec::new()
-    } else {
-        vec![text.to_string()]
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Faithful razdel `split_by_sentences` — bit-exact vs Python `TextPreprocessor.split_by_sentences`
+    // (abbreviations, initials, paired sokr, quotes, bullet lists, no-final-punct). No models needed.
+    #[test]
+    fn sentence_split_parity() {
+        let cases: &[(&str, &[&str])] = &[
+            ("Привет. Как дела?", &["Привет.", " Как дела?"]),
+            ("Он пришёл домой. Было поздно.", &["Он пришёл домой.", " Было поздно."]),
+            ("Это стоит 5 руб. и ни копейки больше.", &["Это стоит 5 руб. и ни копейки больше."]),
+            ("А. С. Пушкин родился в Москве.", &["А. С. Пушкин родился в Москве."]),
+            ("Первый пункт. Второй пункт! Третий?", &["Первый пункт.", " Второй пункт!", " Третий?"]),
+            ("Она сказала: «Иди сюда». Он пошёл.", &["Она сказала: «Иди сюда».", " Он пошёл."]),
+            ("Список: 1. хлеб 2. молоко.", &["Список: 1. хлеб 2. молоко."]),
+            ("В 1999 г. случилось это. А потом всё изменилось.", &["В 1999 г. случилось это.", " А потом всё изменилось."]),
+            ("Т. е. это конец. Начало другого.", &["Т. е. это конец.", " Начало другого."]),
+            ("Одно предложение без конца", &["Одно предложение без конца"]),
+            // Edge cases: ellipsis, ?!, smiley, brackets, roman-numeral chapters, dash, newline gap.
+            ("Он ушёл... Она осталась.", &["Он ушёл...", " Она осталась."]),
+            ("Что?! Неужели?", &["Что?!", " Неужели?"]),
+            ("Смотри :) это смайлик. Да.", &["Смотри :) это смайлик.", " Да."]),
+            ("Дом (большой) стоял тут. Рядом лес.", &["Дом (большой) стоял тут.", " Рядом лес."]),
+            ("Гл. I. Начало. Гл. II. Конец.", &["Гл. I. Начало.", " Гл. II.", " Конец."]),
+            ("Текст — это хорошо. Ещё текст.", &["Текст — это хорошо.", " Ещё текст."]),
+            ("Первая строка.\nВторая строка.", &["Первая строка.", "\nВторая строка."]),
+        ];
+        for (input, want) in cases {
+            assert_eq!(razdel::split_by_sentences(input), *want, "split({input:?})");
+        }
+    }
 
     // Full-pipeline parity vs Python `RUAccent.process_all` (turbo2, use_dictionary=True), on
     // single-sentence inputs (naive sentence split matches razdel there). Gated on the model dir.
@@ -203,6 +221,16 @@ mod tests {
             // Same homograph twice, different reading by position: З+амок (castle) … зам+ок (lock).
             ("Замок был заперт на большой замок.", "З+амок был з+аперт н+а больш+ой зам+ок."),
             ("Три мушкетёра и один гвардеец.", "Тр+и мушкетёра и од+ин гвард+еец."),
+            // Multi-sentence (exercises the razdel split feeding per-sentence NER).
+            (
+                "Старый замок стоял на горе. Он запер замок на ключ.",
+                "Ст+арый з+амок сто+ял на гор+е. Он з+апер зам+ок на кл+юч.",
+            ),
+            ("Привет. Как дела? Всё хорошо.", "Прив+ет. К+ак дел+а? Вс+ё хорош+о."),
+            (
+                "Она сказала: «Иди сюда». Он пошёл домой.",
+                "Он+а сказ+ала: «Ид+и сюд+а». +Он пошёл дом+ой.",
+            ),
         ];
         for (input, want) in cases {
             assert_eq!(ra.process_all(input).unwrap(), want, "process_all({input:?})");

@@ -60,8 +60,11 @@ text preprocessing. Huge scope reduction.
   vs Python (put_accent, stress/yo NER labels, and 15 full-sentence `process_all` cases incl. multi-
   homograph and same-word-twice disambiguation). No `ndarray` needed — `ort` tensors are built from
   `Vec + shape` directly. Sentence split still naive (Phase 3).
-- **Phase 3:** faithful razdel `sentenize` port (abbreviations, initials, no-split cases) → 1:1
-  boundaries.
+- **Phase 3 (DONE):** faithful razdel `sentenize` port (`razdel.rs`) — the delimiter regex, all 11
+  ordered JOIN rules, the sokr/pair-sokr/initials sets, the 10-char windows, `segment`, and
+  `find_substrings`, plus RUAccent's `split_by_sentences` reconstruction on top. Bit-exact vs Python on
+  17 cases (abbreviations, initials, paired sokr, quotes, bullet lists, ellipsis, `?!`, smileys,
+  brackets, roman-numeral chapters, dash, newline gaps) and on multi-sentence `process_all`.
 - **Phase 4:** `sopds-tts-rs stress` subcommand (stdin→stdout, drop-in for `ruaccent_batch.py`);
   point `fb2-to-f5.sh` at it; parity harness to **0 diffs**; then delete RUPY / the nix
   ruaccent-python / `f5-bridge/flake.nix` / `ruaccent_batch.py`.

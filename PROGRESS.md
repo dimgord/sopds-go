@@ -5,6 +5,38 @@
 
 ---
 
+### Revision 99 - 2026-07-22
+**Auto-F5: RUAccent→Rust port, Phase 3 (faithful razdel sentence splitter — bit-exact).**
+Branch `ruaccent-rs`. No app-version bump / tag (subproject Rust; Go binary unchanged). Follows Rev 98.
+Decision doc updated: `docs/decisions/004-ruaccent-rust-port.md`.
+
+Replaces the Phase-2 naive whole-text-as-one-sentence stand-in with a **faithful port of razdel's
+rule-based sentence segmenter** — the last algorithmic gap to multi-sentence bit-exactness (RUAccent
+runs the NER models per sentence, so boundaries must match Python 1:1). `cargo test` green (9 tests).
+
+- **`src/ruaccent/razdel.rs`** (new) — ports `razdel/segmenters/sentenize.py` + split/base/rule/punct/
+  sokr/substring in full: the delimiter regex (`ENDINGS;`+generic/close quotes+close brackets+smileys),
+  all 11 ordered JOIN rules (`empty_side`, `no_space_prefix`, `lower_right`, `delimiter_right`,
+  `sokr_left`, `inside_pair_sokr`, `initials_left`, `list_item`, `close_quote`, `close_bracket`,
+  `dash_right`) with `close_bound`, the sokr/head-sokr/pair-sokr/head-pair-sokr/initials sets (incl.
+  razdel's malformed "жен рмуж р" pair, which is dead — dropped), the 10-CHARACTER left/right windows,
+  the `segment` buffer loop, and byte-offset `find_substrings`. On top: RUAccent's
+  `TextPreprocessor.split_by_sentences` (gap-prepended reconstruction). Python `str.isalpha/islower/
+  isupper/isdigit` semantics reproduced as helpers.
+- **`src/ruaccent/mod.rs`** — `process_all` now splits via `razdel::split_by_sentences`.
+- **Tests:** new `sentence_split_parity` (17 cases vs Python `split_by_sentences`, hitting every rule
+  category); `process_all_parity` extended with 3 multi-sentence cases (razdel split → per-sentence
+  NER → rejoin), all bit-exact.
+
+With Phase 3 done, the stress *logic* is fully native and bit-exact end-to-end. Only Phase 4 remains:
+the `sopds-tts-rs stress` subcommand (stdin→stdout drop-in for `ruaccent_batch.py`) + a corpus parity
+harness to 0 diffs, then delete RUPY / the `f5-bridge` flake / `ruaccent_batch.py`.
+
+**Files:** `sopds-tts-rs/src/ruaccent/{razdel,mod}.rs`, `docs/decisions/004-ruaccent-rust-port.md`,
+`PROGRESS.md`. No version change.
+
+---
+
 ### Revision 98 - 2026-07-22
 **Auto-F5: RUAccent→Rust port, Phase 2 (all four neural models — full pipeline, bit-exact).**
 Branch `ruaccent-rs`. No app-version bump / tag (subproject Rust; Go binary unchanged). Follows Rev 97.
