@@ -101,7 +101,8 @@
       '';
     in
     {
-      devShells.${system}.default = pkgs.mkShell {
+      devShells.${system} = {
+        default = pkgs.mkShell {
         name = "sopds-tts-rs";
 
         nativeBuildInputs = [
@@ -129,10 +130,10 @@
         '';
       };
 
-      # Combined shell to RUN the auto-F5 worker end-to-end: the CUDA runtime for F5BIN plus the full
-      # fb2-to-f5.sh toolchain, with RUPY/F5PY preset. `nix develop ./sopds-tts-rs#worker` — no more
-      # nix-shell layering or manual exports.
-      devShells.${system}.worker = pkgs.mkShell {
+        # Combined shell to RUN the auto-F5 worker end-to-end: the CUDA runtime for F5BIN plus the full
+        # fb2-to-f5.sh toolchain, with RUPY/F5PY preset. `nix develop ./sopds-tts-rs#worker` — no more
+        # nix-shell layering or manual exports.
+        worker = pkgs.mkShell {
         name = "f5-worker";
         buildInputs = [
           onnxruntime
@@ -163,6 +164,7 @@
           echo "  7zz/ffmpeg/gawk/xmllint ready"
           echo "Run: cd <sopds-go> && ./sopds tts-worker -c config.yaml"
         '';
+        };
       };
     };
 }
