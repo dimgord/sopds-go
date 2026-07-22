@@ -8,9 +8,10 @@
     nixpkgs-cuda.url = "github:NixOS/nixpkgs/e6f23dc08d3624daab7094b701aa3954923c6bbb";
     rust-overlay.url = "github:oxalica/rust-overlay";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
-    # Fresh nixpkgs JUST for the RUAccent stress python — this flake's `nixpkgs` is pinned older for
-    # CUDA/Rust and its python3.13 lacks onnxruntime. Matches f5-bridge/flake.nix (python3.14 + onnx).
-    nixpkgs-stress.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # nixpkgs JUST for the RUAccent stress python — this flake's `nixpkgs` is pinned older for CUDA/Rust
+    # and its python3.13 lacks onnxruntime. Pinned to the SAME rev f5-bridge's flake.lock resolved, so the
+    # ruaccent-python build is byte-identical (cache hit) and known-good (python3.14 + onnxruntime).
+    nixpkgs-stress.url = "github:NixOS/nixpkgs/241313f4e8e508cb9b13278c2b0fa25b9ca27163";
   };
 
   outputs = { self, nixpkgs, nixpkgs-cuda, rust-overlay, nixpkgs-stress }:
