@@ -14,15 +14,12 @@ use super::ner;
 use super::tok_bert::BertTokenizer;
 
 fn load_session(path: &Path) -> io::Result<Session> {
+    // RUAccent's models are tiny; they run on CPU on EVERY platform — which (a) matches the Python
+    // reference (RUAccent loads with device="CPU"), avoiding CPU-vs-CUDA float divergence at the
+    // accent model's 0.55 threshold, and (b) leaves the GPU entirely to F5 synth. (f5.rs still uses
+    // CUDA on Linux; only the stress models are pinned to CPU here.)
     Session::builder()
-        .and_then(|b| {
-            b.with_execution_providers([
-                #[cfg(target_os = "macos")]
-                ort::execution_providers::CPUExecutionProvider::default().build(),
-                #[cfg(not(target_os = "macos"))]
-                ort::execution_providers::CUDAExecutionProvider::default().build(),
-            ])
-        })
+        .and_then(|b| b.with_execution_providers([ort::execution_providers::CPUExecutionProvider::default().build()]))
         .and_then(|b| b.commit_from_file(path))
         .map_err(|e| io::Error::other(format!("load {}: {e}", path.display())))
 }
