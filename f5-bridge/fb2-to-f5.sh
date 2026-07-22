@@ -27,6 +27,12 @@ NFE=${NFE:-16}; WORKERS=${WORKERS:-1}; MAXCHARS=${MAXCHARS:-250}; DEVICE=${DEVIC
 MODE=${MODE:-all}; PARTS=${PARTS:-}; FIX=${FIX:-}
 # RUPY/F5PY: env override wins (nix ruaccent-python etc.); fall back to the old venv paths.
 F5PY="${F5PY:-$F5_HOME/f5env/bin/python}"; RUPY="${RUPY:-$F5_HOME/ruaccent-env/bin/python}"
+# Stress engine: native Rust `sopds-tts-rs stress` (STRESSBIN, else the F5BIN binary's subcommand — it's
+# the same binary) when available, else the legacy Python ruaccent_batch.py. The native path needs
+# RUACCENT_HOME (the dictionary + nn models dir). Both accept --fix / --dump-homographs identically.
+export RUACCENT_HOME="${RUACCENT_HOME:-$HOME/.cache/ruaccent}"
+_stressbin="${STRESSBIN:-${F5BIN:-}}"
+if [ -n "$_stressbin" ]; then STRESS=("$_stressbin" stress); else STRESS=("$RUPY" "$F5_HOME/ruaccent_batch.py"); fi
 REVIEW="$OUT/review"
 mkdir -p "$OUT" "$REVIEW"
 # `|| true`: an empty node-set (e.g. a section with no <title>) makes xmllint exit non-zero,
@@ -46,14 +52,14 @@ if [ "$MODE" = stress ] || [ "$MODE" = all ]; then
     xp "$(sect "$p")//text()" | tr '\n' ' ' | sed -E 's/([.!?]["»)]*) +/\1\n/g' \
       | gawk -v max="$MAXCHARS" '{gsub(/^ +| +$/,"");if($0=="")next;if(b=="")b=$0;else if(length(b)+1+length($0)<=max)b=b" "$0;else{print b;b=$0}}END{if(b!="")print b}' \
       > "$REVIEW/$(printf '%02d' "$p")_${safe}.raw.txt"
-    "$RUPY" "$F5_HOME/ruaccent_batch.py" ${FIX:+--fix "$FIX"} \
+    "${STRESS[@]}" ${FIX:+--fix "$FIX"} \
       < "$REVIEW/$(printf '%02d' "$p")_${safe}.raw.txt" \
       > "$REVIEW/$(printf '%02d' "$p")_${safe}.txt" 2>>"$REVIEW/_ruaccent.log"
     echo "  ✓ part $p: $(wc -l < "$REVIEW/$(printf '%02d' "$p")_${safe}.txt") chunks — $title"
   done
   # Ambiguous-homograph report: only flag ё-restorations on genuine homographs (берет, десны, …),
   # not the always-ё words (ещё, всё, её). These are the ones worth eyeballing in the review text.
-  "$RUPY" "$F5_HOME/ruaccent_batch.py" --dump-homographs "$REVIEW/_homographs.txt" </dev/null 2>/dev/null || true
+  "${STRESS[@]}" --dump-homographs "$REVIEW/_homographs.txt" </dev/null 2>/dev/null || true
   "$F5PY" - "$REVIEW" "$REVIEW/_homographs.txt" > "$REVIEW/_check-yo.tsv" <<'PY'
 import glob, os, sys
 rev, homf = sys.argv[1], sys.argv[2]
