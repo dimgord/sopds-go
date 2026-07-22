@@ -27,6 +27,10 @@ import (
 // audiobook (SetTTSAudioID). Only the "auto" review mode synthesizes here; "gate" stops after stress
 // for editor review (Phase 2c wires the resume).
 func runTTSWorker(cmd *cobra.Command, args []string) error {
+	// The app redirects the default logger to a file (setupLogging); for an interactive/timer CLI
+	// the operator wants to SEE the worker's progress, so send it to stderr.
+	log.SetOutput(os.Stderr)
+
 	maxBooks, _ := cmd.Flags().GetInt("max")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	wc := cfg.TTS.Worker
