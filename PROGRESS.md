@@ -1,7 +1,25 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.7.5
+## Current Version: 1.8.0
+
+---
+
+### Revision 105 - 2026-07-22
+**Auto-F5: expose F5 NFE as a worker config field (`tts.worker.nfe`).**
+Follows the v1.8.0 release (Rev 104). Small Go change.
+
+Rev 104 made NFE configurable via the `SOPDS_TTS_NFE` env, but the only way to set it was editing
+`fb2-to-f5.sh` or exporting the env — it wasn't a config knob. Added it to `WorkerConfig`:
+- **`internal/config/config.go`** — `NFE int \`yaml:"nfe"\`` on `WorkerConfig` (16 = default/fast, ~2x
+  faster than 32; `0` ⇒ the script's default 16).
+- **`cmd/sopds/tts_worker.go`** — `f5Env` now passes `NFE=<n>` (like `MAXCHARS`) when `wc.NFE > 0`, which
+  `fb2-to-f5.sh` forwards to the native binary as `SOPDS_TTS_NFE`.
+
+Set `tts.worker.nfe: 16` in `config.yaml` to make the speed/quality knob explicit (raise to 32 for
+max fidelity at ~2x the time). The `sopds` worker binary must be rebuilt to pick this up.
+
+**Files:** `internal/config/config.go`, `cmd/sopds/tts_worker.go`, `PROGRESS.md`.
 
 ---
 
