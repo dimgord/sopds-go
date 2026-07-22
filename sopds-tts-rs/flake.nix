@@ -8,13 +8,9 @@
     nixpkgs-cuda.url = "github:NixOS/nixpkgs/e6f23dc08d3624daab7094b701aa3954923c6bbb";
     rust-overlay.url = "github:oxalica/rust-overlay";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
-    # nixpkgs JUST for the RUAccent stress python — this flake's `nixpkgs` is pinned older for CUDA/Rust
-    # and its python3.13 lacks onnxruntime. Pinned to the SAME rev f5-bridge's flake.lock resolved, so the
-    # ruaccent-python build is byte-identical (cache hit) and known-good (python3.14 + onnxruntime).
-    nixpkgs-stress.url = "github:NixOS/nixpkgs/241313f4e8e508cb9b13278c2b0fa25b9ca27163";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-cuda, rust-overlay, nixpkgs-stress }:
+  outputs = { self, nixpkgs, nixpkgs-cuda, rust-overlay }:
     let
       system = "x86_64-linux";
 
@@ -45,59 +41,10 @@
 
       rustToolchain = pkgs.rust-bin.stable.latest.default;
 
-      # RUAccent stress runtime, INLINED so this flake needs no cross-flake path input (keeps the
-      # lock stable + avoids the git-ignore/lock churn a `path:../f5-bridge` input caused). This is a
-      # byte-for-byte copy of the derivation in f5-bridge/flake.nix — keep the two in sync until the
-      # RUAccent→Rust native port lands (which deletes both).
-      stressPkgs = import nixpkgs-stress { inherit system; config.allowUnfree = true; };
-      py = stressPkgs.python3;
-      ruaccent-koziev = pkgs.stdenvNoCC.mkDerivation {
-        name = "ruaccent-koziev";
-        nativeBuildInputs = [ (py.withPackages (ps: [ ps.huggingface-hub ])) pkgs.cacert ];
-        buildCommand = ''
-          export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-          export HF_HUB_DISABLE_TELEMETRY=1 HF_HUB_DISABLE_PROGRESS_BARS=1
-          export HOME="$TMPDIR" HF_HOME="$TMPDIR/hf"
-          mkdir -p "$out"
-          python -c "from huggingface_hub import snapshot_download; snapshot_download('ruaccent/accentuator', allow_patterns=['koziev/**'], local_dir='$out')"
-          rm -rf "$out/.cache"
-        '';
-        outputHashMode = "recursive";
-        outputHashAlgo = "sha256";
-        outputHash = "sha256-E8SfhQulH96O3MDyNKOQcbDg+4N5984SGuYXOrXqDNc=";
-      };
-      ruaccent = py.pkgs.buildPythonPackage rec {
-        pname = "ruaccent";
-        version = "1.5.8.3";
-        format = "setuptools";
-        src = py.pkgs.fetchPypi {
-          inherit pname version;
-          hash = "sha256-E0NNiUl5F1csplvh+LTfvtP0YhZX/TvPochE868l1f4=";
-        };
-        # NB: py.pkgs.onnxruntime is qualified — an unqualified `onnxruntime` under `with py.pkgs`
-        # would resolve to this flake's let-bound CUDA C++ onnxruntime (name collision), not the
-        # python module, giving "No module named 'onnxruntime'".
-        dependencies = [ py.pkgs.onnxruntime ] ++ (with py.pkgs; [
-          huggingface-hub transformers sentencepiece numpy python-crfsuite razdel
-        ]);
-        postPatch = ''
-          substituteInPlace ruaccent/ruaccent.py \
-            --replace-fail \
-              'self.workdir = str(pathlib.Path(__file__).resolve().parent)' \
-              'self.workdir = os.environ.get("RUACCENT_HOME") or os.path.expanduser("~/.cache/ruaccent")'
-          for m in accent_model omograph_model yo_homograph_model stress_usage_model; do
-            substituteInPlace ruaccent/$m.py \
-              --replace-quiet 'self.session.run(None, inputs)' \
-                              'self.session.run(None, {n.name: (inputs[n.name] if n.name in inputs else inputs["input_ids"] * 0) for n in self.session.get_inputs()})'
-          done
-        '';
-        postInstall = ''
-          cp -r ${ruaccent-koziev}/koziev "$out"/${py.sitePackages}/ruaccent/koziev
-        '';
-        doCheck = false;
-        pythonImportsCheck = [ "ruaccent" ];
-      };
-      ruaccentPython = py.withPackages (_: [ ruaccent ]);
+      # (The RUAccent stress runtime used to be an inlined python3.14 + onnxruntime derivation here.
+      # It's gone — stress is now native Rust in the `sopds-tts-rs stress` subcommand. See
+      # docs/decisions/004-ruaccent-rust-port.md. The RUAccent *models* still live at RUACCENT_HOME
+      # (~/.cache/ruaccent), provisioned out-of-band.)
 
       # Host NVIDIA driver libs (not provided by Nix on non-NixOS); shared by both shells.
       nvidiaHook = ''
@@ -138,9 +85,9 @@
         '';
       };
 
-        # Combined shell to RUN the auto-F5 worker end-to-end: the CUDA runtime for F5BIN plus the full
-        # fb2-to-f5.sh toolchain, with RUPY/F5PY preset. `nix develop ./sopds-tts-rs#worker` — no more
-        # nix-shell layering or manual exports.
+        # Combined shell to RUN the auto-F5 worker end-to-end: the CUDA runtime for the native
+        # sopds-tts-rs (stress + synth) plus the full fb2-to-f5.sh toolchain. `nix develop
+        # ./sopds-tts-rs#worker` — no more nix-shell layering or manual exports.
         worker = pkgs.mkShell {
         name = "f5-worker";
         buildInputs = [
@@ -151,8 +98,7 @@
           pkgs.openssl
         ];
         packages = [
-          ruaccentPython # RUPY — RUAccent stress (onnx, CPU)
-          pkgs.python3   # F5PY + fb2_extract.py (stdlib only)
+          pkgs.python3   # F5PY + fb2_extract.py / reviewer glue (stdlib only)
           pkgs.gawk      # chunk splitting in fb2-to-f5.sh
           pkgs.libxml2   # xmllint — XPath part/title extraction
           pkgs.ffmpeg    # wav → mp3 join
@@ -164,12 +110,11 @@
           ORT_LIB_LOCATION = "${onnxruntime}/lib";
         };
         shellHook = nvidiaHook + ''
-          export RUPY="${ruaccentPython}/bin/python"
           export F5PY="${pkgs.python3}/bin/python3"
-          echo "f5-worker shell (CUDA + RUAccent + tools)"
-          echo "  RUPY=$RUPY"
-          echo "  F5PY=$F5PY"
-          echo "  7zz/ffmpeg/gawk/xmllint ready"
+          export RUACCENT_HOME="''${RUACCENT_HOME:-$HOME/.cache/ruaccent}"
+          echo "f5-worker shell (CUDA + native Rust stress/synth + tools)"
+          echo "  F5PY=$F5PY   (stress+synth are native: sopds-tts-rs)"
+          echo "  RUACCENT_HOME=$RUACCENT_HOME   7zz/ffmpeg/gawk/xmllint ready"
           echo "Run: cd <sopds-go> && ./sopds tts-worker -c config.yaml"
         '';
         };

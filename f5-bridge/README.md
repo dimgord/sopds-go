@@ -16,12 +16,14 @@ the cost is speed (F5 is a 336 M diffusion model — see below).
 | `f5_daemon.py` | `f5env` | resident F5 (load once, NDJSON `{text,output}` in → WAV out) |
 | `fb2_extract.py` | — | FB2 → per-chapter narration text: part→chapter split, spoken headings, inline footnotes |
 | `reviewer/` | — | Go web tool to proofread the RUAccent stress before synthesis (two-pane, ё-homograph flags) |
-| `ruaccent_batch.py` | `ruaccent-env` | batch RUAccent stress (chunks in → stressed out, per-line fallback) |
 | `fb2-to-f5.sh` | — | orchestrator: split by part → chunk → stress → F5 daemons → per-part MP3 |
 | `merge_ellipsis.py` | — | graft `…` back into already-stressed text (RUAccent strips it — never re-stress) |
 
-The **synth half can already run native** (zero Python) — see *Native synth engine* below. The
-**stress half** is still RUAccent Python; porting it is [`FUTURE.md`](FUTURE.md) option B.
+**Both halves now run native (zero Python for stress/synth).** Stress is the `sopds-tts-rs stress`
+subcommand (a bit-exact Rust port of RUAccent — see `docs/decisions/004-ruaccent-rust-port.md`); synth
+is native F5 via `sopds-tts-rs <model_dir>`. `fb2-to-f5.sh` drives both through the one `sopds-tts-rs`
+binary (`STRESSBIN`/`F5BIN`). The RUAccent *models* still live at `RUACCENT_HOME` (~/.cache/ruaccent),
+provisioned out-of-band. (`ruaccent_batch.py` + the `f5-bridge` nix flake were removed with the port.)
 
 **Two venvs on purpose.** RUAccent's ONNX omograph model needs `transformers < 5` (v5 dropped
 `token_type_ids`), but `f5-tts` pulls `transformers 5.x`. They can't share a venv — the classic

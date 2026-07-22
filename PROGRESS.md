@@ -5,6 +5,36 @@
 
 ---
 
+### Revision 103 - 2026-07-22
+**Auto-F5: finalize RUAccent→Rust port — native stress in the pipeline, Python stress deleted.**
+Branch `ruaccent-rs`. No app-version bump / tag. Follows Rev 102.
+
+With the port proven bit-exact on Fedya (Rev 101), the pipeline is switched to native stress and the
+RUAccent Python is removed:
+- **`f5-bridge/fb2-to-f5.sh`** — `MODE=stress` now calls `sopds-tts-rs stress` (via `STRESSBIN`, else
+  the `F5BIN` binary — same binary), sets `RUACCENT_HOME`, uses `--fix`/`--dump-homographs` on the
+  native binary. The RUPY / `ruaccent_batch.py` fallback is gone (errors clearly if no binary).
+- **Deleted:** `f5-bridge/ruaccent_batch.py`, `f5-bridge/flake.nix`, `f5-bridge/flake.lock`.
+- **`sopds-tts-rs/flake.nix`** — dropped the `nixpkgs-stress` input + the inlined ruaccent-python
+  derivations (koziev FOD, `buildPythonPackage`, `ruaccentPython`); `#worker` no longer ships RUPY.
+  Kept `python3` (F5PY — JSON glue/reviewer) + gawk/libxml2/ffmpeg/_7zz-rar. `#worker` now exports
+  `RUACCENT_HOME`. `flake.lock` regenerated (nixpkgs-stress removed).
+- Docs: `f5-bridge/README.md` updated (both halves native now).
+
+Verified on Fedya: native stress runs through the rewired script (`_ruaccent.log` → "ruaccent-rs
+ready"; homographs з+амок/зам+ок correct). NB: RUAccent **models** must still be present at
+RUACCENT_HOME (~/.cache/ruaccent) — provisioned out-of-band (the old runtime auto-download is gone).
+
+The whole auto-F5 pipeline is now Python-free for stress+synth (one `sopds-tts-rs` binary does both).
+Remaining: validate the trimmed flake builds on Fedya, then merge `ruaccent-rs` → main; then the F5 NFE
+speed lever (Rev TBD).
+
+**Files:** `f5-bridge/fb2-to-f5.sh`, `sopds-tts-rs/flake.nix`, `sopds-tts-rs/flake.lock`,
+`f5-bridge/README.md`, `PROGRESS.md`; deleted `f5-bridge/{ruaccent_batch.py,flake.nix,flake.lock}`.
+No version change.
+
+---
+
 ### Revision 102 - 2026-07-22
 **Auto-F5: fix tts-worker "no mp3 produced" — native Rust synth in fb2-to-f5.sh.**
 Branch `ruaccent-rs`. No app-version bump / tag.

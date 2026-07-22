@@ -25,14 +25,14 @@ CKPT=${CKPT:-$F5_HOME/ru-model/model_v2.safetensors}
 VOCAB=${VOCAB:-$F5_HOME/ru-model/vocab.txt}
 NFE=${NFE:-16}; WORKERS=${WORKERS:-1}; MAXCHARS=${MAXCHARS:-250}; DEVICE=${DEVICE:-cpu}
 MODE=${MODE:-all}; PARTS=${PARTS:-}; FIX=${FIX:-}
-# RUPY/F5PY: env override wins (nix ruaccent-python etc.); fall back to the old venv paths.
-F5PY="${F5PY:-$F5_HOME/f5env/bin/python}"; RUPY="${RUPY:-$F5_HOME/ruaccent-env/bin/python}"
-# Stress engine: native Rust `sopds-tts-rs stress` (STRESSBIN, else the F5BIN binary's subcommand — it's
-# the same binary) when available, else the legacy Python ruaccent_batch.py. The native path needs
-# RUACCENT_HOME (the dictionary + nn models dir). Both accept --fix / --dump-homographs identically.
+# F5PY: a plain python3 for the JSON glue + reviewer scripts (stdlib only). env override wins.
+F5PY="${F5PY:-$F5_HOME/f5env/bin/python}"
+# Stress engine: native Rust `sopds-tts-rs stress` (STRESSBIN, else the F5BIN binary — it's the same
+# binary). Needs RUACCENT_HOME (the dictionary + nn models dir). Accepts --fix / --dump-homographs.
 export RUACCENT_HOME="${RUACCENT_HOME:-$HOME/.cache/ruaccent}"
 _stressbin="${STRESSBIN:-${F5BIN:-}}"
-if [ -n "$_stressbin" ]; then STRESS=("$_stressbin" stress); else STRESS=("$RUPY" "$F5_HOME/ruaccent_batch.py"); fi
+[ -n "$_stressbin" ] || { echo "fb2-to-f5.sh: set STRESSBIN or F5BIN to the sopds-tts-rs binary" >&2; exit 1; }
+STRESS=("$_stressbin" stress)
 REVIEW="$OUT/review"
 mkdir -p "$OUT" "$REVIEW"
 # `|| true`: an empty node-set (e.g. a section with no <title>) makes xmllint exit non-zero,
