@@ -67,6 +67,18 @@
               --replace-fail \
                 'self.workdir = str(pathlib.Path(__file__).resolve().parent)' \
                 'self.workdir = os.environ.get("RUACCENT_HOME") or os.path.expanduser("~/.cache/ruaccent")'
+            # The omograph ONNX graph's input signature varies between model builds (some require
+            # token_type_ids, some reject it) → hardcoding either crashes half the machines and every
+            # homograph chunk falls back to unstressed. Robust fix: have the tokenizer emit
+            # token_type_ids (proper 0/1 for the sentence pair), then feed ONLY the inputs THIS model
+            # actually declares (drops token_type_ids for builds that don't take it).
+            substituteInPlace ruaccent/omograph_model.py \
+              --replace-fail 'max_length=512, truncation=True, return_tensors="np")' \
+                             'max_length=512, truncation=True, return_tensors="np", return_token_type_ids=True)' \
+              --replace-fail 'padding=True, truncation=True, max_length=512)' \
+                             'padding=True, truncation=True, max_length=512, return_token_type_ids=True)' \
+              --replace-fail 'inputs = {k: v.astype(np.int64) for k, v in inputs.items()}' \
+                             'inputs = {k: v.astype(np.int64) for k, v in inputs.items() if k in {i.name for i in self.session.get_inputs()}}'
           '';
           # Bundle koziev into the installed package so `from .koziev...` resolves and the
           # runtime koziev-download branch (os.path.exists(module_path/koziev)) is skipped.
