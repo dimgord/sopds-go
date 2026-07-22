@@ -14,7 +14,7 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = import nixpkgs { inherit system; config.allowUnfree = true; }; # _7zz-rar (RAR codec) is unfree
         py = pkgs.python3;
 
         # koziev — a 189 MB python+data subpackage RUAccent normally downloads into its own
@@ -92,7 +92,7 @@
           name = "f5-bridge";
           packages = [
             ruaccent-python
-            pkgs.p7zip   # 7z — pack chapters into the audiobook archive the scanner ingests
+            pkgs._7zz-rar # 7zz (modern 7-Zip + RAR) — pack chapters into the .7z the scanner ingests
             pkgs.ffmpeg  # wav → mp3 join in fb2-to-f5.sh
             pkgs.bash
           ];
@@ -101,7 +101,7 @@
             echo "f5-bridge stress shell"
             echo "  RUPY:   $RUPY"
             echo "  ruaccent: $("$RUPY" -c 'import ruaccent; print(ruaccent.__version__)' 2>/dev/null)"
-            echo "  7z:     $(command -v 7z)   ffmpeg: $(command -v ffmpeg)"
+            echo "  7zz:    $(command -v 7zz)   ffmpeg: $(command -v ffmpeg)"
             echo "Synth binary (F5BIN) comes from ../sopds-tts-rs (its own CUDA flake)."
           '';
         };

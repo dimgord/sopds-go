@@ -172,7 +172,7 @@ func extractFB2(book *database.Book) (string, func(), error) {
 		out, e := exec.Command("unzip", "-p", src, book.Filename).Output()
 		data, err = out, e
 	case strings.HasSuffix(strings.ToLower(src), ".7z"):
-		out, e := exec.Command("7z", "e", "-so", src, book.Filename).Output()
+		out, e := exec.Command("7zz", "e", "-so", src, book.Filename).Output()
 		data, err = out, e
 	default: // plain file — src may be the dir or the file itself
 		p := src
@@ -240,9 +240,9 @@ func packageAudiobook(outDir, title, destDir string) (string, error) {
 	archive := filepath.Join(destDir, folder+".7z")
 	_ = os.Remove(archive)
 	// -mx=1: audio is already compressed, so store fast; archive contains the single top folder.
-	c := exec.Command("7z", "a", "-mx=1", archive, stage)
+	c := exec.Command("7zz", "a", "-mx=1", archive, stage)
 	if out, err := c.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("7z: %v: %s", err, out)
+		return "", fmt.Errorf("7zz: %v: %s", err, out)
 	}
 	return archive, nil
 }
