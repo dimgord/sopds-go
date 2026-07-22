@@ -8,11 +8,9 @@
     nixpkgs-cuda.url = "github:NixOS/nixpkgs/e6f23dc08d3624daab7094b701aa3954923c6bbb";
     rust-overlay.url = "github:oxalica/rust-overlay";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
-    # ruaccent-python (RUPY) for the combined `worker` devShell
-    f5bridge.url = "path:../f5-bridge";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-cuda, rust-overlay, f5bridge }:
+  outputs = { self, nixpkgs, nixpkgs-cuda, rust-overlay }:
     let
       system = "x86_64-linux";
 
@@ -43,7 +41,55 @@
 
       rustToolchain = pkgs.rust-bin.stable.latest.default;
 
-      ruaccentPython = f5bridge.packages.${system}.ruaccent-python;
+      # RUAccent stress runtime, INLINED so this flake needs no cross-flake path input (keeps the
+      # lock stable + avoids the git-ignore/lock churn a `path:../f5-bridge` input caused). This is a
+      # byte-for-byte copy of the derivation in f5-bridge/flake.nix — keep the two in sync until the
+      # RUAccent→Rust native port lands (which deletes both).
+      py = pkgs.python3;
+      ruaccent-koziev = pkgs.stdenvNoCC.mkDerivation {
+        name = "ruaccent-koziev";
+        nativeBuildInputs = [ (py.withPackages (ps: [ ps.huggingface-hub ])) pkgs.cacert ];
+        buildCommand = ''
+          export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+          export HF_HUB_DISABLE_TELEMETRY=1 HF_HUB_DISABLE_PROGRESS_BARS=1
+          export HOME="$TMPDIR" HF_HOME="$TMPDIR/hf"
+          mkdir -p "$out"
+          python -c "from huggingface_hub import snapshot_download; snapshot_download('ruaccent/accentuator', allow_patterns=['koziev/**'], local_dir='$out')"
+          rm -rf "$out/.cache"
+        '';
+        outputHashMode = "recursive";
+        outputHashAlgo = "sha256";
+        outputHash = "sha256-E8SfhQulH96O3MDyNKOQcbDg+4N5984SGuYXOrXqDNc=";
+      };
+      ruaccent = py.pkgs.buildPythonPackage rec {
+        pname = "ruaccent";
+        version = "1.5.8.3";
+        format = "setuptools";
+        src = py.pkgs.fetchPypi {
+          inherit pname version;
+          hash = "sha256-E0NNiUl5F1csplvh+LTfvtP0YhZX/TvPochE868l1f4=";
+        };
+        dependencies = with py.pkgs; [
+          huggingface-hub onnxruntime transformers sentencepiece numpy python-crfsuite razdel
+        ];
+        postPatch = ''
+          substituteInPlace ruaccent/ruaccent.py \
+            --replace-fail \
+              'self.workdir = str(pathlib.Path(__file__).resolve().parent)' \
+              'self.workdir = os.environ.get("RUACCENT_HOME") or os.path.expanduser("~/.cache/ruaccent")'
+          for m in accent_model omograph_model yo_homograph_model stress_usage_model; do
+            substituteInPlace ruaccent/$m.py \
+              --replace-quiet 'self.session.run(None, inputs)' \
+                              'self.session.run(None, {n.name: (inputs[n.name] if n.name in inputs else inputs["input_ids"] * 0) for n in self.session.get_inputs()})'
+          done
+        '';
+        postInstall = ''
+          cp -r ${ruaccent-koziev}/koziev "$out"/${py.sitePackages}/ruaccent/koziev
+        '';
+        doCheck = false;
+        pythonImportsCheck = [ "ruaccent" ];
+      };
+      ruaccentPython = py.withPackages (_: [ ruaccent ]);
 
       # Host NVIDIA driver libs (not provided by Nix on non-NixOS); shared by both shells.
       nvidiaHook = ''

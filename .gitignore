@@ -5,9 +5,10 @@ fb2converters
 **/target/
 /sopds
 /sopds-tts
-/sopds-tts-rs
 /zipdupes
-/zipdupes-rs
+# NB: sopds-tts-rs/ and zipdupes-rs/ are tracked subprojects (their Rust binaries live in
+# */target/, already ignored) — do NOT re-add /sopds-tts-rs or /zipdupes-rs, it hides new
+# tracked files (e.g. flake.lock updates) behind an "ignored" git-add error.
 sopds_backup.dump*
 tags
 .task/
