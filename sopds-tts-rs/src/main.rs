@@ -406,6 +406,140 @@ fn exit_ok() -> ! {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
+    // `stress` subcommand: native RUAccent, a drop-in for ruaccent_batch.py (stdin→stdout, one
+    // stressed chunk per line). Intercept before the positional model/daemon dispatch.
+    if args.len() >= 2 && args[1] == "stress" {
+        return run_stress(&args);
+    }
+    run_positional()
+}
+
+// Whole-word replace bounded by non-[а-яёА-ЯЁ+] on both sides (ruaccent_batch.py's `--fix` "replace":
+// a key like "обн+ял" must not match inside "обн+ялся"). Lookbehind/lookahead-free (the `regex` crate
+// has neither) — we check the adjacent chars by hand.
+fn whole_word_replace(s: &str, from: &str, to: &str) -> String {
+    if from.is_empty() {
+        return s.to_string();
+    }
+    let boundary =
+        |c: char| ('а'..='я').contains(&c) || ('А'..='Я').contains(&c) || matches!(c, 'ё' | 'Ё' | '+');
+    let mut result = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        if s[i..].starts_with(from) {
+            let before_ok = s[..i].chars().last().map(|c| !boundary(c)).unwrap_or(true);
+            let after = i + from.len();
+            let after_ok = s[after..].chars().next().map(|c| !boundary(c)).unwrap_or(true);
+            if before_ok && after_ok {
+                result.push_str(to);
+                i = after;
+                continue;
+            }
+        }
+        let ch_len = s[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        result.push_str(&s[i..i + ch_len]);
+        i += ch_len;
+    }
+    result
+}
+
+// `sopds-tts-rs stress [--home DIR] [--fix FILE] [--dump-homographs FILE]` — native replacement for
+// `$RUPY ruaccent_batch.py`. Loads RUAccent once, then stresses stdin line-by-line to stdout.
+fn run_stress(args: &[String]) -> Result<(), String> {
+    let (mut fix, mut dump, mut home) = (None, None, None);
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--fix" => fix = args.get(i + 1).cloned(),
+            "--dump-homographs" => dump = args.get(i + 1).cloned(),
+            "--home" => home = args.get(i + 1).cloned(),
+            other => return Err(format!("unknown stress flag: {other}")),
+        }
+        i += 2;
+    }
+    let home = home
+        .or_else(|| std::env::var("RUACCENT_HOME").ok())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::Path::new(&std::env::var("HOME").unwrap_or_default()).join(".cache/ruaccent")
+        });
+    let mut acc = ruaccent::RuAccent::load(&home)
+        .map_err(|e| format!("load RUAccent ({}): {e}", home.display()))?;
+
+    // --dump-homographs: write the ambiguous-word list and exit (matches ruaccent_batch.py).
+    if let Some(path) = dump {
+        std::fs::write(&path, acc.homograph_words().join("\n"))
+            .map_err(|e| format!("write {path}: {e}"))?;
+        exit_ok();
+    }
+
+    // --fix: yo overrides (applied into the dict) + blunt whole-word replacements (applied post-stress).
+    let mut replace: Vec<(String, String)> = Vec::new();
+    if let Some(fixpath) = fix {
+        if std::path::Path::new(&fixpath).exists() {
+            let data =
+                std::fs::read_to_string(&fixpath).map_err(|e| format!("read fix {fixpath}: {e}"))?;
+            let v: serde_json::Value =
+                serde_json::from_str(&data).map_err(|e| format!("parse fix json: {e}"))?;
+            if let Some(yo) = v.get("yo").and_then(|m| m.as_object()) {
+                for (k, val) in yo {
+                    if let Some(s) = val.as_str() {
+                        acc.set_yo_override(k.clone(), s.to_string());
+                    }
+                }
+            }
+            if let Some(rep) = v.get("replace").and_then(|m| m.as_object()) {
+                for (k, val) in rep {
+                    if let Some(s) = val.as_str() {
+                        replace.push((k.clone(), s.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("ruaccent-rs ready (fixes={})", replace.len());
+
+    let stdin = std::io::stdin();
+    let mut reader = stdin.lock();
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let mut line = String::new();
+    let mut fails: u64 = 0;
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).map_err(|e| format!("read stdin: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        let t = line.strip_suffix('\n').unwrap_or(&line); // rstrip("\n"); keep \r like Python
+        if t.trim().is_empty() {
+            writeln!(out, "{t}").map_err(|e| format!("write: {e}"))?;
+        } else {
+            // RUAccent drops '…' but keeps '...' — swap around process_all to preserve the pause token.
+            let stressed = match acc.process_all(&t.replace('…', "...")) {
+                Ok(s) => {
+                    let mut s = s.replace("...", "…");
+                    for (a, b) in &replace {
+                        s = whole_word_replace(&s, a, b);
+                    }
+                    s
+                }
+                Err(e) => {
+                    fails += 1;
+                    eprintln!("stress-fallback: {e}");
+                    t.to_string()
+                }
+            };
+            writeln!(out, "{stressed}").map_err(|e| format!("write: {e}"))?;
+        }
+        out.flush().map_err(|e| format!("flush: {e}"))?;
+    }
+    eprintln!("ruaccent-rs done: {fails} fallback(s)");
+    exit_ok(); // don't drop the ort sessions — CUDA teardown corrupts the heap (see exit_ok)
+}
+
+fn run_positional() -> Result<(), String> {
+    let args: Vec<String> = std::env::args().collect();
     match args.len() {
         // One-shot (backward compatible): text on stdin -> one WAV, then exit.
         3 => {

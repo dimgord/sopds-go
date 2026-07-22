@@ -65,9 +65,29 @@ text preprocessing. Huge scope reduction.
   `find_substrings`, plus RUAccent's `split_by_sentences` reconstruction on top. Bit-exact vs Python on
   17 cases (abbreviations, initials, paired sokr, quotes, bullet lists, ellipsis, `?!`, smileys,
   brackets, roman-numeral chapters, dash, newline gaps) and on multi-sentence `process_all`.
-- **Phase 4:** `sopds-tts-rs stress` subcommand (stdin→stdout, drop-in for `ruaccent_batch.py`);
-  point `fb2-to-f5.sh` at it; parity harness to **0 diffs**; then delete RUPY / the nix
-  ruaccent-python / `f5-bridge/flake.nix` / `ruaccent_batch.py`.
+- **Phase 4 (subcommand DONE; deletion pending):** `sopds-tts-rs stress [--home DIR] [--fix FILE]
+  [--dump-homographs FILE]` — a stdin→stdout drop-in for `ruaccent_batch.py` (per-line, `…`↔`...`
+  swap, blank passthrough, error fallback, `--fix` yo/replace, `--dump-homographs`). Corpus parity
+  harness (300 real book paragraphs): **9774 / 9780 words identical (99.94%)**. The residual **6
+  words** are the onnxruntime-version limit below, not port defects. Pointing `fb2-to-f5.sh` at the
+  binary + deleting RUPY / the nix ruaccent-python / `f5-bridge/flake.nix` / `ruaccent_batch.py` is
+  gated on Dmitry's call re: the residual.
+
+## Parity ceiling: onnxruntime build differences (Phase 4)
+
+Bit-exactness is bounded by the **onnxruntime build**, not the port. Python RUAccent on mac uses pip
+`onnxruntime` **1.27.0**; Rust `ort` 2.0.0-rc.10 bundles onnxruntime **1.22.0**. The two produce
+slightly different float logits for the same model + identical inputs (verified: tokenizer ids are
+byte-identical, but e.g. the accent model's per-char softmax at one position reads 0.5008 under 1.27
+vs 0.5719 under 1.22). Graph-optimization level makes no difference (tested `Disable` — same output),
+so it is purely the version. This matters **only** at the accent model's hard `score ≥ 0.55` threshold:
+when a borderline char crosses it, one word gains/loses a secondary `+`. All 6 diffs in the 300-line
+corpus are exactly this — OOV proper nouns absent from every dict (Крулеву, Шафлярах, Тынец, Тыньца) —
+audibly negligible in synthesis. The NER/omograph models are unaffected (argmax is robust to
+sub-threshold float jitter, which is why 294/300 lines match exactly). True 0-diff parity would need
+the *same* onnxruntime build on both sides — impractical (pip 1.27 vs ort 1.22 vs Fedya's nix CUDA
+onnxruntime, all different) — so the port is **algorithmically** exact with a documented, inaudible
+version-noise floor.
 
 ## Notable parity finding (Phase 2)
 

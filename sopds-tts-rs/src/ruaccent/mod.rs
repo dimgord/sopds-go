@@ -44,6 +44,20 @@ impl RuAccent {
         })
     }
 
+    /// Sorted union of the ambiguous homograph words (`yo_homographs` ∪ `omographs` keys) — the
+    /// `--dump-homographs` output of `ruaccent_batch.py`, used to flag ё-restorations worth review.
+    pub fn homograph_words(&self) -> Vec<String> {
+        let mut set: std::collections::BTreeSet<&String> = std::collections::BTreeSet::new();
+        set.extend(self.dicts.yo_homographs.keys());
+        set.extend(self.dicts.omographs.keys());
+        set.into_iter().cloned().collect()
+    }
+
+    /// Override a `yo_homographs` entry (the `--fix` file's `"yo"` map in `ruaccent_batch.py`).
+    pub fn set_yo_override(&mut self, word: String, form: String) {
+        self.dicts.yo_homographs.insert(word, form);
+    }
+
     /// ruaccent.py `process_all_internal`: normalize → split into sentences → per sentence run the
     /// stress_usage NER, yo restoration, omograph disambiguation, and accent placement, then rejoin.
     pub fn process_all(&mut self, text: &str) -> io::Result<String> {

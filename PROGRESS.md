@@ -5,6 +5,35 @@
 
 ---
 
+### Revision 100 - 2026-07-22
+**Auto-F5: RUAccent→Rust port, Phase 4a — `stress` subcommand + corpus parity (99.94%).**
+Branch `ruaccent-rs`. No app-version bump / tag (subproject Rust; Go binary unchanged). Follows Rev 99.
+Decision doc updated: `docs/decisions/004-ruaccent-rust-port.md`.
+
+- **`sopds-tts-rs/src/main.rs`** — new `stress` subcommand: `sopds-tts-rs stress [--home DIR]
+  [--fix FILE] [--dump-homographs FILE]`, a stdin→stdout **drop-in for `ruaccent_batch.py`** (loads
+  RUAccent once, then per line: `…`→`...` swap around `process_all` then `...`→`…` restore, blank-line
+  passthrough, error → original-line fallback, `--fix` yo overrides + whole-word `replace`,
+  `--dump-homographs`). Exits via `exit_ok()` so the ort CUDA sessions aren't dropped (teardown crash).
+  `whole_word_replace` reproduces the `(?<![а-яёА-ЯЁ+])…(?![…])` boundary without lookaround (the
+  `regex` crate has none). New `RuAccent::homograph_words()` / `set_yo_override()`.
+- **Corpus parity harness** (300 real book paragraphs, `book.fb2`): Python `ruaccent_batch.py` vs Rust
+  `stress` → **9774 / 9780 words identical (99.94%)**, 294/300 lines exact.
+- **Parity ceiling found — onnxruntime build, not the port.** Python (mac) uses pip onnxruntime
+  **1.27.0**; `ort` 2.0.0-rc.10 bundles **1.22.0**. Identical tokenizer ids (verified byte-for-byte) but
+  the two onnxruntime versions emit slightly different float logits; graph-opt level is irrelevant
+  (tested). It bites **only** at the accent model's hard `≥0.55` threshold — a borderline char flips one
+  `+`. All 6 diffs are OOV proper nouns in no dict (Крулеву, Шафлярах, Тынец, Тыньца) → an inaudible
+  secondary stress. NER/omograph use argmax (robust) → unaffected. True 0-diff needs the *same*
+  onnxruntime build both sides (impractical). Port is algorithmically exact; residual is version noise.
+- **Python NOT yet deleted** — `fb2-to-f5.sh` rewire + removing RUPY/`f5-bridge`/`ruaccent_batch.py` is
+  gated on Dmitry accepting the 0.06 % onnxruntime-version residual (he chose bit-exact).
+
+**Files:** `sopds-tts-rs/src/main.rs`, `sopds-tts-rs/src/ruaccent/mod.rs`,
+`docs/decisions/004-ruaccent-rust-port.md`, `PROGRESS.md`. No version change.
+
+---
+
 ### Revision 99 - 2026-07-22
 **Auto-F5: RUAccent→Rust port, Phase 3 (faithful razdel sentence splitter — bit-exact).**
 Branch `ruaccent-rs`. No app-version bump / tag (subproject Rust; Go binary unchanged). Follows Rev 98.
