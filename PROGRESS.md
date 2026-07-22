@@ -5,6 +5,25 @@
 
 ---
 
+### Revision 104 - 2026-07-22
+**Auto-F5: F5 synth NFE configurable (env `SOPDS_TTS_NFE`), pipeline defaults to 16 (~2x faster).**
+Branch `ruaccent-rs`. No app-version bump / tag. Follows Rev 103.
+
+`f5.rs` hard-coded `NFE_STEP=32` (32 flow-matching ODE steps → the transformer runs 31× per chunk, the
+dominant synth cost), while the pipeline was designed for `NFE=16` (`fb2-to-f5.sh` default) — so synth
+ran at **double** the intended step count. Made it configurable:
+- **`sopds-tts-rs/src/f5.rs`** — `F5` reads NFE from env **`SOPDS_TTS_NFE`** at load (clamped ≥1;
+  default 32), threaded into the ODE loop as `self.nfe_step`.
+- **`f5-bridge/fb2-to-f5.sh`** — exports `SOPDS_TTS_NFE="$NFE"` before the synth daemons (both native and
+  legacy honor `$NFE`, default 16). The progress line shows `nfe=$NFE`.
+
+Net: the auto-F5 pipeline now synthesizes at NFE 16 (the F5 default quality) ≈ **2× faster** than the
+previous hard-coded 32. A bare `sopds-tts-rs <model>` call without the env still defaults to 32.
+
+**Files:** `sopds-tts-rs/src/f5.rs`, `f5-bridge/fb2-to-f5.sh`, `PROGRESS.md`. No version change.
+
+---
+
 ### Revision 103 - 2026-07-22
 **Auto-F5: finalize RUAccent→Rust port — native stress in the pipeline, Python stress deleted.**
 Branch `ruaccent-rs`. No app-version bump / tag. Follows Rev 102.

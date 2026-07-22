@@ -101,7 +101,10 @@ N=$(wc -l < "$WORK/reqs.ndjson" | tr -d ' ')
 # Engine: native Rust (ort) F5 when F5BIN is set (the worker sets it) — the model DIR carries the
 # ckpt/vocab/ref/nfe, and the daemon speaks the same NDJSON {"text","output"} protocol. Otherwise fall
 # back to the legacy Python (torch) f5_daemon.py, which needs an F5PY with torch/f5_tts.
-echo "→ synthesizing $N chunks on $WORKERS daemon(s) ($([ -n "${F5BIN:-}" ] && echo "native rust" || echo "py torch nfe=$NFE $DEVICE"))"
+# Native F5 reads NFE from SOPDS_TTS_NFE (the model dir has no nfe baked in); the legacy py daemon
+# takes --nfe. Both honor $NFE (default 16 — the F5 default, ~2x faster than 32).
+export SOPDS_TTS_NFE="$NFE"
+echo "→ synthesizing $N chunks on $WORKERS daemon(s) ($([ -n "${F5BIN:-}" ] && echo "native rust" || echo "py torch $DEVICE") nfe=$NFE)"
 
 SECONDS=0; pids=()
 for ((i=0;i<WORKERS;i++)); do

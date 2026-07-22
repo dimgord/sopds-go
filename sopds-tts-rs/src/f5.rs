@@ -15,6 +15,9 @@ use ort::value::Tensor;
 
 pub const SAMPLE_RATE: u32 = 24000;
 const HOP: i64 = 256;
+// Number of flow-matching ODE steps. More = higher fidelity but linearly slower (the transformer runs
+// NFE_STEP-1 times per chunk — the dominant synth cost). Env `SOPDS_TTS_NFE` overrides; the auto-F5
+// pipeline sets 16 (the F5 default, ~2x faster than 32) via fb2-to-f5.sh.
 const NFE_STEP: i32 = 32;
 const SPEED: f64 = 1.0;
 
@@ -25,6 +28,7 @@ pub struct F5 {
     vocab: HashMap<char, i32>,
     ref_audio: Vec<i16>,
     ref_text: String,
+    nfe_step: i32,
 }
 
 fn load_session(path: &str) -> Result<Session, String> {
@@ -72,6 +76,12 @@ impl F5 {
             .samples::<i16>()
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("ref.wav read: {e}"))?;
+        // NFE from env (SOPDS_TTS_NFE), clamped to ≥1; default NFE_STEP.
+        let nfe_step = std::env::var("SOPDS_TTS_NFE")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .filter(|&n| n >= 1)
+            .unwrap_or(NFE_STEP);
         Ok(Self {
             pre: load_session(&format!("{dir}/F5_Preprocess.onnx"))?,
             transformer: load_session(&format!("{dir}/F5_Transformer.onnx"))?,
@@ -79,6 +89,7 @@ impl F5 {
             vocab,
             ref_audio,
             ref_text,
+            nfe_step,
         })
     }
 
@@ -151,9 +162,9 @@ impl F5 {
             Tensor::from_array((shape, s.1.clone().into_boxed_slice())).map_err(|e| format!("tensor: {e}"))
         };
 
-        // Graph B: NFE_STEP-1 ODE steps (denoised -> noise, time_step threaded).
+        // Graph B: nfe_step-1 ODE steps (denoised -> noise, time_step threaded).
         let mut time_step: i32 = 0;
-        for _ in 0..(NFE_STEP - 1) {
+        for _ in 0..(self.nfe_step - 1) {
             let noise_t = {
                 let shape: Vec<usize> = noise_shape.iter().map(|&d| d as usize).collect();
                 Tensor::from_array((shape, noise.clone().into_boxed_slice())).map_err(|e| format!("noise: {e}"))?
