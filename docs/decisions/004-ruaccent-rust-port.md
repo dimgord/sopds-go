@@ -54,13 +54,27 @@ text preprocessing. Huge scope reduction.
   `preprocess.rs` (`normalize`, `split_by_words`, `delete_spaces_before_punc`, `fix_capital`,
   `transfer_plus`, `count_vowels`, `has_punctuation`); dict-only `_process_accent`. ≈ `tiny_mode`
   minus neural. `cargo check` green; unit + real-dict integration tests pass.
-- **Phase 2:** `tok_bert.rs`, `char_tok.rs`, `ner.rs`, `models.rs` (`ort` + `tokenizers` + `ndarray`);
-  wire the 4 models. Full `process_all`.
+- **Phase 2 (DONE):** `char_tok.rs` (CharTokenizer), `tok_bert.rs` (`tokenizers` wrapper: single/pair/
+  batch), `ner.rs` (shared NER decode), `models.rs` (4 `ort` sessions). Full `process_all` orchestration
+  in `mod.rs` (`_process_yo`/`_process_omographs`/`_process_accent`). Every model verified **bit-exact**
+  vs Python (put_accent, stress/yo NER labels, and 15 full-sentence `process_all` cases incl. multi-
+  homograph and same-word-twice disambiguation). No `ndarray` needed — `ort` tensors are built from
+  `Vec + shape` directly. Sentence split still naive (Phase 3).
 - **Phase 3:** faithful razdel `sentenize` port (abbreviations, initials, no-split cases) → 1:1
   boundaries.
 - **Phase 4:** `sopds-tts-rs stress` subcommand (stdin→stdout, drop-in for `ruaccent_batch.py`);
   point `fb2-to-f5.sh` at it; parity harness to **0 diffs**; then delete RUPY / the nix
   ruaccent-python / `f5-bridge/flake.nix` / `ruaccent_batch.py`.
+
+## Notable parity finding (Phase 2)
+
+Bit-exact parity means the port reproduces the **model's mistakes** too. E.g. the turbo2 omograph model
+mis-stresses sentence-initial capitalised "Белки" (proteins → should be `белк+и`) as `б+елки`
+(squirrels) in every context — a known model limitation, not a port bug (the `omographs` dict carries
+both variants). The parity tests assert the Python output (`Б+елки`), NOT the linguistically correct
+form. Fixing such cases is a *separate, post-parity* concern (RUAccent's `custom_dict`/`custom_homographs`
+overrides, or a context rule) and would deliberately diverge from Python — so it is out of scope for the
+port itself.
 
 ## Notable parity finding (Phase 1)
 

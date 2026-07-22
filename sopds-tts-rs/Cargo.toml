@@ -7,9 +7,15 @@ edition = "2021"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hound = "3"
-# RUAccent port (ruaccent module): gz dicts + text preprocessing (tokenizers/ndarray land in Phase 2).
+# RUAccent port (ruaccent module):
+#   flate2 — gz dicts; regex — tokenizer split.
+#   tokenizers — the SAME HuggingFace lib the Python models use (loads tokenizer.json); pinned to match
+#     the Python side (0.22.x) for bit-exact encode. `onig` feature matches the Python wheel's regex
+#     engine (built with onig) for the byte-level BPE omograph tokenizer — belt-and-braces for parity;
+#     the C build is fine inside the nix rust shell (same toolchain espeak-ng needs).
 flate2 = "1"
 regex = "1"
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 
 # ONNX Runtime execution provider is platform-specific (one repo, auto per OS):
 #   macOS → CPU (downloads the onnxruntime lib via download-binaries). CoreML

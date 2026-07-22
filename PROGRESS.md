@@ -5,6 +5,51 @@
 
 ---
 
+### Revision 98 - 2026-07-22
+**Auto-F5: RUAccent→Rust port, Phase 2 (all four neural models — full pipeline, bit-exact).**
+Branch `ruaccent-rs`. No app-version bump / tag (subproject Rust; Go binary unchanged). Follows Rev 97.
+Decision doc updated: `docs/decisions/004-ruaccent-rust-port.md`.
+
+The whole RUAccent stress pipeline now runs natively in `sopds-tts-rs` — no Python for stress logic.
+Every model verified **bit-exact** vs Python RUAccent (the thesis held: `ort` is the same onnxruntime
+C++ lib and `tokenizers 0.22` the same HuggingFace lib, so given identical tokenization the logits are
+identical). `cargo test` green (8 tests).
+
+- **`Cargo.toml`** — added `tokenizers = { version = "0.22", default-features=false, features=["onig"] }`
+  (pinned to the Python side's 0.22.x; onig matches the Python wheel's regex engine for the byte-level
+  BPE omograph tokenizer). No `ndarray` — `ort` tensors build from `Vec + shape` directly.
+- **`src/ruaccent/char_tok.rs`** — CharTokenizer for the accent model (vocab.txt → char ids, `[bos]…[eos]`).
+- **`src/ruaccent/tok_bert.rs`** — wrapper over `tokenizers::Tokenizer` (loads `tokenizer.json`): single
+  encode (offsets + special mask, for NER), pair encode + pad id (for the omograph classifier).
+- **`src/ruaccent/ner.rs`** — the shared token-classification decode (`collect_pre_entities` +
+  `aggregate_words("AVERAGE")`) used by both the stress_usage and yo_homograph models; returns one label
+  per word, aligned with `split_by_words`. `is_subword` via char-length of token vs byte-sliced word_ref.
+- **`src/ruaccent/models.rs`** — 4 `ort::Session`s. `AccentModel.put_accent` (char-level, softmax/argmax/
+  ≥0.55, render_stress `text[i-1]` incl. Python's `[-1]` wrap); `BertNerModel.predict` (stress/yo);
+  `OmographModel.classify` (both the batched pair-classify path with a global softmax + consecutive-pair
+  argmax, and the NO_BATCH `group_words`/`transfer_grouping` path incl. the `special_words` list). Feeds
+  are built from each model's OWN declared inputs (robust to yo/omograph omitting `token_type_ids`).
+- **`src/ruaccent/mod.rs`** — `RuAccent` now loads all 4 models + dicts and runs the full
+  `process_all_internal` orchestration (`_process_yo` → `_process_omographs` → `_process_accent`).
+  Sentence split still naive (`split_by_sentences_naive` = whole input; faithful razdel is Phase 3).
+- **Tests (8):** preprocess (5) + `accent_model_put_accent` (7 words) + `bert_ner_predict` (stress/yo
+  labels) + `process_all_parity` (**15** full sentences vs Python: multi-homograph "Ст+арый з+амок
+  сто+ял на гор+е.", same word twice "З+амок…зам+ок", ё restoration, clitics with NO_STRESS, OOV via the
+  accent model). All model-gated tests skip if `~/.cache/ruaccent` is absent (CI).
+- **Finding (Dmitry):** turbo2 mis-stresses sentence-initial "Белки" (proteins) as "Б+елки" (squirrels)
+  in every context — a model limitation, not a port bug. Parity tests reproduce the Python output
+  faithfully; fixing белки is a separate post-parity concern (custom dict/context rule) documented in 004.
+
+Next: Phase 3 (faithful razdel `sentenize` port for multi-sentence bit-exactness), Phase 4 (`sopds-tts-rs
+stress` subcommand + corpus parity harness to 0 diffs, then delete RUPY / `f5-bridge` flake /
+`ruaccent_batch.py`).
+
+**Files:** `sopds-tts-rs/Cargo.toml`, `sopds-tts-rs/Cargo.lock`,
+`sopds-tts-rs/src/ruaccent/{mod,char_tok,tok_bert,ner,models}.rs`,
+`docs/decisions/004-ruaccent-rust-port.md`, `PROGRESS.md`. No version change.
+
+---
+
 ### Revision 97 - 2026-07-22
 **Auto-F5 Phase: RUAccent→Rust native port, Phase 1 (dicts + preprocessing + dict-only stress).**
 Branch `ruaccent-rs`. No app-version bump / tag — subproject Rust change, the Go binary is unchanged
