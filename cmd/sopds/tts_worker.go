@@ -95,7 +95,7 @@ func runTTSWorker(cmd *cobra.Command, args []string) error {
 }
 
 // fulfill runs one book through the pipeline. On success the text book points at the new audiobook.
-func fulfill(ctx context.Context, svc *persistence.Service, wc config.WorkerConfig, lc config.WorkerLangConfig, script string, book *database.Book, dryRun bool) error {
+func fulfill(ctx context.Context, svc *persistence.Service, wc config.WorkerConfig, lc config.WorkerLangConfig, script string, book *database.Book, dryRun bool) (err error) {
 	// 1. FB2 → temp file for fb2-to-f5.sh.
 	fb2, cleanup, err := extractFB2(book)
 	if err != nil {
@@ -103,12 +103,19 @@ func fulfill(ctx context.Context, svc *persistence.Service, wc config.WorkerConf
 	}
 	defer cleanup()
 
-	// 2. Output dir for the chapter MP3s.
+	// 2. Output dir for the chapter MP3s. Keep it on failure so fb2-to-f5.sh's logs
+	// (review/_ruaccent.log etc.) survive for debugging; remove only on success.
 	outDir, err := os.MkdirTemp("", "ttsgen-")
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(outDir)
+	defer func() {
+		if err != nil {
+			log.Printf("  (kept %s for debugging — check review/_ruaccent.log)", outDir)
+		} else {
+			os.RemoveAll(outDir)
+		}
+	}()
 
 	mode := "all"
 	if wc.ReviewGate() {
