@@ -1,8 +1,10 @@
 package main
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -11,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bodgit/sevenzip"
 	"github.com/dimgord/sopds-go/internal/config"
 	"github.com/dimgord/sopds-go/internal/database"
 	"github.com/dimgord/sopds-go/internal/infrastructure/persistence"
@@ -160,36 +163,15 @@ func fulfill(ctx context.Context, svc *persistence.Service, wc config.WorkerConf
 // returns its path plus a cleanup func. NOTE: the on-disk layout (Path=archive/dir, Filename=entry) is
 // assumed from the scanner's model — verify against the real library layout on Fedya.
 func extractFB2(book *database.Book) (string, func(), error) {
-	src := book.Path
-	if !filepath.IsAbs(src) {
-		src = filepath.Join(cfg.Library.Root, src)
+	data, err := readBookFB2(book)
+	if err != nil {
+		return "", func() {}, err
 	}
 	tmp, err := os.CreateTemp("", "ttsbook-*.fb2")
 	if err != nil {
 		return "", func() {}, err
 	}
 	cleanup := func() { os.Remove(tmp.Name()) }
-
-	var data []byte
-	switch {
-	case strings.HasSuffix(strings.ToLower(src), ".zip"):
-		out, e := exec.Command("unzip", "-p", src, book.Filename).Output()
-		data, err = out, e
-	case strings.HasSuffix(strings.ToLower(src), ".7z"):
-		out, e := exec.Command("7zz", "e", "-so", src, book.Filename).Output()
-		data, err = out, e
-	default: // plain file — src may be the dir or the file itself
-		p := src
-		if fi, e := os.Stat(p); e == nil && fi.IsDir() {
-			p = filepath.Join(src, book.Filename)
-		}
-		data, err = os.ReadFile(p)
-	}
-	if err != nil {
-		tmp.Close()
-		cleanup()
-		return "", func() {}, err
-	}
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		cleanup()
@@ -197,6 +179,70 @@ func extractFB2(book *database.Book) (string, func(), error) {
 	}
 	tmp.Close()
 	return tmp.Name(), cleanup, nil
+}
+
+// readBookFB2 returns the book's FB2 bytes, mirroring the server's parseBookPath/readFromArchive:
+// book.Path may embed a .zip/.7z archive segment (books live inside per-id-range archives) and
+// book.Filename is the entry. Read in-process with the same libs the server uses (archive/zip,
+// bodgit/sevenzip) — no external unzip/7z and no path-as-directory guessing.
+func readBookFB2(book *database.Book) ([]byte, error) {
+	root := cfg.Library.Root
+	parts := strings.Split(book.Path, string(filepath.Separator))
+	for i, part := range parts {
+		isZip := strings.HasSuffix(strings.ToLower(part), ".zip")
+		is7z := strings.HasSuffix(strings.ToLower(part), ".7z")
+		if !isZip && !is7z {
+			continue
+		}
+		archivePath := filepath.Join(root, filepath.Join(parts[:i+1]...))
+		internal := book.Filename
+		if i+1 < len(parts) {
+			internal = filepath.Join(append(append([]string{}, parts[i+1:]...), book.Filename)...)
+		}
+		if isZip {
+			return readZipEntry(archivePath, internal, book.Filename)
+		}
+		return read7zEntry(archivePath, internal, book.Filename)
+	}
+	return os.ReadFile(filepath.Join(root, book.Path, book.Filename)) // plain file on disk
+}
+
+func readZipEntry(archivePath, internal, filename string) ([]byte, error) {
+	zr, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	for _, f := range zr.File {
+		if f.Name == internal || f.Name == filename {
+			rc, err := f.Open()
+			if err != nil {
+				return nil, err
+			}
+			defer rc.Close()
+			return io.ReadAll(rc)
+		}
+	}
+	return nil, fmt.Errorf("%s not found in %s", filename, archivePath)
+}
+
+func read7zEntry(archivePath, internal, filename string) ([]byte, error) {
+	sz, err := sevenzip.OpenReader(archivePath)
+	if err != nil {
+		return nil, err
+	}
+	defer sz.Close()
+	for _, f := range sz.File {
+		if f.Name == internal || f.Name == filename {
+			rc, err := f.Open()
+			if err != nil {
+				return nil, err
+			}
+			defer rc.Close()
+			return io.ReadAll(rc)
+		}
+	}
+	return nil, fmt.Errorf("%s not found in %s", filename, archivePath)
 }
 
 // f5Env builds the environment fb2-to-f5.sh reads (see its header). Native engine, per-language voice.
