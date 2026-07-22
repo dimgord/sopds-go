@@ -73,7 +73,18 @@ text preprocessing. Huge scope reduction.
   binary + deleting RUPY / the nix ruaccent-python / `f5-bridge/flake.nix` / `ruaccent_batch.py` is
   gated on Dmitry's call re: the residual.
 
-## Parity ceiling: onnxruntime build differences (Phase 4)
+## Production parity: 0 diffs on Fedya (Phase 4)
+
+On **dvg-fedya** (production), where both sides use the **same onnxruntime 1.22.0 on CPU**, the Rust
+`stress` is **bit-exact vs Python `ruaccent_batch.py` — 0 diffs across all 8642 lines** of a real book
+(Stephen King, "11/22/63"). Two fixes closed the gap the mac run showed: (1) the stress models now run
+on **CPU** on every platform (`load_session`) — matching Python's `device="CPU"` and removing CPU-vs-CUDA
+float divergence; (2) `normalize` now uses RUAccent's **exact** quote/apostrophe class (it had kept the
+straight `"` and curly `‘ ’`, which Python strips — surfaced on `raison d'etre` / `кат'ликом`). So the
+"parity ceiling" below is a **mac-only dev artifact** (pip onnxruntime 1.27 vs ort's 1.22); on the
+machine that actually generates audiobooks, parity is perfect.
+
+## Parity ceiling: onnxruntime build differences (Phase 4, mac dev only)
 
 Bit-exactness is bounded by the **onnxruntime build**, not the port. Python RUAccent on mac uses pip
 `onnxruntime` **1.27.0**; Rust `ort` 2.0.0-rc.10 bundles onnxruntime **1.22.0**. The two produce

@@ -5,6 +5,40 @@
 
 ---
 
+### Revision 101 - 2026-07-22
+**Auto-F5: RUAccent→Rust — BIT-EXACT on Fedya (0 diffs / 8642 lines) + two parity fixes.**
+Branch `ruaccent-rs`. No app-version bump / tag. Follows Rev 100. Decision doc 004 updated.
+
+Verified the port on **dvg-fedya (production)** per plan: built the `stress` binary in the `#worker`/
+`#default` nix shell (Fedya's onnxruntime **1.22.0** — same as ort's bundle) and diffed against Python
+`ruaccent_batch.py` on a real book ("11/22/63", 8642 stressed chunks). Initial run showed divergences;
+two fixes brought it to **0 diffs — perfect bit-exact parity**:
+
+1. **`models.rs load_session` → CPU EP on every platform.** RUAccent's 4 models are tiny; running them
+   on CPU (a) matches Python's `device="CPU"` (removing CPU-vs-CUDA float divergence at the accent
+   model's 0.55 threshold) and (b) frees the GPU for F5 synth. `f5.rs` keeps CUDA on Linux. This alone
+   cut Fedya diffs from 204 → (then normalize) → 0.
+2. **`preprocess.rs normalize` → RUAccent's exact quote/apostrophe class.** It had kept the straight `"`
+   (U+0022) and curly `‘ ’` (U+2018/2019), which RUAccent strips, and missed backslash. Verified against
+   the compiled pattern's codepoints. Surfaced on `raison d'etre` / `кат'ликом` (retained apostrophe
+   split the word). New unit assertions pin the behavior.
+
+The mac 99.94% (Rev 100) was purely the **pip onnxruntime 1.27 vs ort 1.22** version gap — a dev-only
+artifact; production (Fedya, matched 1.22 + CPU) is 0-diff. The stress port is **done and proven**.
+
+Separately noted (NOT a stress issue): a `tts-worker` run FAILED at packaging — stress produced perfect
+output (0 fallbacks) but **F5 synth emitted 0 wavs** ("0/8642 done in 3s → no mp3 produced"). That's an
+auto-f5 synth/daemon problem to chase on its own.
+
+Next (Dmitry's chosen sequence, parity now proven): rewire `fb2-to-f5.sh` → `sopds-tts-rs stress`,
+delete RUPY / `f5-bridge/flake.nix` / `ruaccent_batch.py`, merge `ruaccent-rs` → main. (Gated on also
+resolving the synth failure so the pipeline generates end-to-end.)
+
+**Files:** `sopds-tts-rs/src/ruaccent/{models,preprocess}.rs`, `docs/decisions/004-ruaccent-rust-port.md`,
+`PROGRESS.md`. No version change.
+
+---
+
 ### Revision 100 - 2026-07-22
 **Auto-F5: RUAccent→Rust port, Phase 4a — `stress` subcommand + corpus parity (99.94%).**
 Branch `ruaccent-rs`. No app-version bump / tag (subproject Rust; Go binary unchanged). Follows Rev 99.
