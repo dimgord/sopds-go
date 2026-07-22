@@ -8,9 +8,12 @@
     nixpkgs-cuda.url = "github:NixOS/nixpkgs/e6f23dc08d3624daab7094b701aa3954923c6bbb";
     rust-overlay.url = "github:oxalica/rust-overlay";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    # Fresh nixpkgs JUST for the RUAccent stress python — this flake's `nixpkgs` is pinned older for
+    # CUDA/Rust and its python3.13 lacks onnxruntime. Matches f5-bridge/flake.nix (python3.14 + onnx).
+    nixpkgs-stress.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-cuda, rust-overlay }:
+  outputs = { self, nixpkgs, nixpkgs-cuda, rust-overlay, nixpkgs-stress }:
     let
       system = "x86_64-linux";
 
@@ -45,7 +48,8 @@
       # lock stable + avoids the git-ignore/lock churn a `path:../f5-bridge` input caused). This is a
       # byte-for-byte copy of the derivation in f5-bridge/flake.nix — keep the two in sync until the
       # RUAccent→Rust native port lands (which deletes both).
-      py = pkgs.python3;
+      stressPkgs = import nixpkgs-stress { inherit system; config.allowUnfree = true; };
+      py = stressPkgs.python3;
       ruaccent-koziev = pkgs.stdenvNoCC.mkDerivation {
         name = "ruaccent-koziev";
         nativeBuildInputs = [ (py.withPackages (ps: [ ps.huggingface-hub ])) pkgs.cacert ];
