@@ -9,6 +9,7 @@ use ort::value::Tensor;
 use serde::Deserialize;
 
 mod f5;
+mod ruaccent; // native RUAccent stress port (Phase 1: dicts + preprocess) — replaces $RUPY
 
 // A daemon serves one voice: Piper (a .onnx file) or native F5 (a directory of 3 ONNX graphs +
 // vocab + reference). Same NDJSON protocol either way — the caller doesn't care which engine.

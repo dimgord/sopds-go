@@ -5,6 +5,52 @@
 
 ---
 
+### Revision 97 - 2026-07-22
+**Auto-F5 Phase: RUAccent→Rust native port, Phase 1 (dicts + preprocessing + dict-only stress).**
+Branch `ruaccent-rs`. No app-version bump / tag — subproject Rust change, the Go binary is unchanged
+(`main.revision` stays 95, `## Current Version` stays 1.7.5). Decision doc:
+`docs/decisions/004-ruaccent-rust-port.md`.
+
+Goal: eliminate the **last** Python dependency in the auto-F5 pipeline (RUAccent stress via `$RUPY`),
+which caused a night of Nix/venv/ONNX-signature pain (Rev 96). Synth already runs native ONNX via
+`ort`; porting stress to Rust deletes the whole Python/Nix stress stack. Target is **bit-exact** output
+vs Python — realistic because `ort` (same onnxruntime C++ lib) and `tokenizers` (same HuggingFace lib)
+make the neural parts inherently identical; all parity risk is in pure-Rust logic we author. **Scoping
+win:** RUAccent loads koziev/`RuleEngine` (CRF POS+lemmatization) but **never calls it** in the stress
+path → zero CRF/koziev to port.
+
+Phase 1 (this rev) — foundation, `cargo test` green (6 tests):
+- **`sopds-tts-rs/Cargo.toml`** — added `flate2` (gz dicts) + `regex`.
+- **`src/ruaccent/dicts.rs`** — `Dicts::load(home, use_dictionary)`: loads `accents[_nn]`, `omographs`,
+  `yo_words`, `yo_homographs` from `$RUACCENT_HOME/dictionary/*.json.gz` (flate2 + serde_json); mirrors
+  ruaccent.py's hardcoded `omographs["коса"]` and `letters_accent` (`accents["о"]="+о"`).
+- **`src/ruaccent/preprocess.rs`** — `normalize` (allowed-char filter), `split_by_words`,
+  `delete_spaces_before_punc`, `fix_capital`, `transfer_plus`, `count_vowels`, `has_punctuation`.
+- **`src/ruaccent/mod.rs`** — `RuAccent{load, process_all}`; Phase-1 `process_all` = normalize →
+  split_by_words → **dict-only** `_process_accent` (accents lookup + transfer_plus, OOV left for the
+  Phase-2 neural model) → rejoin → delete_spaces_before_punc.
+- **`src/main.rs`** — `mod ruaccent;`.
+- **Parity finding (pinned by tests):** RUAccent's tokenizer regex `\w*(?:\+\w+)*|[^\w\s]+` depends on
+  CPython 3.7+ `finditer` `must_advance` (after an empty `\w*` match it reaches `[^\w\s]+`, capturing
+  bare punctuation like `!!!`/trailing `.`). Rust's `find_iter` has no such flag → it drops that
+  punctuation. Fixed by matching the **non-empty subset** `\w+(?:\+\w+)*|(?:\+\w+)+|[^\w\s]+`, verified
+  token-for-token against Python `finditer` (`split_matches_python` test). Separators rebuilt from gaps
+  between spans.
+- **Tests (6):** `split_roundtrip`, `split_matches_python` (exact words/rem vs Python ground truth),
+  `normalize_strips`, `transfer_plus_case`, `vowels_and_punct`, and `dict_only_stress` — a gated
+  integration test that loads the real 20 MB `accents.json.gz` (`~/.cache/ruaccent`, skips if absent)
+  and verifies dict hits stress with case preserved.
+
+Next: Phase 2 (neural models: `tok_bert`/`char_tok`/`ner`/`models` with `ort`+`tokenizers`+`ndarray`),
+Phase 3 (faithful razdel `sentenize`), Phase 4 (`stress` subcommand + parity harness to 0 diffs, then
+delete RUPY/`f5-bridge` flake/`ruaccent_batch.py`).
+
+**Files:** `sopds-tts-rs/Cargo.toml`, `sopds-tts-rs/Cargo.lock`, `sopds-tts-rs/src/main.rs`,
+`sopds-tts-rs/src/ruaccent/{mod,preprocess,dicts}.rs`, `docs/decisions/004-ruaccent-rust-port.md`,
+`PROGRESS.md`. No version change.
+
+---
+
 ### Revision 96 - 2026-07-21
 **Auto-F5 Phase 2a: RUAccent stress runtime as a pure-Nix flake (no pip/venv).** Follows Rev 95.
 No app-version bump / tag — this is a subproject Nix flake; the Go binary is unchanged (so
