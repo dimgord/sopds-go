@@ -5,6 +5,36 @@
 
 ---
 
+### Revision 102 - 2026-07-22
+**Auto-F5: fix tts-worker "no mp3 produced" — native Rust synth in fb2-to-f5.sh.**
+Branch `ruaccent-rs`. No app-version bump / tag.
+
+A `tts-worker` run FAILED with "0/8642 done in 3s → no mp3 produced". Root cause: **`fb2-to-f5.sh`'s
+SYNTH phase still invoked the legacy Python `f5_daemon.py` (torch)**, never migrated to the native Rust
+F5 engine — even though the worker already passes `F5BIN`/`F5MODEL`. In the `#worker` nix shell `F5PY`
+is a bare python3 3.13 (no torch), so `f5_daemon.py` crashed on import → 0 wavs → no mp3. (A second
+latent trap: the `f5_bin` release binary was a stale Jul-11 build predating the current `is_f5_dir`, so
+even the Rust path would have mis-detected `f5model-onnx` as Piper.)
+
+Fix:
+- **`f5-bridge/fb2-to-f5.sh`** — SYNTH now uses **`"$F5BIN" "$F5MODEL"`** (native Rust ort daemon; the
+  model dir carries ckpt/vocab/ref/nfe, same NDJSON `{"text","output"}` protocol) when `F5BIN` is set
+  (the worker sets it), falling back to `f5_daemon.py` only for legacy manual runs. The progress line
+  now shows `native rust` vs `py torch`.
+- On Fedya: rebuilt the `f5_bin` release binary fresh (picks up the current `f5.rs` F5 detection), and
+  synced the fixed script to the running copy (`~/src/f5-spike/fb2-to-f5.sh`).
+- **Verified end-to-end on Fedya**: a 3-chunk MODE=synth run produced `01_test.mp3` (native rust
+  daemon, 3/3 chunks joined). Single-chunk synth ≈ 12-16 s on the GTX 1070 (F5 is heavy; a full book is
+  slow — a separate speed concern, not this bug). The stress half was already perfect (Rev 101).
+
+NB: the deploy/build process must rebuild `sopds-tts-rs` after `f5.rs` changes (the stale binary was
+the second trap). The `~/src/f5-spike/fb2-to-f5.sh` running copy and the repo `f5-bridge/` copy must be
+kept in sync (worker runs `$F5_HOME/fb2-to-f5.sh`).
+
+**Files:** `f5-bridge/fb2-to-f5.sh`, `PROGRESS.md`. No version change.
+
+---
+
 ### Revision 101 - 2026-07-22
 **Auto-F5: RUAccent→Rust — BIT-EXACT on Fedya (0 diffs / 8642 lines) + two parity fixes.**
 Branch `ruaccent-rs`. No app-version bump / tag. Follows Rev 100. Decision doc 004 updated.

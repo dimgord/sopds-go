@@ -92,14 +92,21 @@ while IFS=$'\t' read -r pp safe title; do
 done < "$REVIEW/_titles.tsv" > "$WORK/reqs.ndjson"
 N=$(wc -l < "$WORK/reqs.ndjson" | tr -d ' ')
 [ "$N" -gt 0 ] || { echo "no stressed text — run MODE=stress first"; exit 1; }
-echo "→ synthesizing $N chunks on $WORKERS daemon(s) (nfe=$NFE $DEVICE)"
+# Engine: native Rust (ort) F5 when F5BIN is set (the worker sets it) — the model DIR carries the
+# ckpt/vocab/ref/nfe, and the daemon speaks the same NDJSON {"text","output"} protocol. Otherwise fall
+# back to the legacy Python (torch) f5_daemon.py, which needs an F5PY with torch/f5_tts.
+echo "→ synthesizing $N chunks on $WORKERS daemon(s) ($([ -n "${F5BIN:-}" ] && echo "native rust" || echo "py torch nfe=$NFE $DEVICE"))"
 
 SECONDS=0; pids=()
 for ((i=0;i<WORKERS;i++)); do
   gawk -v W="$WORKERS" -v id="$i" 'NR%W==id' "$WORK/reqs.ndjson" > "$WORK/shard_$i"
-  "$F5PY" "$F5_HOME/f5_daemon.py" --ckpt "$CKPT" --vocab "$VOCAB" --ref "$REF" \
-     --ref-text "$REF_TEXT" --nfe "$NFE" --device "$DEVICE" ${REMOVE_SILENCE:+--remove-silence} \
-     < "$WORK/shard_$i" > "$WORK/resp_$i" 2>"$WORK/dlog_$i" &
+  if [ -n "${F5BIN:-}" ]; then
+    "$F5BIN" "$F5MODEL" < "$WORK/shard_$i" > "$WORK/resp_$i" 2>"$WORK/dlog_$i" &
+  else
+    "$F5PY" "$F5_HOME/f5_daemon.py" --ckpt "$CKPT" --vocab "$VOCAB" --ref "$REF" \
+       --ref-text "$REF_TEXT" --nfe "$NFE" --device "$DEVICE" ${REMOVE_SILENCE:+--remove-silence} \
+       < "$WORK/shard_$i" > "$WORK/resp_$i" 2>"$WORK/dlog_$i" &
+  fi
   pids+=($!)
 done
 while :; do
