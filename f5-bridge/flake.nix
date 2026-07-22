@@ -93,7 +93,9 @@
           packages = [
             ruaccent-python
             pkgs._7zz-rar # 7zz (modern 7-Zip + RAR) — pack chapters into the .7z the scanner ingests
-            pkgs.ffmpeg  # wav → mp3 join in fb2-to-f5.sh
+            pkgs.ffmpeg   # wav → mp3 join in fb2-to-f5.sh
+            pkgs.libxml2  # xmllint — fb2-to-f5.sh counts parts via XPath (xp())
+            pkgs.python3  # fb2_extract.py (chapter split); stdlib-only, any python3
             pkgs.bash
           ];
           shellHook = ''
