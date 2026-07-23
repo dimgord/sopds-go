@@ -5,6 +5,28 @@
 
 ---
 
+### Revision 112 - 2026-07-23
+**Auto-F5: chunk-break at ?/! for question intonation; ref|gen tokenization kept space-free (ru).**
+Follows Rev 111. Outcome of a question-prosody investigation.
+
+Symptom: Russian synthesis rendered `?`/`!` almost flat. Findings (`?` IS in the vocab, RUAccent keeps
+it, f5.rs feeds it — so not a drop):
+- **F5 renders `?` intonation best when the question ends the utterance.** So `narrate.Chunk` now
+  **breaks a chunk after a sentence ending in `?` or `!`** (`endsQuestionOrBang`) — the question lands
+  at the chunk end, keeping whatever narrative packed before it (so it isn't a tiny, clip-prone
+  fragment). A marginal but harmless improvement.
+- **`f5.rs`: NO space between ref_text and gen_text.** Tested inserting the `convert_char_to_pinyin`
+  word-boundary space (which the *English* base expects): it fixed first-word clipping on short chunks
+  but **flattened Russian question intonation** — the Misha24 ru model was trained on a plain
+  char-split (doc 001), so the space is wrong for it. Reverted; documented in `tokenize`.
+- Dead ends (documented, not adopted): `NFE` (fixed separately, Rev 111), the ref|gen space, and a `++`
+  emphasis marker (the model reacts but not as a question cue). **Question prosody is a Misha24
+  checkpoint limitation** — the real fix is a fine-tuned model (planned, operator's own voice).
+
+**Files:** `internal/narrate/extract.go`, `sopds-tts-rs/src/f5.rs`, `PROGRESS.md`.
+
+---
+
 ### Revision 111 - 2026-07-23
 **Auto-F5: NFE default 16 → 32 (16 sounds muffled) + English base ONNX verified end-to-end.**
 Follows Rev 110. Quality fix + English asset milestone.

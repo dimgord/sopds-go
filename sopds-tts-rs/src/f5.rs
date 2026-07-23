@@ -105,6 +105,10 @@ impl F5 {
             '\u{2018}' | '\u{2019}' => '\'',
             other => other,
         };
+        // NB: NO space between ref_text and gen_text — the Russian model (Misha24) was trained on a
+        // plain char-split (doc 001); inserting the convert_char_to_pinyin word-boundary space flattens
+        // question intonation. (First-word clipping on very short chunks is handled by the chunker
+        // keeping a sentence of context before a trailing "?"/"!" instead of isolating it.)
         (self.ref_text.chars().chain(gen_text.chars()))
             .map(norm)
             .map(|c| *self.vocab.get(&c).unwrap_or(&0))

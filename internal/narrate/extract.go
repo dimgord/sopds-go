@@ -358,11 +358,24 @@ func chunkSegment(text string, maxchars int) []string {
 			out = append(out, buf)
 			buf = s
 		}
+		// A sentence ending in ? or ! ends its chunk, so the question/exclamation lands at the end of
+		// the utterance — F5 renders its intonation there, but flattens it mid-chunk. The chunk keeps
+		// whatever narrative packed before it, so it isn't a tiny clip-prone fragment.
+		if endsQuestionOrBang(s) {
+			out = append(out, buf)
+			buf = ""
+		}
 	}
 	if buf != "" {
 		out = append(out, buf)
 	}
 	return out
+}
+
+// endsQuestionOrBang reports whether s ends with ? or ! (ignoring trailing quotes/brackets).
+func endsQuestionOrBang(s string) bool {
+	s = strings.TrimRight(s, `"»)'’” `)
+	return strings.HasSuffix(s, "?") || strings.HasSuffix(s, "!")
 }
 
 func safeName(disp, fallback string) string {
