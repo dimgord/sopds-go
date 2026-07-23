@@ -48,6 +48,7 @@ type WorkerConfig struct {
 	F5Bin        string                      `yaml:"f5_bin"`        // sopds-tts-rs binary (native synth); empty ⇒ fb2-to-f5.sh default
 	MaxChars     int                         `yaml:"max_chars"`     // MAXCHARS: max chars per synth chunk (fb2-to-f5.sh default 250)
 	NFE          int                         `yaml:"nfe"`           // F5 flow-matching steps: quality↔speed (16 = default, ~2x faster than 32); 0 ⇒ script default 16
+	Combine      int                         `yaml:"combine"`       // MP3 granularity: 1 = one per top-level section (default) · 2 = one per nested section; 0 ⇒ script default 1
 	Languages    map[string]WorkerLangConfig `yaml:"languages"`     // per-language assets; a book whose lang is absent here is skipped
 }
 

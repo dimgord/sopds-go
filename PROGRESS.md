@@ -5,6 +5,35 @@
 
 ---
 
+### Revision 106 - 2026-07-22
+**Auto-F5: two-level section selector (`PARTS="P:S-S2"`) + MP3 granularity knob (`COMBINE`).**
+Follows Rev 105. Script + a worker-config field.
+
+Generating a whole book is slow (e.g. "11/22/63" ≈ 18 h); Dmitry wanted to pick specific parts/chapters.
+Extended the `PARTS` selector from a flat list of top-level sections to **two levels of FB2 `<section>`
+hierarchy** (the common case, e.g. "Пасынки восьмой заповеди": КНИГА ПЕРВАЯ → chapters 1,2,3…):
+- **`f5-bridge/fb2-to-f5.sh`** — replaced `sect()` with `nodeXP`/`nTop`/`nSub`/`titleOf` +
+  `partUnits`. `PARTS` syntax: `"P"` (whole top section) · `"P1-P2"` (range of top sections) ·
+  `"P:S"` (nested section S inside part P) · `"P:S1-S2"` (nested range). Space-separate to combine:
+  `PARTS="1:2 2:1-3 4"`. `S` is the POSITION within P (not a global chapter number). The stress phase
+  prints the book's section map (top sections + nested counts) so the boundaries are visible; output is
+  one reviewable text + one MP3 per unit, keyed `NN` (whole part) or `NN.MM` (nested) — the synth phase
+  is unchanged (reads `_titles.tsv`, the `.` in names is filename-safe).
+- **`COMBINE` — MP3 granularity for a whole-part selection:** `1` (default) = one MP3 per top-level
+  section (all nested joined); `2` = one MP3 per nested section. Explicit `P:S` is always per nested
+  section. Wired as a worker config field too: **`internal/config/config.go`** `WorkerConfig.Combine`
+  (`yaml:"combine"`), **`cmd/sopds/tts_worker.go`** `f5Env` passes `COMBINE=<n>` when `>0` (like `NFE`).
+- Verified on "Пасынки": `PARTS="1:2 2:1-3 4"` → units 1:2 2:1 2:2 2:3 4 (01.02 = chapter «2», 04 =
+  ЭПИЛОГ); `PARTS="1" COMBINE=1` → 1 MP3 (whole Книга Первая), `COMBINE=2` → 4 MP3s (per chapter).
+
+**Flat books remain TODO:** the rare case (one `<section>`, headings as bold `<p><strong>Часть/Раздел…`,
+e.g. "11/22/63" — Разделы numbered globally 1–31 across 6 Части) is detected and flagged; a heading-split
+mode is the next step.
+
+**Files:** `f5-bridge/fb2-to-f5.sh`, `PROGRESS.md`.
+
+---
+
 ### Revision 105 - 2026-07-22
 **Auto-F5: expose F5 NFE as a worker config field (`tts.worker.nfe`).**
 Follows the v1.8.0 release (Rev 104). Small Go change.

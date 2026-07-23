@@ -270,6 +270,9 @@ func f5Env(wc config.WorkerConfig, lc config.WorkerLangConfig, mode string) []st
 	if wc.NFE > 0 { // else fb2-to-f5.sh's default (16) applies
 		env = append(env, "NFE="+strconv.Itoa(wc.NFE))
 	}
+	if wc.Combine > 0 { // else fb2-to-f5.sh's default (1 = one MP3 per top-level section)
+		env = append(env, "COMBINE="+strconv.Itoa(wc.Combine))
+	}
 	// lc.Stress: "none" (en) needs a stress-skip path in fb2-to-f5.sh (added with the en model);
 	// "ruaccent" is the script's default (RUPY comes from the f5-bridge nix devshell env).
 	return env
