@@ -97,12 +97,13 @@
           pkgs.espeak-ng
           pkgs.openssl
         ];
+        # No Python: extraction/stress/synth AND the JSON/reviewer glue are all native (Go sopds +
+        # Rust sopds-tts-rs). Only shell tools remain: gawk (shard split), ffmpeg (wav→mp3 join),
+        # 7zz (audiobook .7z packaging).
         packages = [
-          pkgs.python3   # F5PY + fb2_extract.py / reviewer glue (stdlib only)
-          pkgs.gawk      # chunk splitting in fb2-to-f5.sh
-          pkgs.libxml2   # xmllint — XPath part/title extraction
-          pkgs.ffmpeg    # wav → mp3 join
-          pkgs._7zz-rar  # 7zz — audiobook .7z packaging (unfree; allowed above)
+          pkgs.gawk
+          pkgs.ffmpeg
+          pkgs._7zz-rar  # 7zz (unfree; allowed above)
           pkgs.bash
         ];
         env = {
@@ -110,11 +111,9 @@
           ORT_LIB_LOCATION = "${onnxruntime}/lib";
         };
         shellHook = nvidiaHook + ''
-          export F5PY="${pkgs.python3}/bin/python3"
           export RUACCENT_HOME="''${RUACCENT_HOME:-$HOME/.cache/ruaccent}"
-          echo "f5-worker shell (CUDA + native Rust stress/synth + tools)"
-          echo "  F5PY=$F5PY   (stress+synth are native: sopds-tts-rs)"
-          echo "  RUACCENT_HOME=$RUACCENT_HOME   7zz/ffmpeg/gawk/xmllint ready"
+          echo "f5-worker shell (CUDA + native Rust stress/synth, native Go extract — no Python)"
+          echo "  RUACCENT_HOME=$RUACCENT_HOME   7zz/ffmpeg/gawk ready"
           echo "Run: cd <sopds-go> && ./sopds tts-worker -c config.yaml"
         '';
         };

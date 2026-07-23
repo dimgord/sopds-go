@@ -5,6 +5,33 @@
 
 ---
 
+### Revision 108 - 2026-07-23
+**Auto-F5: kill the last Python — native Go for the JSON/reviewer glue; `#worker` shell has no Python.**
+Follows Rev 107. The engines were already native (stress = Rust RUAccent port, synth = Rust F5,
+extract = Go); this removes the remaining stdlib-`python3` glue (`F5PY`).
+
+- **`cmd/sopds/reviewglue.go`** (new): two native subcommands —
+  - `sopds ndjson-reqs <review> <work>` — builds the F5 daemon's NDJSON request stream from the
+    stressed `.txt` files (`encoding/json`, `SetEscapeHTML(false)` = UTF-8 like `ensure_ascii=False`),
+    replacing the shell's `python3 -c json.dumps` per-chunk loop.
+  - `sopds check-yo <review> <homographs>` — the reviewer's ё-flag report (word-diff raw↔stressed,
+    flags added-ё on known homographs), replacing the python heredoc.
+- **`f5-bridge/fb2-to-f5.sh`** — uses `$SOPDS ndjson-reqs` / `$SOPDS check-yo`; removed the
+  `f5_daemon.py` (torch) synth fallback (F5BIN now required) and the `F5PY` var. Only `gawk` + `ffmpeg`
+  remain as external tools.
+- **Deleted `f5-bridge/f5_daemon.py`.** **`sopds-tts-rs/flake.nix` `#worker`** drops `python3` (+ the
+  now-unused `libxml2`/xmllint) and the `F5PY` export — the shell is CUDA + Rust + gawk/ffmpeg/7zz only.
+- Verified: `ndjson-reqs` emits correct UTF-8 NDJSON, `check-yo` the TSV report.
+
+**The auto-F5 pipeline is now 100% Python-free** — extract (Go) → stress (Rust) → synth (Rust),
+plus native Go glue. (Speed note: synth is GPU-bound; on Fedya's GTX 1070, F5 at NFE 16 is ~20 s per
+250-char chunk at 100% GPU / 7 GB VRAM — inherent, not a CPU fallback. Full books → a faster GPU.)
+
+**Files:** `cmd/sopds/reviewglue.go`, `cmd/sopds/main.go`, `f5-bridge/fb2-to-f5.sh`,
+`sopds-tts-rs/flake.nix`, `PROGRESS.md`; deleted `f5-bridge/f5_daemon.py`.
+
+---
+
 ### Revision 107 - 2026-07-22
 **Auto-F5: native Go FB2 narration extractor (`internal/narrate` + `sopds fb2-extract`) — replaces the
 shell xmllint/awk extraction AND the Python `fb2_extract.py`; pipeline now has NO Python for

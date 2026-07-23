@@ -169,8 +169,25 @@ func main() {
 	}
 	fb2ExtractCmd.Flags().Int("combine", 0, "MP3 granularity: 1=one per part (default), 2=one per chapter")
 
+	noConfig := func(cmd *cobra.Command, args []string) error { return nil } // pipeline glue: no DB/config
+	ndjsonReqsCmd := &cobra.Command{
+		Use:               "ndjson-reqs <review_dir> <work_dir>",
+		Short:             "Build the F5 daemon's NDJSON request stream from stressed review text (native)",
+		Args:              cobra.ExactArgs(2),
+		PersistentPreRunE: noConfig,
+		RunE:              runNDJSONReqs,
+	}
+	checkYoCmd := &cobra.Command{
+		Use:               "check-yo <review_dir> <homographs_file>",
+		Short:             "Report ё-restorations on ambiguous homographs for review (native)",
+		Args:              cobra.ExactArgs(2),
+		PersistentPreRunE: noConfig,
+		RunE:              runCheckYo,
+	}
+
 	rootCmd.AddCommand(startCmd, stopCmd, statusCmd, scanCmd, migrateCmd, initCmd, versionCmd, importCmd,
-		ttsRequestsCmd, ttsListCmd, ttsLinkCmd, ttsUnlinkCmd, audioListCmd, ttsWorkerCmd, fb2ExtractCmd)
+		ttsRequestsCmd, ttsListCmd, ttsLinkCmd, ttsUnlinkCmd, audioListCmd, ttsWorkerCmd, fb2ExtractCmd,
+		ndjsonReqsCmd, checkYoCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
