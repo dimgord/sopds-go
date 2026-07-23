@@ -5,6 +5,34 @@
 
 ---
 
+### Revision 107 - 2026-07-22 (WIP)
+**Auto-F5: native Go FB2 narration extractor (`internal/narrate`) — core done, not yet wired.**
+Follows Rev 106. Replaces the shell xmllint/awk extraction AND the Python `fb2_extract.py` with one
+native Go package (keeps the pipeline Python-free per the RUAccent port).
+
+`internal/narrate` (`narrate.go` parser + `extract.go` units/chunking), fully unit-tested:
+- **Token-stream FB2 parse** (`encoding/xml` structs lose the interleaved `<p>`/`<section>` order that
+  narration + flat-heading detection need). Ordered node tree; bold-paragraph detection.
+- **Two shapes:** sectioned (main body nests `<section>/<section>` = part→chapter, e.g. "Пасынки") and
+  **flat** (one `<section>`, parts/chapters as bold `<p><strong>Часть/Раздел…</strong>`, e.g. "11/22/63").
+- **Selector + granularity:** `Units(mb, "P:S-S2…", combine)` — same `PARTS` syntax as Rev 106 (P /
+  P1-P2 / P:S / P:S1-S2) and `COMBINE` (1 = per part, 2 = per chapter).
+- **Footnotes (Примечания):** `<a href="#id">` refs captured as markers, `<body name="notes">` parsed,
+  each ref inlined as "Примечание. <text>" (leading number dropped) and SEP-bracketed so the chunker
+  isolates it into its own chunk (never packed mid-narrative).
+- **Chunker** matches the old `sed|gawk`: sentence-split + greedy pack to ≤maxchars, counting **runes**
+  (not bytes) like gawk `length()`.
+- Tests: flat/section structure, selector+COMBINE (verified on real "Пасынки"), rune chunk packing,
+  footnote inline+isolation.
+
+**Remaining (next):** spoken headings / feminine ordinals ("Глава вторая"), a `sopds fb2-extract`
+subcommand, wire `fb2-to-f5.sh` to it (replacing the Rev 106 shell selector), delete `fb2_extract.py`,
+end-to-end verify on both books.
+
+**Files:** `internal/narrate/{narrate,extract}.go` (+ tests), `PROGRESS.md`.
+
+---
+
 ### Revision 106 - 2026-07-22
 **Auto-F5: two-level section selector (`PARTS="P:S-S2"`) + MP3 granularity knob (`COMBINE`).**
 Follows Rev 105. Script + a worker-config field.
