@@ -45,65 +45,23 @@ _stressbin="${STRESSBIN:-${F5BIN:-}}"
 STRESS=("$_stressbin" stress)
 REVIEW="$OUT/review"
 mkdir -p "$OUT" "$REVIEW"
-# `|| true`: an empty node-set (e.g. a section with no <title>) makes xmllint exit non-zero,
-# which under set -e+pipefail would kill the script — tolerate it, callers handle empty output.
-xp() { xmllint --xpath "$1" "$FB2" 2>/dev/null || true; }
-# Section addressing (namespace-agnostic). Two levels: a top-level section [P], or its nested
-# section [P]/[S] (S is the POSITION within part P, not a global chapter number).
-BODYSEC='//*[local-name()="body"][not(@name)]/*[local-name()="section"]'
-nodeXP()  { if [ -n "${2:-}" ]; then echo "${BODYSEC}[$1]/*[local-name()=\"section\"][$2]"; else echo "${BODYSEC}[$1]"; fi; }
-nTop()    { xp "count($BODYSEC)" | cut -d. -f1; }
-nSub()    { xp "count(${BODYSEC}[$1]/*[local-name()=\"section\"])" | cut -d. -f1; }
-titleOf() { xp "$1/*[local-name()=\"title\"]" | sed 's/<[^>]*>//g' | tr '\n' ' ' | sed -E 's/ +/ /g; s/^ | $//g' | cut -c1-40; }
-# COMBINE — MP3 granularity for a WHOLE-part selection: 1 = one MP3 per top-level section (all its
-# nested sections joined); 2 = one MP3 per nested section. (An explicit "P:S"/"P:S1-S2" is always per
-# nested section regardless.) A part with no nested sections stays a single unit either way.
-COMBINE=${COMBINE:-1}
-emitPart() {  # $1 = P — expand a whole-part selection per COMBINE
-  if [ "$COMBINE" = 2 ] && [ "$(nSub "$1")" -gt 0 ]; then
-    local s; for s in $(seq 1 "$(nSub "$1")"); do echo "$1:$s"; done
-  else echo "$1"; fi
-}
-# Expand the PARTS selector into one unit per line: "P" (whole top section) or "P:S" (nested section).
-#   PARTS syntax: "P" | "P1-P2" | "P:S" | "P:S1-S2", space-separated. Empty ⇒ all top-level sections.
-partUnits() {
-  if [ -z "${PARTS:-}" ]; then local p; for p in $(seq 1 "$(nTop)"); do emitPart "$p"; done; return; fi
-  local tok p sr s s1 s2 p1 p2
-  for tok in $PARTS; do case "$tok" in
-    *:*) p="${tok%%:*}"; sr="${tok#*:}"
-         case "$sr" in
-           *-*) s1="${sr%%-*}"; s2="${sr##*-}"; for s in $(seq "$s1" "$s2"); do echo "$p:$s"; done ;;
-           *)   echo "$p:$sr" ;;
-         esac ;;
-    *-*) p1="${tok%%-*}"; p2="${tok##*-}"; for p in $(seq "$p1" "$p2"); do emitPart "$p"; done ;;
-    *)   emitPart "$tok" ;;
-  esac; done
-}
+# SOPDS — the sopds binary providing the native `fb2-extract` (FB2 → per-unit narration text: 2-level
+# section OR flat bold-heading split, PARTS selector, COMBINE granularity, spoken headings, inlined
+# Примечания). The worker passes its own executable path; fall back to `sopds` on PATH for manual runs.
+SOPDS="${SOPDS:-sopds}"
 
-# ---- STRESS phase: produce per-unit reviewable stressed text --------------------------------
+# ---- STRESS phase: extract narration (native) → stress each unit -----------------------------
 if [ "$MODE" = stress ] || [ "$MODE" = all ]; then
-  NTOP=$(nTop)
-  # Structure map — shows part→nested boundaries so you can pick PARTS selectors (P / P:S / P:S1-S2).
-  echo "→ book: $NTOP top-level section(s)"
-  for _p in $(seq 1 "$NTOP"); do echo "     [$_p] $(titleOf "$(nodeXP "$_p")")  → $(nSub "$_p") nested"; done
-  [ "$NTOP" = 1 ] && [ "$(nSub 1)" = 0 ] && echo "  (flat book — one section, no nested; P:S selectors N/A. Heading-split mode TBD.)"
-  echo "→ stressing units: $(partUnits | tr '\n' ' ') (chars≤$MAXCHARS)"
-  : > "$REVIEW/_titles.tsv"
-  while read -r unit; do
-    p="${unit%%:*}"; s=""; case "$unit" in *:*) s="${unit#*:}";; esac
-    node=$(nodeXP "$p" "$s")
-    title=$(titleOf "$node")
-    if [ -n "$s" ]; then id=$(printf '%02d.%02d' "$p" "$s"); def="part_${p}_${s}"; else id=$(printf '%02d' "$p"); def="part_$p"; fi
-    safe=$(printf '%s' "${title:-$def}" | tr ' /' '__' | tr -cd 'A-Za-z0-9_А-Яа-яЁё.-')
-    printf '%s\t%s\t%s\n' "$id" "$safe" "$title" >> "$REVIEW/_titles.tsv"
-    xp "$node//text()" | tr '\n' ' ' | sed -E 's/([.!?]["»)]*) +/\1\n/g' \
-      | gawk -v max="$MAXCHARS" '{gsub(/^ +| +$/,"");if($0=="")next;if(b=="")b=$0;else if(length(b)+1+length($0)<=max)b=b" "$0;else{print b;b=$0}}END{if(b!="")print b}' \
-      > "$REVIEW/${id}_${safe}.raw.txt"
+  echo "→ extracting narration (native fb2-extract; PARTS='${PARTS:-all}' COMBINE=${COMBINE:-1})…"
+  "$SOPDS" fb2-extract "$FB2" "$REVIEW" "$MAXCHARS" "${PARTS:-}" --combine "${COMBINE:-1}"
+  N=$(wc -l < "$REVIEW/_titles.tsv" | tr -d ' ')
+  echo "→ stressing $N unit(s) (chars≤$MAXCHARS)"
+  while IFS=$'\t' read -r id safe title; do
     "${STRESS[@]}" ${FIX:+--fix "$FIX"} \
       < "$REVIEW/${id}_${safe}.raw.txt" \
       > "$REVIEW/${id}_${safe}.txt" 2>>"$REVIEW/_ruaccent.log"
-    echo "  ✓ $unit → ${id}: $(wc -l < "$REVIEW/${id}_${safe}.txt") chunks — $title"
-  done < <(partUnits)
+    echo "  ✓ ${id}: $(wc -l < "$REVIEW/${id}_${safe}.txt") chunks — $title"
+  done < "$REVIEW/_titles.tsv"
   # Ambiguous-homograph report: only flag ё-restorations on genuine homographs (берет, десны, …),
   # not the always-ё words (ещё, всё, её). These are the ones worth eyeballing in the review text.
   "${STRESS[@]}" --dump-homographs "$REVIEW/_homographs.txt" </dev/null 2>/dev/null || true

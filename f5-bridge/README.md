@@ -14,7 +14,7 @@ the cost is speed (F5 is a 336 M diffusion model — see below).
 | file | venv | role |
 |------|------|------|
 | `f5_daemon.py` | `f5env` | resident F5 (load once, NDJSON `{text,output}` in → WAV out) |
-| `fb2_extract.py` | — | FB2 → per-chapter narration text: part→chapter split, spoken headings, inline footnotes |
+| `sopds fb2-extract` | — | (native Go) FB2 → per-unit narration text: 2-level section **or** flat bold-heading split, PARTS/COMBINE selector, spoken headings, inline footnotes |
 | `reviewer/` | — | Go web tool to proofread the RUAccent stress before synthesis (two-pane, ё-homograph flags) |
 | `fb2-to-f5.sh` | — | orchestrator: split by part → chunk → stress → F5 daemons → per-part MP3 |
 | `merge_ellipsis.py` | — | graft `…` back into already-stressed text (RUAccent strips it — never re-stress) |
@@ -77,19 +77,25 @@ MODE=synth REMOVE_SILENCE=1 NFE=32 WORKERS=3 DEVICE=cuda ./fb2-to-f5.sh book.fb2
 
 Output: `out/NN_<title>.mp3`, **one per chapter** (see below).
 
-### Structure & footnotes (`fb2_extract.py`)
+### Structure & footnotes (`sopds fb2-extract`, native Go — `internal/narrate`)
 
-The extractor splits the book at the **second level** — one MP3 per chapter (`<section>/<section>`);
-a part with no chapters stays one MP3. Each chapter opens with a **spoken heading**: the first
-chapter of a part is prefixed with the part title (`Книга первая. Дети вора Самуила. Глава первая.`),
-the rest just `Глава вторая.` — numeric chapter titles are voiced as feminine ordinals (F5 would read
-a bare digit as a cardinal). `NN` numbers chapters **continuously** across parts and stays stable even
-with `PARTS=` set (which still filters by top-level part).
+The native extractor handles **two book shapes**:
+- **Sectioned** (the common case): the main body nests `<section>/<section>` = part → chapter.
+- **Flat** (rare, e.g. "11/22/63"): one `<section>` whose parts/chapters are **bold heading
+  paragraphs** (`<p><strong>Часть N…/Раздел N</strong></p>`) in the paragraph stream.
 
-**Footnotes** (`<body name="notes">`) are read **inline, at the end of the sentence that references
-them** — not dumped at the end where a listener can't match note 46 to anything — as
-`Примечание. <text>` (the note's own leading number is dropped). All handled by `fb2_extract.py`
-during the stress phase, so the review `.txt` already shows exactly what will be spoken.
+`PARTS` selects units in **two levels** — `P` (whole part) · `P1-P2` · `P:S` (chapter S of part P) ·
+`P:S1-S2`, space-separated — and `COMBINE` sets MP3 granularity: `1` = one MP3 per part (chapters
+joined), `2` = one per chapter. Each chapter opens with a **spoken heading**: the first chapter of a
+part is prefixed with the part title (`Книга первая. Дети вора Самуила. Глава первая.`), the rest just
+`Глава вторая.` — bare-numeric chapter titles are voiced as feminine ordinals (F5 would read a lone
+digit as a cardinal). Units are keyed `NN` (whole part) / `NN.MM` (chapter).
+
+**Footnotes** (`<body name="notes">`) are read **inline** where referenced, as `Примечание. <text>`
+(the note's own leading number dropped), bracketed by a hard chunk boundary so each note becomes its
+own chunk — never packed mid-narrative. The review `.txt` already shows exactly what will be spoken.
+(This replaced the old `fb2_extract.py` + the shell `xmllint/awk` extraction — the pipeline has no
+Python for extraction/stress/synth.)
 
 ### Native synth engine (no Python)
 

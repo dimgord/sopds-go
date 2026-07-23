@@ -107,3 +107,18 @@ func TestUnitsPasynki(t *testing.T) {
 		t.Errorf("1:2 disp=%q textHasЛаура=%v", us[0].Disp, strings.Contains(us[0].Text, "Лаура"))
 	}
 }
+
+func TestSpokenHeadings(t *testing.T) {
+	if got := spokenHeading("КНИГА ПЕРВАЯ", "2", true); got != "КНИГА ПЕРВАЯ. Глава вторая." {
+		t.Errorf("first chapter heading = %q", got)
+	}
+	if got := spokenHeading("КНИГА ПЕРВАЯ", "2", false); got != "Глава вторая." {
+		t.Errorf("non-first heading = %q", got)
+	}
+	if got := ordinalFem(23); got != "двадцать третья" {
+		t.Errorf("ordinalFem(23) = %q", got)
+	}
+	if got := spokenHeading("", "ВЕЛИКИЙ ЗДРАЙЦА", false); got != "ВЕЛИКИЙ ЗДРАЙЦА." {
+		t.Errorf("named chapter heading = %q", got)
+	}
+}

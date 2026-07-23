@@ -159,8 +159,18 @@ func main() {
 	ttsWorkerCmd.Flags().Int("max", 1, "max books to generate this pass (GPU is serial)")
 	ttsWorkerCmd.Flags().Bool("dry-run", false, "print the planned fb2-to-f5.sh invocation without generating")
 
+	fb2ExtractCmd := &cobra.Command{
+		Use:   "fb2-extract <book.fb2> <review_dir> <maxchars> [selector]",
+		Short: "Extract an FB2 book into per-unit narration text for the F5 pipeline (native)",
+		Args:  cobra.RangeArgs(3, 4),
+		// No DB/config needed — override the root's config-loading PersistentPreRunE.
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error { return nil },
+		RunE:              runFB2Extract,
+	}
+	fb2ExtractCmd.Flags().Int("combine", 0, "MP3 granularity: 1=one per part (default), 2=one per chapter")
+
 	rootCmd.AddCommand(startCmd, stopCmd, statusCmd, scanCmd, migrateCmd, initCmd, versionCmd, importCmd,
-		ttsRequestsCmd, ttsListCmd, ttsLinkCmd, ttsUnlinkCmd, audioListCmd, ttsWorkerCmd)
+		ttsRequestsCmd, ttsListCmd, ttsLinkCmd, ttsUnlinkCmd, audioListCmd, ttsWorkerCmd, fb2ExtractCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

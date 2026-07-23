@@ -253,11 +253,26 @@ func Units(mb *node, selector string, combine int, notes map[string]string) []Un
 	return out
 }
 
+func writeHeading(b *strings.Builder, h string) {
+	if h != "" {
+		b.WriteString(h)
+		b.WriteByte('\n')
+	}
+}
+
 func wholePartUnit(p part, pi int, notes map[string]string) Unit {
 	var b strings.Builder
-	b.WriteString(joinParas(p.intro, notes))
-	for _, ch := range p.chapters {
-		b.WriteString(joinParas(ch.paras, notes))
+	if len(p.chapters) == 0 {
+		writeHeading(&b, spokenHeading(p.title, "", true)) // announce the part title
+		b.WriteString(joinParas(p.intro, notes))
+	} else {
+		for ci, ch := range p.chapters { // each chapter announced within the part
+			writeHeading(&b, spokenHeading(p.title, ch.title, ci == 0))
+			if ci == 0 {
+				b.WriteString(joinParas(p.intro, notes))
+			}
+			b.WriteString(joinParas(ch.paras, notes))
+		}
 	}
 	disp := p.title
 	if disp == "" {
@@ -269,7 +284,9 @@ func wholePartUnit(p part, pi int, notes map[string]string) Unit {
 func chapterUnit(p part, pi, ci int, notes map[string]string) Unit {
 	ch := p.chapters[ci-1]
 	var b strings.Builder
-	if ci == 1 {
+	first := ci == 1
+	writeHeading(&b, spokenHeading(p.title, ch.title, first))
+	if first {
 		b.WriteString(joinParas(p.intro, notes)) // part intro rides with its first chapter
 	}
 	b.WriteString(joinParas(ch.paras, notes))

@@ -5,10 +5,10 @@
 
 ---
 
-### Revision 107 - 2026-07-22 (WIP)
-**Auto-F5: native Go FB2 narration extractor (`internal/narrate`) — core done, not yet wired.**
-Follows Rev 106. Replaces the shell xmllint/awk extraction AND the Python `fb2_extract.py` with one
-native Go package (keeps the pipeline Python-free per the RUAccent port).
+### Revision 107 - 2026-07-22
+**Auto-F5: native Go FB2 narration extractor (`internal/narrate` + `sopds fb2-extract`) — replaces the
+shell xmllint/awk extraction AND the Python `fb2_extract.py`; pipeline now has NO Python for
+extraction/stress/synth.** Follows Rev 106 (whose shell selector this supersedes).
 
 `internal/narrate` (`narrate.go` parser + `extract.go` units/chunking), fully unit-tested:
 - **Token-stream FB2 parse** (`encoding/xml` structs lose the interleaved `<p>`/`<section>` order that
@@ -25,11 +25,22 @@ native Go package (keeps the pipeline Python-free per the RUAccent port).
 - Tests: flat/section structure, selector+COMBINE (verified on real "Пасынки"), rune chunk packing,
   footnote inline+isolation.
 
-**Remaining (next):** spoken headings / feminine ordinals ("Глава вторая"), a `sopds fb2-extract`
-subcommand, wire `fb2-to-f5.sh` to it (replacing the Rev 106 shell selector), delete `fb2_extract.py`,
-end-to-end verify on both books.
+- **Spoken headings / ordinals** (`headings.go`): a chapter opens with the part title (first chapter
+  only) + "Глава <feminine-ordinal>." for bare-numeric titles (else the title verbatim). Verified:
+  "КНИГА ПЕРВАЯ… Глава первая. — Пся крев!".
+- **`sopds fb2-extract <fb2> <review> <maxchars> [selector] --combine N`** (`cmd/sopds/fb2extract.go`,
+  registered in `main.go` with a config-skipping PersistentPreRunE) — writes the `NN_safe.raw.txt` +
+  `_titles.tsv` the pipeline reads, prints the section map to stderr.
+- **`f5-bridge/fb2-to-f5.sh`** — STRESS phase now calls `$SOPDS fb2-extract …` (replacing the whole
+  xmllint/awk + shell-selector block from Rev 106), then stresses each unit. **`cmd/sopds/tts_worker.go`**
+  `f5Env` passes `SOPDS=<own exe path>` (via `os.Executable()`).
+- **Deleted `f5-bridge/fb2_extract.py`.** README updated.
+- **End-to-end verified:** native fb2-extract → stress, on real "Пасынки" (`PARTS="1:1 4"`, spoken
+  headings) and flat "11/22/63" (`PARTS="4" --combine 2` → 9 units Раздел 14–22).
 
-**Files:** `internal/narrate/{narrate,extract}.go` (+ tests), `PROGRESS.md`.
+**Files:** `internal/narrate/{narrate,extract,headings}.go` (+ tests), `cmd/sopds/fb2extract.go`,
+`cmd/sopds/main.go`, `cmd/sopds/tts_worker.go`, `f5-bridge/fb2-to-f5.sh`, `f5-bridge/README.md`,
+`PROGRESS.md`; deleted `f5-bridge/fb2_extract.py`.
 
 ---
 
