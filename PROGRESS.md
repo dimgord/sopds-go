@@ -5,6 +5,27 @@
 
 ---
 
+### Revision 110 - 2026-07-23
+**Auto-F5: per-language accent mode (`STRESS_MODE`) — English (`stress: none`) path; groundwork for uk.**
+Follows Rev 109. Code enabler for multi-language voices.
+
+The config already modeled `WorkerLangConfig.Stress` (ruaccent | none | uk-stress) but the worker never
+passed it and `fb2-to-f5.sh` always ran RUAccent — so a non-ru language would get Russian stress.
+- **`cmd/sopds/tts_worker.go`** — `f5Env` now passes `STRESS_MODE=<lc.stress>` (default `ruaccent`).
+- **`f5-bridge/fb2-to-f5.sh`** — branches on `STRESS_MODE`: `ruaccent` (native Rust stress + ё-report,
+  as before), `none` (English — the extracted text is used verbatim, F5 English reads plain text; no
+  RUAccent binary / homograph report needed), `uk-stress` (errors — TBD). Verified `none` produces
+  `.txt == .raw.txt` (no `+` marks).
+
+**English is now code-ready** — needs only `tts.worker.languages.en: {f5_model: <en-onnx>, stress: none}`
+plus the asset: an ONNX-exported English F5 model + English ref voice. **Ukrainian** still needs a uk
+stress engine (RUAccent is Russian-only) AND a trained uk F5 checkpoint (none exists) — both larger,
+asset-gated efforts.
+
+**Files:** `cmd/sopds/tts_worker.go`, `f5-bridge/fb2-to-f5.sh`, `PROGRESS.md`.
+
+---
+
 ### Revision 109 - 2026-07-23
 **Auto-F5: wire the review-gate ("stop-and-read") — persist staged stress + `sopds tts-resume`.**
 Follows Rev 108. Completes the long-standing "Phase 2c" gap.

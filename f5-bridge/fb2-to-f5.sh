@@ -35,12 +35,17 @@ CKPT=${CKPT:-$F5_HOME/ru-model/model_v2.safetensors}
 VOCAB=${VOCAB:-$F5_HOME/ru-model/vocab.txt}
 NFE=${NFE:-16}; WORKERS=${WORKERS:-1}; MAXCHARS=${MAXCHARS:-250}; DEVICE=${DEVICE:-cpu}
 MODE=${MODE:-all}; PARTS=${PARTS:-}; FIX=${FIX:-}
-# Stress engine: native Rust `sopds-tts-rs stress` (STRESSBIN, else the F5BIN binary — it's the same
-# binary). Needs RUACCENT_HOME (the dictionary + nn models dir). Accepts --fix / --dump-homographs.
-export RUACCENT_HOME="${RUACCENT_HOME:-$HOME/.cache/ruaccent}"
-_stressbin="${STRESSBIN:-${F5BIN:-}}"
-[ -n "$_stressbin" ] || { echo "fb2-to-f5.sh: set STRESSBIN or F5BIN to the sopds-tts-rs binary" >&2; exit 1; }
-STRESS=("$_stressbin" stress)
+# Accent mode per language (STRESS_MODE, from the worker's lc.stress):
+#   ruaccent (ru, default) — native Rust `sopds-tts-rs stress` (needs RUACCENT_HOME + STRESSBIN/F5BIN);
+#   none     (en)          — F5 English reads plain text, so the extracted text is used as-is;
+#   uk-stress (uk)         — a Ukrainian stresser (TBD).
+STRESS_MODE="${STRESS_MODE:-ruaccent}"
+if [ "$STRESS_MODE" = ruaccent ]; then
+  export RUACCENT_HOME="${RUACCENT_HOME:-$HOME/.cache/ruaccent}"
+  _stressbin="${STRESSBIN:-${F5BIN:-}}"
+  [ -n "$_stressbin" ] || { echo "fb2-to-f5.sh: set STRESSBIN or F5BIN to the sopds-tts-rs binary" >&2; exit 1; }
+  STRESS=("$_stressbin" stress)
+fi
 REVIEW="$OUT/review"
 mkdir -p "$OUT" "$REVIEW"
 # SOPDS — the sopds binary providing the native `fb2-extract` (FB2 → per-unit narration text: 2-level
@@ -55,15 +60,19 @@ if [ "$MODE" = stress ] || [ "$MODE" = all ]; then
   N=$(wc -l < "$REVIEW/_titles.tsv" | tr -d ' ')
   echo "→ stressing $N unit(s) (chars≤$MAXCHARS)"
   while IFS=$'\t' read -r id safe title; do
-    "${STRESS[@]}" ${FIX:+--fix "$FIX"} \
-      < "$REVIEW/${id}_${safe}.raw.txt" \
-      > "$REVIEW/${id}_${safe}.txt" 2>>"$REVIEW/_ruaccent.log"
-    echo "  ✓ ${id}: $(wc -l < "$REVIEW/${id}_${safe}.txt") chunks — $title"
+    raw="$REVIEW/${id}_${safe}.raw.txt"; out="$REVIEW/${id}_${safe}.txt"
+    case "$STRESS_MODE" in
+      none)     cp "$raw" "$out" ;;                                                            # English: verbatim
+      ruaccent) "${STRESS[@]}" ${FIX:+--fix "$FIX"} < "$raw" > "$out" 2>>"$REVIEW/_ruaccent.log" ;;
+      *)        echo "fb2-to-f5.sh: unknown STRESS_MODE='$STRESS_MODE'" >&2; exit 1 ;;
+    esac
+    echo "  ✓ ${id}: $(wc -l < "$out") chunks — $title"
   done < "$REVIEW/_titles.tsv"
-  # Ambiguous-homograph report: only flag ё-restorations on genuine homographs (берет, десны, …),
-  # not the always-ё words (ещё, всё, её). These are the ones worth eyeballing in the review text.
-  "${STRESS[@]}" --dump-homographs "$REVIEW/_homographs.txt" </dev/null 2>/dev/null || true
-  "$SOPDS" check-yo "$REVIEW" "$REVIEW/_homographs.txt" > "$REVIEW/_check-yo.tsv" 2>/dev/null || true
+  # ё-homograph review report — RUAccent only (English/none has no ё).
+  if [ "$STRESS_MODE" = ruaccent ]; then
+    "${STRESS[@]}" --dump-homographs "$REVIEW/_homographs.txt" </dev/null 2>/dev/null || true
+    "$SOPDS" check-yo "$REVIEW" "$REVIEW/_homographs.txt" > "$REVIEW/_check-yo.tsv" 2>/dev/null || true
+  fi
   echo "→ review files in $REVIEW/  (NN_*.txt = editable stressed text; _check-yo.tsv = ё-flags)"
   [ "$MODE" = stress ] && { echo "✓ stress done — edit the .txt files, then run MODE=synth"; exit 0; }
 fi

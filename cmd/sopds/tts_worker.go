@@ -344,8 +344,13 @@ func f5Env(wc config.WorkerConfig, lc config.WorkerLangConfig, mode string) []st
 	if exe, err := os.Executable(); err == nil { // fb2-to-f5.sh calls `$SOPDS fb2-extract …`
 		env = append(env, "SOPDS="+exe)
 	}
-	// lc.Stress: "none" (en) needs a stress-skip path in fb2-to-f5.sh (added with the en model);
-	// "ruaccent" is the script's default (RUPY comes from the f5-bridge nix devshell env).
+	// How to accent before synth: "ruaccent" (ru, default) · "none" (en — F5 English reads plain text) ·
+	// "uk-stress" (uk, later). fb2-to-f5.sh branches on STRESS_MODE.
+	stress := lc.Stress
+	if stress == "" {
+		stress = "ruaccent"
+	}
+	env = append(env, "STRESS_MODE="+stress)
 	return env
 }
 
