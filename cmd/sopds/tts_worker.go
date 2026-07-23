@@ -27,8 +27,9 @@ import (
 //
 // Per book: pick the FB2 → f5-bridge/fb2-to-f5.sh (stress + native F5 synth, per-language voice) →
 // 7z the chapter MP3s into library.root/<output_subdir> → scan → link the text book to the new
-// audiobook (SetTTSAudioID). Only the "auto" review mode synthesizes here; "gate" stops after stress
-// for editor review (Phase 2c wires the resume).
+// audiobook (SetTTSAudioID). Only the "auto" review mode synthesizes here; "gate" stops after stress,
+// staging the review text under library.root/.tts-review/<book_id>/ — the operator proofreads it
+// (f5-bridge/reviewer) and finishes it with `sopds tts-resume <book_id>`.
 func runTTSWorker(cmd *cobra.Command, args []string) error {
 	// The app redirects the default logger to a file (setupLogging); for an interactive/timer CLI
 	// the operator wants to SEE the worker's progress, so send it to stderr.
@@ -103,23 +104,33 @@ func fulfill(ctx context.Context, svc *persistence.Service, wc config.WorkerConf
 	}
 	defer cleanup()
 
-	// 2. Output dir for the chapter MP3s. Keep it on failure so fb2-to-f5.sh's logs
-	// (review/_ruaccent.log etc.) survive for debugging; remove only on success.
-	outDir, err := os.MkdirTemp("", "ttsgen-")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			log.Printf("  (kept %s for debugging — check review/_ruaccent.log)", outDir)
-		} else {
-			os.RemoveAll(outDir)
+	// 2. Where the chapter MP3s go. Auto mode: a scratch temp, removed on success (kept on failure so
+	// review/_ruaccent.log survives). Gate mode: a STABLE hidden staging dir keyed by book id, kept
+	// for proofreading + `tts-resume`.
+	gate := wc.ReviewGate()
+	var outDir string
+	if gate {
+		outDir = reviewDirFor(book.ID)
+		if err = os.MkdirAll(outDir, 0o755); err != nil {
+			return err
 		}
-	}()
+	} else {
+		outDir, err = os.MkdirTemp("", "ttsgen-")
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				log.Printf("  (kept %s for debugging — check review/_ruaccent.log)", outDir)
+			} else {
+				os.RemoveAll(outDir)
+			}
+		}()
+	}
 
 	mode := "all"
-	if wc.ReviewGate() {
-		mode = "stress" // Phase 2c: stop here, hand the review dir to the editor, resume with synth
+	if gate {
+		mode = "stress" // stop after stress; the operator proofreads, then `sopds tts-resume <id>`
 	}
 	env := f5Env(wc, lc, mode)
 	shArgs := []string{script, fb2, outDir}
@@ -133,28 +144,40 @@ func fulfill(ctx context.Context, svc *persistence.Service, wc config.WorkerConf
 	c := exec.CommandContext(ctx, "bash", shArgs...)
 	c.Env = append(os.Environ(), env...)
 	c.Stdout, c.Stderr = os.Stdout, os.Stderr
-	if err := c.Run(); err != nil {
+	if err = c.Run(); err != nil {
 		return fmt.Errorf("fb2-to-f5.sh: %w", err)
 	}
-	if wc.ReviewGate() {
-		log.Printf("  review gate: stressed text ready under %s/review — proofread, then resume synth (Phase 2c)", outDir)
-		return nil
+
+	if gate {
+		log.Printf("  review gate: proofread %s/review", outDir)
+		log.Printf("               (cd f5-bridge/reviewer && go run . -dir %s/review), then: sopds tts-resume %d", outDir, book.ID)
+		return nil // outDir persists (not removed) for the resume
 	}
 
-	// 4. Package the chapter MP3s into a folder-per-audiobook .7z under library.root/<subdir>.
+	// 4-6. Package → scan → link.
+	return finishAudiobook(ctx, svc, wc, book, outDir)
+}
+
+// reviewDirFor is the hidden, per-book staging dir where gate-mode stress output waits for
+// proofreading (the scanner skips dot-dirs). Co-located with the library so mp3→.7z stays on one FS.
+func reviewDirFor(bookID int64) string {
+	return filepath.Join(cfg.Library.Root, ".tts-review", strconv.FormatInt(bookID, 10))
+}
+
+// finishAudiobook packages outDir's chapter MP3s into a .7z, rescans so it becomes an audiobook, and
+// links the text book to it. Shared by the auto path and `tts-resume`.
+func finishAudiobook(ctx context.Context, svc *persistence.Service, wc config.WorkerConfig, book *database.Book, outDir string) error {
 	archive, err := packageAudiobook(outDir, book.Title, filepath.Join(cfg.Library.Root, wc.OutputSubdir))
 	if err != nil {
 		return fmt.Errorf("package: %w", err)
 	}
 	log.Printf("  packaged → %s", archive)
 
-	// 5. Scan so the archive becomes an audiobook with its own book_id.
 	if err := scanner.New(cfg, svc).ScanAll(ctx); err != nil {
 		return fmt.Errorf("scan: %w", err)
 	}
 
-	// 6. Link: the newest audiobook is the one we just added → point the text book at it.
-	audios, err := svc.ListAudiobooks(ctx, 1)
+	audios, err := svc.ListAudiobooks(ctx, 1) // newest first = the one we just added
 	if err != nil || len(audios) == 0 {
 		return fmt.Errorf("locate new audiobook after scan: %v", err)
 	}
@@ -163,6 +186,51 @@ func fulfill(ctx context.Context, svc *persistence.Service, wc config.WorkerConf
 		return fmt.Errorf("link: %w", err)
 	}
 	log.Printf("  ✓ linked text book %d → audiobook %d (%s)", book.ID, audioID, audios[0].Title)
+	return nil
+}
+
+// runTTSResume finishes a review-gated book: after the operator proofreads the staged stressed text,
+// synthesize it → package → scan → link, then clear the staging dir. `sopds tts-resume <book_id>`.
+func runTTSResume(cmd *cobra.Command, args []string) error {
+	log.SetOutput(os.Stderr)
+	bookID, err := strconv.ParseInt(args[0], 10, 64)
+	if err != nil {
+		return fmt.Errorf("book id must be an integer: %w", err)
+	}
+	wc := cfg.TTS.Worker
+	script := wc.Script
+	if script == "" {
+		script = filepath.Join(expandHome(wc.F5Home), "fb2-to-f5.sh")
+	}
+	outDir := reviewDirFor(bookID)
+	if _, err := os.Stat(filepath.Join(outDir, "review", "_titles.tsv")); err != nil {
+		return fmt.Errorf("no staged review for book %d at %s — run the worker in gate mode first", bookID, outDir)
+	}
+
+	svc, err := ttsService()
+	if err != nil {
+		return err
+	}
+	defer svc.Close()
+	ctx := context.Background()
+	book, err := svc.GetBook(ctx, bookID)
+	if err != nil {
+		return fmt.Errorf("get book %d: %w", bookID, err)
+	}
+	lc := wc.Languages[normLang(book.Lang)]
+
+	log.Printf("tts-resume: synthesizing proofread %q (book %d)", book.Title, bookID)
+	// MODE=synth reads outDir/review; the FB2 arg is unused in synth mode.
+	c := exec.CommandContext(ctx, "bash", script, "resume", outDir)
+	c.Env = append(os.Environ(), f5Env(wc, lc, "synth")...)
+	c.Stdout, c.Stderr = os.Stdout, os.Stderr
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("fb2-to-f5.sh synth: %w", err)
+	}
+	if err := finishAudiobook(ctx, svc, wc, book, outDir); err != nil {
+		return err
+	}
+	_ = os.RemoveAll(outDir) // clear the staging on success
 	return nil
 }
 

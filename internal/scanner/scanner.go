@@ -208,6 +208,9 @@ func (s *Scanner) countFiles(ctx context.Context) (int64, error) {
 		}
 
 		if d.IsDir() {
+			if d.Name() == "@eaDir" || (path != s.config.Library.Root && strings.HasPrefix(d.Name(), ".")) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 
@@ -382,9 +385,10 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 		default:
 		}
 
-		// Skip @eaDir directories
+		// Skip @eaDir (Synology) and hidden directories (.git, .tts-review staging, …). The root
+		// itself is never skipped even if it happens to be dot-named.
 		if d.IsDir() {
-			if d.Name() == "@eaDir" {
+			if d.Name() == "@eaDir" || (path != s.config.Library.Root && strings.HasPrefix(d.Name(), ".")) {
 				return filepath.SkipDir
 			}
 			return nil

@@ -5,6 +5,32 @@
 
 ---
 
+### Revision 109 - 2026-07-23
+**Auto-F5: wire the review-gate ("stop-and-read") — persist staged stress + `sopds tts-resume`.**
+Follows Rev 108. Completes the long-standing "Phase 2c" gap.
+
+The worker's `review: gate` mode stressed a book then `return nil`'d — which triggered the temp-dir
+cleanup, **deleting the review text** it just told you to proofread. Now the gate stages the stress
+output persistently and a new command finishes it after proofreading:
+- **`internal/scanner/scanner.go`** — the library walk now skips **hidden dot-directories** (both the
+  count and main passes; the root is never skipped), so a `.tts-review/` staging dir under the library
+  is ignored by scans. (Also skips `.git` etc.)
+- **`cmd/sopds/tts_worker.go`** —
+  - Gate mode writes to a stable, hidden **`<library.root>/.tts-review/<book_id>/`** (not a temp) and
+    does NOT delete it; logs the reviewer command + `sopds tts-resume <id>`.
+  - Refactored the package→scan→link tail into shared **`finishAudiobook`** (used by auto + resume).
+  - **`sopds tts-resume <book_id>`** (`runTTSResume`): looks up the book, runs `fb2-to-f5.sh` MODE=synth
+    on the staged `.tts-review/<id>/review` (the proofread text), then `finishAudiobook`, then clears
+    the staging dir. Registered in `main.go`.
+
+Flow: `sopds tts-worker` (gate) → stress → **stops**, stages `.tts-review/<id>/review` → operator
+proofreads (`f5-bridge/reviewer` two-pane UI, or edit the `.txt`) → `sopds tts-resume <id>` → synth →
+package → scan → link. (`review: auto` still one-shots as before.)
+
+**Files:** `internal/scanner/scanner.go`, `cmd/sopds/tts_worker.go`, `cmd/sopds/main.go`, `PROGRESS.md`.
+
+---
+
 ### Revision 108 - 2026-07-23
 **Auto-F5: kill the last Python — native Go for the JSON/reviewer glue; `#worker` shell has no Python.**
 Follows Rev 107. The engines were already native (stress = Rust RUAccent port, synth = Rust F5,

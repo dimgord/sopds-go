@@ -159,6 +159,13 @@ func main() {
 	ttsWorkerCmd.Flags().Int("max", 1, "max books to generate this pass (GPU is serial)")
 	ttsWorkerCmd.Flags().Bool("dry-run", false, "print the planned fb2-to-f5.sh invocation without generating")
 
+	ttsResumeCmd := &cobra.Command{
+		Use:   "tts-resume <book_id>",
+		Short: "Finish a review-gated book: synthesize the proofread text → package → link",
+		Args:  cobra.ExactArgs(1),
+		RunE:  runTTSResume,
+	}
+
 	fb2ExtractCmd := &cobra.Command{
 		Use:   "fb2-extract <book.fb2> <review_dir> <maxchars> [selector]",
 		Short: "Extract an FB2 book into per-unit narration text for the F5 pipeline (native)",
@@ -186,8 +193,8 @@ func main() {
 	}
 
 	rootCmd.AddCommand(startCmd, stopCmd, statusCmd, scanCmd, migrateCmd, initCmd, versionCmd, importCmd,
-		ttsRequestsCmd, ttsListCmd, ttsLinkCmd, ttsUnlinkCmd, audioListCmd, ttsWorkerCmd, fb2ExtractCmd,
-		ndjsonReqsCmd, checkYoCmd)
+		ttsRequestsCmd, ttsListCmd, ttsLinkCmd, ttsUnlinkCmd, audioListCmd, ttsWorkerCmd, ttsResumeCmd,
+		fb2ExtractCmd, ndjsonReqsCmd, checkYoCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
