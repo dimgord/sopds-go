@@ -5,6 +5,30 @@
 
 ---
 
+### Revision 111 - 2026-07-23
+**Auto-F5: NFE default 16 → 32 (16 sounds muffled) + English base ONNX verified end-to-end.**
+Follows Rev 110. Quality fix + English asset milestone.
+
+- **NFE default 32.** Rev 104 defaulted synth to NFE=16 as a "2x faster" win, but on real listening
+  **16 is muffled ("kaka") for BOTH ru and en** (F5's flow-matching is under-converged at 15 ODE steps).
+  32 matches the DakeQQ export reference ("perfect"). Changed `fb2-to-f5.sh` `NFE=${NFE:-32}` and the
+  `config.go` NFE comment. Cost: full-book synth is ~2× slower — a faster GPU (RunPod) is the answer for
+  whole books; the GTX 1070 is for testing.
+- **English base model exported + verified.** `F5TTS_v1_Base` → ONNX (3 graphs + vocab) via
+  `DakeQQ/F5-TTS-ONNX` `Export_F5.py` (run from the script dir for its `./modeling_modified/` copies;
+  `--testlang en`). The native `sopds-tts-rs` synthesizes English from `en-model-onnx` end-to-end
+  (verified on-device: `{"ok":true}`, clear at NFE 32). With `stress: none` (Rev 110), English needs no
+  RUAccent. Voice is zero-shot from `ref.wav`/`ref.txt` (sample or the operator's own English clip) — no
+  training required for a first pass.
+  - Known quirks (not bugs): a short start-of-clip electronic blip (F5 warmup); non-English names read
+    phonetically ("Dmitry" → "dimaitrai") — spell phonetically in source if it matters. Tokenization
+    differs from the reference by exactly one token (`convert_char_to_pinyin` inserts a space between
+    ref and gen text; our char-split doesn't) — quality-neutral at NFE 32, so left as-is.
+
+**Files:** `f5-bridge/fb2-to-f5.sh`, `internal/config/config.go`, `PROGRESS.md`.
+
+---
+
 ### Revision 110 - 2026-07-23
 **Auto-F5: per-language accent mode (`STRESS_MODE`) — English (`stress: none`) path; groundwork for uk.**
 Follows Rev 109. Code enabler for multi-language voices.

@@ -10,7 +10,7 @@
 #   MODE=synth   read out/review/NN_*.txt (as edited) -> F5 daemons -> out/NN_<title>.mp3
 #   MODE=all     (default) stress then synth in one pass, no review stop.
 #
-# env: NFE=16 WORKERS=1 MAXCHARS=250 DEVICE=cpu REMOVE_SILENCE=1  FIX=corrections.json
+# env: NFE=32 WORKERS=1 MAXCHARS=250 DEVICE=cpu REMOVE_SILENCE=1  FIX=corrections.json  (NFE 16 = muffled)
 #      REF/REF_TEXT/CKPT/VOCAB/F5_HOME
 #      PARTS — which sections to narrate (empty ⇒ all top-level sections). Two levels of hierarchy:
 #         "P"        whole top-level section P            (e.g. PARTS="3")
@@ -33,7 +33,7 @@ REF=${REF:-$F5_HOME/ab/ref_clean.wav}
 REF_TEXT=${REF_TEXT:-$F5_HOME/ab/ref_fixed.txt}
 CKPT=${CKPT:-$F5_HOME/ru-model/model_v2.safetensors}
 VOCAB=${VOCAB:-$F5_HOME/ru-model/vocab.txt}
-NFE=${NFE:-16}; WORKERS=${WORKERS:-1}; MAXCHARS=${MAXCHARS:-250}; DEVICE=${DEVICE:-cpu}
+NFE=${NFE:-32}; WORKERS=${WORKERS:-1}; MAXCHARS=${MAXCHARS:-250}; DEVICE=${DEVICE:-cpu}
 MODE=${MODE:-all}; PARTS=${PARTS:-}; FIX=${FIX:-}
 # Accent mode per language (STRESS_MODE, from the worker's lc.stress):
 #   ruaccent (ru, default) — native Rust `sopds-tts-rs stress` (needs RUACCENT_HOME + STRESSBIN/F5BIN);
@@ -84,7 +84,7 @@ WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 N=$(wc -l < "$WORK/reqs.ndjson" | tr -d ' ')
 [ "$N" -gt 0 ] || { echo "no stressed text — run MODE=stress first"; exit 1; }
 # Engine: native Rust (ort) F5. The model DIR carries ckpt/vocab/ref; the daemon speaks the NDJSON
-# {"text","output"} protocol and reads NFE from SOPDS_TTS_NFE ($NFE, default 16 — ~2x faster than 32).
+# {"text","output"} protocol and reads NFE from SOPDS_TTS_NFE ($NFE, default 32 — 16 sounds muffled).
 [ -n "${F5BIN:-}" ] || { echo "fb2-to-f5.sh: set F5BIN to the sopds-tts-rs binary (native F5 synth)" >&2; exit 1; }
 export SOPDS_TTS_NFE="$NFE"
 echo "→ synthesizing $N chunks on $WORKERS daemon(s) (native rust nfe=$NFE)"
