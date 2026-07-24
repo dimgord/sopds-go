@@ -22,8 +22,9 @@ func runFB2Extract(cmd *cobra.Command, args []string) error {
 		selector = args[3]
 	}
 	combine, _ := cmd.Flags().GetInt("combine")
+	notePrefix, _ := cmd.Flags().GetString("note-prefix")
 
-	mapLines, err := narrate.Extract(args[0], args[1], maxchars, selector, combine)
+	mapLines, err := narrate.Extract(args[0], args[1], maxchars, selector, combine, notePrefix)
 	for _, l := range mapLines {
 		fmt.Fprintln(os.Stderr, l)
 	}

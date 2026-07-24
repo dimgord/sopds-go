@@ -26,7 +26,8 @@ type node struct {
 	id       string  // section id (for footnote targets) / body name
 	children []*node // sections + paragraphs, in document order
 	text     string  // flattened text (paragraphs, titles)
-	bold     bool     // paragraph is entirely a single <strong>/<b> (flat-heading candidate)
+	bold     bool    // paragraph is entirely a single <strong>/<b> (flat-heading candidate)
+	skip     bool    // drop from narration (e.g. a "КОММЕНТАРИИ" region parsed into bracket notes)
 }
 
 type nodeKind int

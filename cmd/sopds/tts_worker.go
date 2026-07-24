@@ -329,9 +329,10 @@ func f5Env(wc config.WorkerConfig, lc config.WorkerLangConfig, mode string) []st
 		"F5_HOME=" + expandHome(wc.F5Home),
 		"F5MODEL=" + expandHome(lc.F5Model),
 	}
-	if lc.NotesModel != "" {
+	if lc.NotesModel != "" { // 2nd voice for footnote chunks (dual-voice synth); else notes ride the main voice
 		env = append(env, "F5MODEL_NOTES="+expandHome(lc.NotesModel))
 	}
+	env = append(env, "NOTE_PREFIX="+lc.SpokenNotePrefix()) // spoken footnote lead-in, per language
 	if wc.F5Bin != "" {
 		env = append(env, "F5BIN="+expandHome(wc.F5Bin))
 	}

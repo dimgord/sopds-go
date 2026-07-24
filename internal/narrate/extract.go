@@ -50,6 +50,9 @@ func buildParts(mb *node) []part {
 	for _, top := range tops {
 		p := part{title: top.titleText()}
 		for _, c := range top.children {
+			if c.skip {
+				continue
+			}
 			switch c.kind {
 			case kSection:
 				p.chapters = append(p.chapters, chapter{title: c.titleText(), paras: paragraphsOf(c)})
@@ -76,6 +79,9 @@ func flatParts(sec *node) []part {
 		}
 	}
 	for _, c := range sec.children {
+		if c.skip {
+			continue
+		}
 		if c.kind == kParagraph && c.bold && flatHeadRe.MatchString(c.text) {
 			sawHead = true
 			if strings.HasPrefix(strings.ToLower(c.text), "часть") {
@@ -114,6 +120,9 @@ func flatParts(sec *node) []part {
 func paragraphsOf(n *node) []*node {
 	var out []*node
 	for _, c := range n.children {
+		if c.skip {
+			continue
+		}
 		if c.kind == kParagraph {
 			out = append(out, c)
 		}
@@ -141,20 +150,94 @@ func joinParas(ps []*node, notes map[string]string) string {
 var markerRe = regexp.MustCompile(string(refOpen) + `([^` + string(refClose) + `]*)` + string(refClose))
 var leadingNumRe = regexp.MustCompile(`^\d+\s*`)
 
-// resolveNotes replaces each footnote-ref marker with the note read aloud as "Примечание. <text>",
-// SEP-bracketed so the chunker isolates it. Unknown/empty refs are dropped.
+// notePrefix is the spoken lead-in for an inlined footnote ("Примечание." ru · "Note." en · "Примітка."
+// uk). Set per-invocation by Extract from --note-prefix; extract is a single-shot process (one book,
+// no concurrency) so a package var is safe and spares threading the prefix through Units→joinParas.
+var notePrefix = "Примечание."
+
+// bracketMode enables the in-body "[N]" footnote convention (see parseBracketNotes): resolveNotes then
+// also inlines "[N]" markers whose number is a known note. Off by default so href-marker books and the
+// unit tests keep their exact behavior; Extract turns it on only when a "КОММЕНТАРИИ" region was parsed.
+var bracketMode bool
+
+var inTextBracketRe = regexp.MustCompile(`\[(\d{1,4})\]`)
+
+// resolveNotes replaces each footnote reference with the note read aloud as "<notePrefix> <text>",
+// SEP-bracketed so the chunker isolates it (and the note-mask can route it to a 2nd voice). It handles
+// the <a href="#id"> marker convention always, and the plain-text "[N]" convention when bracketMode is
+// on. Unknown/empty href refs are dropped; unknown "[N]" is left as literal text (it may not be a note).
 func resolveNotes(text string, notes map[string]string) string {
-	if !strings.ContainsRune(text, refOpen) {
-		return text
+	if strings.ContainsRune(text, refOpen) {
+		text = markerRe.ReplaceAllStringFunc(text, func(m string) string {
+			id := markerRe.FindStringSubmatch(m)[1]
+			n := notes[id]
+			if strings.TrimSpace(n) == "" {
+				return ""
+			}
+			return string(SEP) + notePrefix + " " + n + string(SEP)
+		})
 	}
-	return markerRe.ReplaceAllStringFunc(text, func(m string) string {
-		id := markerRe.FindStringSubmatch(m)[1]
-		n := notes[id]
-		if strings.TrimSpace(n) == "" {
-			return ""
+	if bracketMode && strings.IndexByte(text, '[') >= 0 {
+		text = inTextBracketRe.ReplaceAllStringFunc(text, func(m string) string {
+			n := notes[inTextBracketRe.FindStringSubmatch(m)[1]]
+			if strings.TrimSpace(n) == "" {
+				return m
+			}
+			return string(SEP) + notePrefix + " " + n + string(SEP)
+		})
+	}
+	return text
+}
+
+var commentsHeadRe = regexp.MustCompile(`(?i)^(комментари[ий]|примечани[яе]|сноски|примітки|коментар[іи]|notes)$`)
+var bracketDefRe = regexp.MustCompile(`^\[(\d{1,4})\]\s*(.+)$`)
+
+// parseBracketNotes handles the in-body footnote convention (e.g. Russian "11/22/63"): a bold
+// "КОММЕНТАРИИ"/"ПРИМЕЧАНИЯ" heading followed by "[N] text" definition paragraphs, with plain "[N]"
+// markers in the narrative. It returns id→text (id = the number) plus the set of nodes (heading +
+// definitions + the blank lines between them) to drop from narration, so the comment list isn't read
+// aloud at the end. Returns nil,nil if no such region exists.
+func parseBracketNotes(mb *node) (map[string]string, map[*node]bool) {
+	var paras []*node
+	var walk func(*node)
+	walk = func(n *node) {
+		for _, c := range n.children {
+			switch c.kind {
+			case kParagraph:
+				paras = append(paras, c)
+			case kSection:
+				walk(c)
+			}
 		}
-		return string(SEP) + "Примечание. " + n + string(SEP)
-	})
+	}
+	walk(mb)
+
+	// Look for a bold comments heading actually followed by "[N] …" definitions — so a chapter merely
+	// titled "Примечания" (no defs after it) is skipped, and we find the real region (usually at the end).
+	for i, head := range paras {
+		if !(head.bold && commentsHeadRe.MatchString(strings.TrimSpace(head.text))) {
+			continue
+		}
+		notes := map[string]string{}
+		skip := map[*node]bool{head: true}
+		for _, p := range paras[i+1:] {
+			t := strings.TrimSpace(p.text)
+			if t == "" { // empty-line between definitions
+				skip[p] = true
+				continue
+			}
+			m := bracketDefRe.FindStringSubmatch(t)
+			if m == nil { // first non-"[N] …" paragraph ends the comments region
+				break
+			}
+			notes[m[1]] = m[2]
+			skip[p] = true
+		}
+		if len(notes) > 0 {
+			return notes, skip
+		}
+	}
+	return nil, nil
 }
 
 // parseNotes builds id→text from the <body name="notes"/"comments"> sections (leading number dropped).
@@ -328,11 +411,23 @@ var safeStripRe = regexp.MustCompile(`[^A-Za-z0-9_А-Яа-яЁёІіЇїЄєҐґ
 // the surrounding narrative), then within each segment collapses whitespace, sentence-splits, and
 // greedily packs sentences into lines ≤ maxchars — matching the old `sed | gawk` chunker's sizes.
 func Chunk(text string, maxchars int) []string {
-	var out []string
-	for _, seg := range strings.Split(text, string(SEP)) {
-		out = append(out, chunkSegment(seg, maxchars)...)
+	chunks, _ := ChunkMask(text, maxchars)
+	return chunks
+}
+
+// ChunkMask is Chunk plus a per-chunk note flag: true when the chunk came from an inlined footnote.
+// resolveNotes always emits a note as a balanced SEP…SEP pair, so splitting the unit text on SEP puts
+// narration on even segment indices and notes on odd ones — every chunk of an odd segment is a note.
+// The mask lets the synth route footnote chunks to a second voice (F5MODEL_NOTES).
+func ChunkMask(text string, maxchars int) (chunks []string, notes []bool) {
+	for i, seg := range strings.Split(text, string(SEP)) {
+		isNote := i%2 == 1
+		for _, c := range chunkSegment(seg, maxchars) {
+			chunks = append(chunks, c)
+			notes = append(notes, isNote)
+		}
 	}
-	return out
+	return chunks, notes
 }
 
 func chunkSegment(text string, maxchars int) []string {
@@ -378,6 +473,25 @@ func endsQuestionOrBang(s string) bool {
 	return strings.HasSuffix(s, "?") || strings.HasSuffix(s, "!")
 }
 
+// maskBits renders a note-mask as a '0'/'1' byte string, or nil if no chunk is a note (so the sidecar
+// is skipped entirely for note-less units).
+func maskBits(mask []bool) []byte {
+	any := false
+	bits := make([]byte, len(mask))
+	for i, b := range mask {
+		if b {
+			bits[i] = '1'
+			any = true
+		} else {
+			bits[i] = '0'
+		}
+	}
+	if !any {
+		return nil
+	}
+	return bits
+}
+
 func safeName(disp, fallback string) string {
 	s := strings.ReplaceAll(disp, " ", "_")
 	s = strings.ReplaceAll(s, "/", "_")
@@ -390,8 +504,13 @@ func safeName(disp, fallback string) string {
 
 // Extract parses fb2Path and writes, into reviewDir, one `<ID>_<safe>.raw.txt` (chunked) per selected
 // unit plus a `_titles.tsv` manifest (ID<TAB>safe<TAB>display) — the drop-in the F5 pipeline reads.
-// Returns the section-structure map lines (for the caller to print).
-func Extract(fb2Path, reviewDir string, maxchars int, selector string, combine int) ([]string, error) {
+// A `<ID>_<safe>.notes` bitstring sidecar (one 0/1 per chunk line) is written when the unit has any
+// inlined footnote, so ndjson-reqs can route note chunks to the notes voice. notePfx overrides the
+// spoken footnote lead-in (empty ⇒ default "Примечание."). Returns the section-structure map lines.
+func Extract(fb2Path, reviewDir string, maxchars int, selector string, combine int, notePfx string) ([]string, error) {
+	if notePfx != "" {
+		notePrefix = notePfx
+	}
 	fh, err := os.Open(fb2Path)
 	if err != nil {
 		return nil, err
@@ -405,6 +524,18 @@ func Extract(fb2Path, reviewDir string, maxchars int, selector string, combine i
 	if mb == nil {
 		return nil, fmt.Errorf("no main body in %s", fb2Path)
 	}
+	// Footnotes: the <body name="notes"> href convention, else the in-body "[N]"/КОММЕНТАРИИ convention
+	// (drop its comment list from narration and inline the [N] markers instead).
+	notes := parseNotes(bodies)
+	if len(notes) == 0 {
+		if bnotes, skip := parseBracketNotes(mb); len(bnotes) > 0 {
+			notes = bnotes
+			bracketMode = true
+			for n := range skip {
+				n.skip = true
+			}
+		}
+	}
 	parts := buildParts(mb)
 	var mapLines []string
 	mapLines = append(mapLines, fmt.Sprintf("%d part(s):", len(parts)))
@@ -416,7 +547,7 @@ func Extract(fb2Path, reviewDir string, maxchars int, selector string, combine i
 		mapLines = append(mapLines, fmt.Sprintf("   [%d] %s → %d chapters", i+1, t, len(p.chapters)))
 	}
 
-	units := Units(mb, selector, combine, parseNotes(bodies))
+	units := Units(mb, selector, combine, notes)
 	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
 		return mapLines, err
 	}
@@ -427,10 +558,18 @@ func Extract(fb2Path, reviewDir string, maxchars int, selector string, combine i
 	defer tsv.Close()
 	for _, u := range units {
 		safe := safeName(u.Disp, "part_"+u.ID)
-		chunks := Chunk(u.Text, maxchars)
+		chunks, mask := ChunkMask(u.Text, maxchars)
 		raw := filepath.Join(reviewDir, fmt.Sprintf("%s_%s.raw.txt", u.ID, safe))
 		if err := os.WriteFile(raw, []byte(strings.Join(chunks, "\n")+"\n"), 0o644); err != nil {
 			return mapLines, err
+		}
+		// note-mask sidecar: one '0'/'1' per chunk, aligned with the (line-preserving) stressed .txt.
+		// Only written when the unit has ≥1 footnote; ndjson-reqs treats an absent file as all-narration.
+		if bits := maskBits(mask); bits != nil {
+			nf := filepath.Join(reviewDir, fmt.Sprintf("%s_%s.notes", u.ID, safe))
+			if err := os.WriteFile(nf, append(bits, '\n'), 0o644); err != nil {
+				return mapLines, err
+			}
 		}
 		if _, err := fmt.Fprintf(tsv, "%s\t%s\t%s\n", u.ID, safe, u.Disp); err != nil {
 			return mapLines, err

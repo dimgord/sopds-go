@@ -34,7 +34,7 @@ var (
 
 	// revision is the PROGRESS.md Rev number, bumped by hand each docompush
 	// (git tags carry the semver; this carries the Rev). Shown on /web/about.
-	revision = "95"
+	revision = "113"
 )
 
 func main() {
@@ -175,6 +175,7 @@ func main() {
 		RunE:              runFB2Extract,
 	}
 	fb2ExtractCmd.Flags().Int("combine", 0, "MP3 granularity: 1=one per part (default), 2=one per chapter")
+	fb2ExtractCmd.Flags().String("note-prefix", "Примечание.", "spoken lead-in for inlined footnotes (e.g. \"Note.\" for English)")
 
 	noConfig := func(cmd *cobra.Command, args []string) error { return nil } // pipeline glue: no DB/config
 	ndjsonReqsCmd := &cobra.Command{
@@ -184,6 +185,7 @@ func main() {
 		PersistentPreRunE: noConfig,
 		RunE:              runNDJSONReqs,
 	}
+	ndjsonReqsCmd.Flags().String("notes-file", "", "when set, footnote chunks (per the .notes sidecar) go to this file instead of stdout (dual-voice synth)")
 	checkYoCmd := &cobra.Command{
 		Use:               "check-yo <review_dir> <homographs_file>",
 		Short:             "Report ё-restorations on ambiguous homographs for review (native)",

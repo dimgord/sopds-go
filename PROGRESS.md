@@ -1,7 +1,52 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.8.0
+## Current Version: 1.9.0
+
+---
+
+### Revision 113 - 2026-07-24
+**Auto-F5: dual-voice footnotes (separate voice) + the warm airport-bell chimes + the `[N]`/КОММЕНТАРИИ note convention.**
+
+The auto-F5 pipeline could inline footnotes but only ever read them in the **main** narration voice
+(`F5MODEL_NOTES`/`notes_model` was passed by the worker but **never used** by `fb2-to-f5.sh` — so ru
+"luka" was configured yet silent). This rev makes the second voice real and adds three related pieces.
+
+**1. Dual-voice synth.** `narrate.ChunkMask` now returns, alongside the chunks, a per-chunk **note flag**
+(a footnote is a balanced `SEP…SEP` segment, so splitting the unit text on `SEP` puts narration on even
+segment indices and notes on odd). `Extract` writes a `<ID>_<safe>.notes` bitstring sidecar (one `0/1`
+per chunk, aligned with the line-preserving stressed `.txt`; skipped for note-less units). `ndjson-reqs
+--notes-file` routes flagged chunks to a second NDJSON stream (and names their wavs `…​.note.wav`), the
+**chunk numbering stays shared** so the per-part join keeps reading order regardless of voice. `fb2-to-f5.sh`
+runs a second daemon on `F5MODEL_NOTES` for that stream when set (else everything is one voice, as before).
+A line-count guard warns (and falls back to the main voice) if the operator's edits desync the mask.
+
+**2. Language-specific note lead-in.** The inlined footnote prefix was hard-coded Russian "Примечание.".
+Now `WorkerLangConfig.note_prefix` (empty ⇒ by `stress`: ru "Примечание." · en "Note." · uk "Примітка.")
+flows worker → `NOTE_PREFIX` → `fb2-extract --note-prefix`. So English footnotes say "Note.", not a
+mangled Cyrillic word.
+
+**3. Airport-bell chimes.** `fb2-to-f5.sh` brackets each contiguous footnote run with a warm two-tone
+decaying bell — **falling A5→E5 "пім-пуум" in, rising E5→A5 out** (the sound from the old Python pipeline,
+commit `beedbae`: exp-decay + lowpass + light echo, NOT flat sine tones — this rev restores it after an
+interim sine version sounded "midi"). The join detects `.note.wav` boundaries. Bells are read from
+`$F5_HOME/chimes/{chime_in,chime_out}.wav` (persisted + swappable for a real airport sample), regenerated
+into the work dir only if absent. `CHIME=0` disables; `CHIME_IN`/`CHIME_OUT` override.
+
+**4. The `[N]`/КОММЕНТАРИИ footnote convention** (e.g. Russian "11/22/63", 724 notes). Distinct from the
+`<a href="#id">` + `<body name="notes">` convention already handled: markers are **plain text** `[N]` in
+the narrative and the notes live in a bold-headed "КОММЕНТАРИИ"/"ПРИМЕЧАНИЯ" section (paragraphs `[N] text`).
+`parseBracketNotes` finds that region (only if the heading is actually followed by `[N]` defs, so a chapter
+merely *titled* "Примечания" isn't eaten), builds id→text, and marks the region `skip` (via a new `node.skip`
+filtered in every paragraph collector) so the comment list **isn't read aloud at the end**; `resolveNotes`
+(in `bracketMode`) inlines each `[N]` at its site. Verified on `397847.fb2`: 6 parts, "КОММЕНТАРИИ" excluded,
+849 note chunks inlined. Unit test `TestBracketNotes`.
+
+**Files:** `internal/narrate/{extract,narrate}.go` (+`extract_test.go`), `cmd/sopds/{reviewglue,fb2extract,
+main,tts_worker}.go`, `internal/config/config.go`, `f5-bridge/fb2-to-f5.sh`, `docs/decisions/005-dual-voice-footnotes.md`.
+English voice assets (`en-model-onnx` with the operator's ref, `f5voices/en-standard`) and the chime wavs
+live under f5-spike, deployed to Fedya separately (not in-repo). `main.revision` → 113. Version 1.8.0 →
+**1.9.0** (user-facing: multi-voice audiobooks with footnote chimes).
 
 ---
 

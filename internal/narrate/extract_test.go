@@ -71,6 +71,63 @@ func TestNotesInline(t *testing.T) {
 	}
 }
 
+// The in-body "[N]" + КОММЕНТАРИИ convention (e.g. Russian "11/22/63"): markers are plain text, notes
+// live in a bold-headed comments section that must be inlined at the [N] sites and dropped from the tail.
+const bracketFB2 = `<?xml version="1.0"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
+<body><section><title><p>Роман</p></title>
+<p>Первый абзац со сноской[1] в тексте.</p>
+<p>Второй абзац и ещё сноска[2] тут.</p>
+<p><strong>КОММЕНТАРИИ</strong></p>
+<empty-line></empty-line>
+<p>[1] Пояснение первое.</p>
+<p>[2] Пояснение второе.</p>
+</section></body>
+</FictionBook>`
+
+func TestBracketNotes(t *testing.T) {
+	// bracketMode is a package var set by Extract; drive it directly for this Units-level test.
+	bracketMode = true
+	defer func() { bracketMode = false }()
+	bodies, err := Parse(strings.NewReader(bracketFB2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mb := MainBody(bodies)
+	notes, skip := parseBracketNotes(mb)
+	if notes["1"] != "Пояснение первое." || notes["2"] != "Пояснение второе." {
+		t.Fatalf("bracket notes = %+v", notes)
+	}
+	if len(skip) < 3 { // heading + empty-line + 2 defs
+		t.Errorf("skip set too small: %d", len(skip))
+	}
+	for n := range skip {
+		n.skip = true
+	}
+	us := Units(mb, "", 1, notes)
+	if len(us) != 1 {
+		t.Fatalf("units = %d", len(us))
+	}
+	txt := us[0].Text
+	if !strings.Contains(txt, "Примечание. Пояснение первое.") || !strings.Contains(txt, "Примечание. Пояснение второе.") {
+		t.Errorf("notes not inlined at [N] sites: %q", txt)
+	}
+	if strings.Contains(txt, "КОММЕНТАРИИ") || strings.Contains(txt, "[1]") || strings.Contains(txt, "[2]") {
+		t.Errorf("comment region or raw marker leaked into narration: %q", txt)
+	}
+	// SEP-isolation → note lands in its own chunk, flagged in the mask.
+	chunks, mask := ChunkMask(txt, 200)
+	var noteChunks int
+	for i, c := range chunks {
+		if mask[i] && strings.HasPrefix(strings.TrimSpace(c), "Примечание.") {
+			noteChunks++
+		}
+	}
+	if noteChunks != 2 {
+		t.Errorf("expected 2 flagged note chunks, got %d (chunks=%v mask=%v)", noteChunks, chunks, mask)
+	}
+}
+
 func TestChunkPacking(t *testing.T) {
 	got := Chunk("Раз. Два. Три четыре пять.", 12)
 	// "Раз." (4) then "Два." would be 4+1+4=9≤12 → "Раз. Два."; +"Три четыре пять."(16) exceeds.

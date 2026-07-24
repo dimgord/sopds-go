@@ -55,8 +55,25 @@ type WorkerConfig struct {
 // WorkerLangConfig is one language's synthesis assets for the auto-F5 worker.
 type WorkerLangConfig struct {
 	F5Model    string `yaml:"f5_model"`    // model dir: 3 ONNX graphs + vocab.txt + ref.wav/ref.txt
-	NotesModel string `yaml:"notes_model"` // optional 2nd voice dir for footnotes (e.g. luka)
+	NotesModel string `yaml:"notes_model"` // optional 2nd voice dir for footnotes (e.g. luka) — dual-voice synth
 	Stress     string `yaml:"stress"`      // "ruaccent" | "none" (en) | "uk-stress" (later); how to accent before synth
+	NotePrefix string `yaml:"note_prefix"` // spoken footnote lead-in; empty ⇒ by Stress (ru "Примечание." · en "Note." · uk "Примітка.")
+}
+
+// SpokenNotePrefix is the lead-in read before an inlined footnote — the explicit note_prefix, else a
+// per-language default keyed on the stress mode.
+func (l WorkerLangConfig) SpokenNotePrefix() string {
+	if l.NotePrefix != "" {
+		return l.NotePrefix
+	}
+	switch l.Stress {
+	case "none": // English
+		return "Note."
+	case "uk-stress": // Ukrainian
+		return "Примітка."
+	default: // Russian (ruaccent)
+		return "Примечание."
+	}
 }
 
 // ReviewGate reports whether the worker pauses for stress-editor review before synthesis (default gate).

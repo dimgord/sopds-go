@@ -14,36 +14,72 @@ import (
 
 // runNDJSONReqs builds the F5 daemon's request stream (native replacement for the shell's
 // `python3 -c json.dumps` loop): for every stressed chunk in review/<id>_<safe>.txt it emits one
-// NDJSON line {"text":<chunk>,"output":<work>/p<id>_c<NNNNN>.wav} to stdout. Args: <review> <work>.
+// NDJSON line {"text":<chunk>,"output":<work>/p<id>_c<NNNNN>.wav}. Args: <review> <work>.
+//
+// Dual-voice: with --notes-file set, chunks flagged by the `<id>_<safe>.notes` sidecar (footnotes) are
+// written to that file instead of stdout, so fb2-to-f5.sh can synth them in a second voice. The chunk
+// numbering (gidx) is shared across both streams, so the per-part join stays in reading order regardless
+// of which voice produced each wav.
 func runNDJSONReqs(cmd *cobra.Command, args []string) error {
 	reviewDir, workDir := args[0], args[1]
+	notesFile, _ := cmd.Flags().GetString("notes-file")
 	units, err := readTitles(reviewDir)
 	if err != nil {
 		return err
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetEscapeHTML(false) // keep UTF-8 as-is (like python ensure_ascii=False)
+	var notesEnc *json.Encoder
+	if notesFile != "" {
+		nf, err := os.Create(notesFile)
+		if err != nil {
+			return err
+		}
+		defer nf.Close()
+		notesEnc = json.NewEncoder(nf)
+		notesEnc.SetEscapeHTML(false)
+	}
 	gidx := 0
 	for _, u := range units {
 		f, err := os.Open(filepath.Join(reviewDir, u.id+"_"+u.safe+".txt"))
 		if err != nil {
 			continue // a unit with no stressed text is skipped, as in the shell
 		}
+		// Note-mask sidecar ('0'/'1' per chunk, aligned with the line-preserving .txt); nil ⇒ all narration.
+		var mask []byte
+		if notesEnc != nil {
+			if b, err := os.ReadFile(filepath.Join(reviewDir, u.id+"_"+u.safe+".notes")); err == nil {
+				mask = []byte(strings.TrimSpace(string(b)))
+			}
+		}
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+		li := 0 // chunk index within this unit (skips blanks, same as gidx advances)
 		for sc.Scan() {
 			line := sc.Text()
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
+			isNote := notesEnc != nil && li < len(mask) && mask[li] == '1'
+			li++
 			gidx++
+			// Note wavs get a `.note.wav` name so the join can bracket footnote runs with chimes; the
+			// zero-padded c-number still orders them correctly against the plain `.wav` narration files.
 			out := fmt.Sprintf("%s/p%s_c%05d.wav", workDir, u.id, gidx)
-			if err := enc.Encode(map[string]string{"text": line, "output": out}); err != nil {
+			target := enc
+			if isNote {
+				target = notesEnc
+				out = fmt.Sprintf("%s/p%s_c%05d.note.wav", workDir, u.id, gidx)
+			}
+			if err := target.Encode(map[string]string{"text": line, "output": out}); err != nil {
 				f.Close()
 				return err
 			}
 		}
 		f.Close()
+		if mask != nil && li != len(mask) {
+			fmt.Fprintf(os.Stderr, "ndjson-reqs: %s: edited line count %d ≠ note-mask %d — some footnotes may use the main voice\n", u.id, li, len(mask))
+		}
 	}
 	return nil
 }
