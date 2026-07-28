@@ -68,7 +68,7 @@ func lines(path string) []string {
 var vowelSet = map[rune]bool{}
 
 func init() {
-	for _, r := range "аеёиоуыэюяАЕЁИОУЫЭЮЯ" {
+	for _, r := range "аеёиіоуыэюяєїАЕЁИІОУЫЭЮЯЄЇ" {
 		vowelSet[r] = true
 	}
 }

@@ -1,9 +1,57 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.9.0
+## Current Version: 1.10.0
 
 ---
+
+### Revision 114 - 2026-07-28
+**Ukrainian audiobook pipeline: native `uk-stress` (VESUM dictionary) + the reviewer works for Ukrainian (1.10.0).**
+
+The auto-F5 pipeline could stress Russian (native Rust `sopds-tts-rs stress`, ruaccent-rs) and read English
+verbatim, but `STRESS_MODE=uk-stress` was a **TBD stub** — no Ukrainian stresser, and the reviewer was
+RU-only. This rev makes the whole Ukrainian flow real, staying **zero-Python at runtime** (the dictionaries
+are plain data; the one-time builds used Python offline).
+
+**1. Native `uk-stress` tool** (`f5-bridge/uk-stress/`, Go stdlib, one static binary). Reads plain Ukrainian
+on stdin → `+`-stressed on stdout (the `+` goes before the stressed vowel, `Дніпр+о` — what our uk_q6
+`+`-model reads). Word-by-word dictionary lookup with case restoration; hyphen-splits compounds. Unknown
+words and homographs are left **unstressed** for the human to fix in the reviewer (homographs need sentence
+context we don't have here) — unless a real-usage default resolves them (see 3). Build:
+`(cd f5-bridge/uk-stress && go build -o uk-stress .)`.
+
+**2. Dictionary = VESUM** (`lang-uk/ukrainian-word-stress-dictionary`'s `stress.txt`, ~2.9M forms, U+0301).
+Preprocessed once (offline) to `~/src/f5-spike/uk-data/uk_stress.tsv` (**2.79M** `base<TAB>+form`, single
+words, U+0301→`+`) + `uk_stress_homographs.txt` (**43k** ambiguous `base<TAB>f1|f2`). Дмитро/Дніпро/
+широкополі are all unambiguous and correct in the dict.
+
+**3. Homograph defaults from real usage** (`uk_stress_defaults.tsv`, 741). For the ~43k ambiguous words we
+take the **dominant `+`-form actually observed in the opentts corpus** (мене→мен+е, серед→с+еред, чути→
+ч+ути); rare homographs stay unstressed. opentts is only 37h so this is the frequent tail, but it removes
+most of the manual marking.
+
+**4. `fb2-to-f5.sh` wiring.** New `STRESS_MODE=uk-stress` branch builds the `STRESS` command from
+`UKSTRESSBIN`/`UKDICT`/`UKHOMO`/`UKDEFAULTS` (sensible defaults), stresses each unit like the ruaccent
+path, and writes an `_omographs.txt` sidecar (= homograph bases) so the **reviewer's existing `classify()`**
+does the colouring with **no reviewer code change**: a STRESSED homograph shows as *soft/verify* (a default
+was applied — glance & confirm) and an UNSTRESSED one as *nostress/mark*. Synth then points at the
+`+`-model: `F5MODEL=~/src/f5-spike/uk-plus-synth`.
+
+**5. Reviewer** (`f5-bridge/reviewer/main.go`): added the Ukrainian vowels `іїєІЇЄ` to `vowelSet` so the
+`+`↔U+0301 fold and the "polysyllable without +" flag work for Ukrainian. No other change (the `_omographs`
+/ OMO machinery is language-agnostic).
+
+**Usage.**
+```
+MODE=stress STRESS_MODE=uk-stress F5BIN=<sopds-tts-rs> SOPDS=<sopds> fb2-to-f5.sh book.fb2 out
+cd f5-bridge/reviewer && go run . -dir out/review          # fix the flagged homographs/unknowns
+MODE=synth  STRESS_MODE=uk-stress F5BIN=<sopds-tts-rs> F5MODEL=~/src/f5-spike/uk-plus-synth fb2-to-f5.sh book.fb2 out
+```
+The `+`-model itself (uk_q6) is a separate F5 fine-tune (in f5-spike, not this repo): the VESUM `+`-marks
+are its native stress signal, unified with the RU RUAccent `+` convention.
+
+Files: `f5-bridge/uk-stress/{main.go,go.mod}` (new), `f5-bridge/fb2-to-f5.sh`, `f5-bridge/reviewer/main.go`.
+Both Go tools build clean. Dictionaries live under `~/src/f5-spike/uk-data/` (data, not in-repo).
 
 ### Revision 113 - 2026-07-24
 **Auto-F5: dual-voice footnotes (separate voice) + the warm airport-bell chimes + the `[N]`/КОММЕНТАРИИ note convention.**

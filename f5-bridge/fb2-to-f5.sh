@@ -45,6 +45,15 @@ if [ "$STRESS_MODE" = ruaccent ]; then
   _stressbin="${STRESSBIN:-${F5BIN:-}}"
   [ -n "$_stressbin" ] || { echo "fb2-to-f5.sh: set STRESSBIN or F5BIN to the sopds-tts-rs binary" >&2; exit 1; }
   STRESS=("$_stressbin" stress)
+elif [ "$STRESS_MODE" = uk-stress ]; then
+  # native Go uk-stress: VESUM dict lookup, "+"-marks; unknown/homograph words left
+  # unstressed for the reviewer to fix. Build: (cd f5-bridge/uk-stress && go build -o uk-stress .)
+  _ukbin="${UKSTRESSBIN:-uk-stress}"
+  _ukdict="${UKDICT:-$HOME/src/f5-spike/uk-data/uk_stress.tsv}"
+  _ukhomo="${UKHOMO:-$HOME/src/f5-spike/uk-data/uk_stress_homographs.txt}"
+  _ukdef="${UKDEFAULTS:-$HOME/src/f5-spike/uk-data/uk_stress_defaults.tsv}"   # real-usage default for homographs
+  [ -s "$_ukdict" ] || { echo "fb2-to-f5.sh: uk-stress dict not found ($_ukdict); set UKDICT" >&2; exit 1; }
+  STRESS=("$_ukbin" -dict "$_ukdict" -homographs "$_ukhomo" ${_ukdef:+-defaults "$_ukdef"})
 fi
 REVIEW="$OUT/review"
 mkdir -p "$OUT" "$REVIEW"
@@ -63,9 +72,10 @@ if [ "$MODE" = stress ] || [ "$MODE" = all ]; then
   while IFS=$'\t' read -r id safe title; do
     raw="$REVIEW/${id}_${safe}.raw.txt"; out="$REVIEW/${id}_${safe}.txt"
     case "$STRESS_MODE" in
-      none)     cp "$raw" "$out" ;;                                                            # English: verbatim
-      ruaccent) "${STRESS[@]}" ${FIX:+--fix "$FIX"} < "$raw" > "$out" 2>>"$REVIEW/_ruaccent.log" ;;
-      *)        echo "fb2-to-f5.sh: unknown STRESS_MODE='$STRESS_MODE'" >&2; exit 1 ;;
+      none)      cp "$raw" "$out" ;;                                                           # English: verbatim
+      ruaccent)  "${STRESS[@]}" ${FIX:+--fix "$FIX"} < "$raw" > "$out" 2>>"$REVIEW/_ruaccent.log" ;;
+      uk-stress) "${STRESS[@]}" < "$raw" > "$out" 2>>"$REVIEW/_ukstress.log" ;;               # Ukrainian: VESUM dict
+      *)         echo "fb2-to-f5.sh: unknown STRESS_MODE='$STRESS_MODE'" >&2; exit 1 ;;
     esac
     echo "  ✓ ${id}: $(wc -l < "$out") chunks — $title"
   done < "$REVIEW/_titles.tsv"
@@ -73,6 +83,12 @@ if [ "$MODE" = stress ] || [ "$MODE" = all ]; then
   if [ "$STRESS_MODE" = ruaccent ]; then
     "${STRESS[@]}" --dump-homographs "$REVIEW/_homographs.txt" </dev/null 2>/dev/null || true
     "$SOPDS" check-yo "$REVIEW" "$REVIEW/_homographs.txt" > "$REVIEW/_check-yo.tsv" 2>/dev/null || true
+  fi
+  # UK: sidecar the reviewer reads as OMO (stress-homograph bases). It then colours a
+  # STRESSED homograph as "verify me" (a default was applied — glance & confirm) and an
+  # UNSTRESSED one as "mark me" — exactly the two states we want reviewed.
+  if [ "$STRESS_MODE" = uk-stress ]; then
+    cut -f1 "$_ukhomo" > "$REVIEW/_omographs.txt" 2>/dev/null || true
   fi
   echo "→ review files in $REVIEW/  (NN_*.txt = editable stressed text; _check-yo.tsv = ё-flags)"
   [ "$MODE" = stress ] && { echo "✓ stress done — edit the .txt files, then run MODE=synth"; exit 0; }
