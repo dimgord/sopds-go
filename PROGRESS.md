@@ -5,6 +5,21 @@
 
 ---
 
+### Revision 118 - 2026-08-02
+**Tooling: `task service-deploy` + `task deploy-config` (no app version change — stays 1.11.2).**
+
+Codify the manual prod-deploy steps as Taskfile targets (`Taskfile.yml`):
+- `service-deploy` — `build` (dep) → `service-stop` → `sudo -u sopds cp sopds /opt/sopds/` → `service-start`.
+  One command for a code deploy; never touches the prod config.
+- `deploy-config` — `service-stop` → `sudo -u sopds cp config.yaml /opt/sopds/` → `service-start`. Kept
+  **separate** on purpose so a routine code deploy can't silently overwrite `/opt/sopds/config.yaml`; run it
+  only when the config actually changed.
+
+Both run as the `sopds` service user and restart the unit so changes take effect. Dev tooling only — no Go
+code or version change.
+
+---
+
 ### Revision 117 - 2026-08-02
 **`scan --audio-only`: refresh only audiobooks (apply the Rev 116 duration fix) without re-scanning the whole library (1.11.2).**
 

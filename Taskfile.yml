@@ -101,6 +101,21 @@ tasks:
     cmds:
       - sudo journalctl -u sopds.service -f
 
+  service-deploy:
+    desc: Build, stop the service, install the binary to /opt/sopds, and start it
+    deps: [build]
+    cmds:
+      - task: service-stop
+      - sudo -u sopds cp {{.BINARY}} /opt/sopds/
+      - task: service-start
+
+  deploy-config:
+    desc: Install config.yaml to /opt/sopds and restart the service (run only when the config changed)
+    cmds:
+      - task: service-stop
+      - sudo -u sopds cp {{.CONFIG}} /opt/sopds/
+      - task: service-start
+
   # Database operations
   db-backup:
     desc: Backup PostgreSQL database
