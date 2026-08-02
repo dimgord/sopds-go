@@ -51,6 +51,7 @@ type Scanner struct {
 	knownZips        map[string]int64 // path -> cat_id cache
 	newBookIDs       []int64          // IDs of books added in current scan (for incremental duplicate detection)
 	newBookIDsMu     sync.Mutex       // Protects newBookIDs
+	audioOnly        bool             // --audio-only: process only audiobooks (skip other books) AND refresh existing ones in place
 }
 
 // ConfirmCallback is called to confirm destructive operations.
@@ -227,6 +228,12 @@ func (s *Scanner) countFiles(ctx context.Context) (int64, error) {
 }
 
 // ScanAll performs a full library scan
+// SetAudioOnly restricts a scan to audiobooks: non-audio files/archives are skipped, and existing
+// audiobooks are re-parsed and updated in place (duration/track_count/chapters) rather than skipped.
+func (s *Scanner) SetAudioOnly(v bool) {
+	s.audioOnly = v
+}
+
 func (s *Scanner) ScanAll(ctx context.Context) error {
 	if !s.isRunning.CompareAndSwap(false, true) {
 		log.Println("Scan already in progress, skipping")
@@ -258,7 +265,9 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 	// Load all known ZIP catalogs into memory for fast lookup
 	s.reportProgress("loading")
 	s.knownZips = make(map[string]int64)
-	if !s.config.Library.RescanZip {
+	// --audio-only skips this block: it neither uses the known-zip skip-cache nor removes books
+	// for missing archives — audio-only is a non-destructive refresh (run a normal scan to clean up).
+	if !s.config.Library.RescanZip && !s.audioOnly {
 		var err error
 		s.knownZips, err = s.svc.GetAllZipCatalogs(ctx)
 		if err != nil {
@@ -411,8 +420,8 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 			return nil
 		}
 
-		// Other files (fb2, epub, etc.) go to workers
-		if s.extSet[ext] {
+		// Other files (fb2, epub, etc.) go to workers — skipped entirely in --audio-only mode
+		if s.extSet[ext] && !s.audioOnly {
 			fileChan <- path
 		}
 		return nil
@@ -430,8 +439,10 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 		log.Printf("Scan walk error: %v", err)
 	}
 
-	// Check for missing regular files (cat_type=0)
-	s.checkMissingRegularFiles(ctx)
+	// Check for missing regular files (cat_type=0) — skipped in --audio-only (non-destructive refresh)
+	if !s.audioOnly {
+		s.checkMissingRegularFiles(ctx)
+	}
 
 	// Mark duplicates (skip if no new books added)
 	if s.config.Scanner.Duplicates != "none" && atomic.LoadInt64(&s.stats.BooksAdded) > 0 {
@@ -649,12 +660,13 @@ func (s *Scanner) processAudioGroup(ctx context.Context, group *AudiobookGroup) 
 
 	// Check if audiobook already exists
 	book, err := s.svc.FindBook(ctx, filename, relPath)
-	if err == nil && book != nil {
+	if err == nil && book != nil && !s.audioOnly {
 		// Book exists, mark as verified
 		s.svc.UpdateBookAvail(ctx, book.ID, database.AvailVerified)
 		atomic.AddInt64(&s.stats.BooksSkipped, 1)
 		return
 	}
+	// --audio-only: an existing folder audiobook falls through to re-parse + in-place update below.
 
 	// Clean up any individual audio files that may exist in this folder
 	// (from scans before grouping was implemented)
@@ -712,6 +724,15 @@ func (s *Scanner) processAudioGroup(ctx context.Context, group *AudiobookGroup) 
 		Tracks: tracks,
 	}
 	chaptersJSON, _ := json.Marshal(structure)
+
+	// --audio-only refresh: update the existing row's durations in place (keeps book_id + links)
+	if book != nil {
+		if err := s.svc.UpdateAudiobookMeta(ctx, book.ID, totalDuration, len(tracks), string(chaptersJSON)); err != nil {
+			log.Printf("Failed to refresh audiobook folder %s: %v", group.FolderPath, err)
+		}
+		s.svc.UpdateBookAvail(ctx, book.ID, database.AvailVerified)
+		return
+	}
 
 	// Create book record
 	newBook := &database.Book{
@@ -1150,8 +1171,9 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 		relPath = path
 	}
 
-	// Check if already scanned (using in-memory cache)
-	if !s.config.Library.RescanZip {
+	// Check if already scanned (using in-memory cache). --audio-only bypasses the cache so
+	// existing audiobooks are re-opened and their durations refreshed.
+	if !s.config.Library.RescanZip && !s.audioOnly {
 		if _, ok := s.knownZips[relPath]; ok {
 			atomic.AddInt64(&s.stats.ArchivesSkipped, 1)
 			return
@@ -1170,6 +1192,12 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 	// Check if this ZIP contains audio files - if so, treat as single audiobook
 	if s.isAudioZip(zr) {
 		s.processAudioZip(ctx, path, relPath, zr)
+		return
+	}
+
+	// --audio-only: this is a book archive, not an audiobook — skip it
+	if s.audioOnly {
+		atomic.AddInt64(&s.stats.ArchivesSkipped, 1)
 		return
 	}
 
@@ -1397,8 +1425,9 @@ func (s *Scanner) process7z(ctx context.Context, path string) {
 		relPath = path
 	}
 
-	// Check if already scanned (using in-memory cache)
-	if !s.config.Library.RescanZip {
+	// Check if already scanned (using in-memory cache). --audio-only bypasses the cache so
+	// existing audiobooks are re-opened and their durations refreshed.
+	if !s.config.Library.RescanZip && !s.audioOnly {
 		if _, ok := s.knownZips[relPath]; ok {
 			atomic.AddInt64(&s.stats.ArchivesSkipped, 1)
 			return
@@ -1416,6 +1445,12 @@ func (s *Scanner) process7z(ctx context.Context, path string) {
 	// Check if this 7z contains audio files - if so, treat as single audiobook
 	if s.isAudio7z(szr) {
 		s.processAudio7z(ctx, path, relPath, szr)
+		return
+	}
+
+	// --audio-only: this is a book archive, not an audiobook — skip it
+	if s.audioOnly {
+		atomic.AddInt64(&s.stats.ArchivesSkipped, 1)
 		return
 	}
 
@@ -1603,12 +1638,13 @@ func (s *Scanner) isAudio7z(szr *sevenzip.ReadCloser) bool {
 func (s *Scanner) processAudio7z(ctx context.Context, path, relPath string, szr *sevenzip.ReadCloser) {
 	// Check if this audiobook already exists
 	existingBook, err := s.svc.FindBook(ctx, filepath.Base(path), filepath.Dir(relPath))
-	if err == nil && existingBook != nil {
+	if err == nil && existingBook != nil && !s.audioOnly {
 		s.svc.UpdateBookAvail(ctx, existingBook.ID, database.AvailVerified)
 		atomic.AddInt64(&s.stats.BooksSkipped, 1)
 		atomic.AddInt64(&s.stats.ArchivesScanned, 1)
 		return
 	}
+	// --audio-only: an existing audiobook falls through to re-parse + in-place update below.
 
 	// Create catalog entry for the 7z's parent directory
 	dir := filepath.Dir(relPath)
@@ -1787,6 +1823,16 @@ func (s *Scanner) processAudio7z(ctx context.Context, path, relPath string, szr 
 	}
 	chaptersStr := string(chaptersJSON)
 
+	// --audio-only refresh: update the existing row's durations in place (keeps book_id + links)
+	if existingBook != nil {
+		if err := s.svc.UpdateAudiobookMeta(ctx, existingBook.ID, totalDuration, len(tracks), chaptersStr); err != nil {
+			log.Printf("Failed to refresh audiobook %s: %v", path, err)
+		}
+		s.svc.UpdateBookAvail(ctx, existingBook.ID, database.AvailVerified)
+		atomic.AddInt64(&s.stats.ArchivesScanned, 1)
+		return
+	}
+
 	// Create the audiobook entry
 	book := &database.Book{
 		Filename:        filepath.Base(path),
@@ -1853,12 +1899,13 @@ type AudiobookTrack struct {
 func (s *Scanner) processAudioZip(ctx context.Context, path, relPath string, zr *zip.ReadCloser) {
 	// Check if this audiobook already exists
 	existingBook, err := s.svc.FindBook(ctx, filepath.Base(path), filepath.Dir(relPath))
-	if err == nil && existingBook != nil {
+	if err == nil && existingBook != nil && !s.audioOnly {
 		s.svc.UpdateBookAvail(ctx, existingBook.ID, database.AvailVerified)
 		atomic.AddInt64(&s.stats.BooksSkipped, 1)
 		atomic.AddInt64(&s.stats.ArchivesScanned, 1)
 		return
 	}
+	// --audio-only: an existing audiobook falls through to re-parse + in-place update below.
 
 	// Create catalog entry for the ZIP's parent directory
 	dir := filepath.Dir(relPath)
@@ -2041,6 +2088,16 @@ func (s *Scanner) processAudioZip(ctx context.Context, path, relPath string, zr 
 		chaptersJSON = nil
 	}
 	chaptersStr := string(chaptersJSON)
+
+	// --audio-only refresh: update the existing row's durations in place (keeps book_id + links)
+	if existingBook != nil {
+		if err := s.svc.UpdateAudiobookMeta(ctx, existingBook.ID, totalDuration, len(tracks), chaptersStr); err != nil {
+			log.Printf("Failed to refresh audiobook %s: %v", path, err)
+		}
+		s.svc.UpdateBookAvail(ctx, existingBook.ID, database.AvailVerified)
+		atomic.AddInt64(&s.stats.ArchivesScanned, 1)
+		return
+	}
 
 	// Create the audiobook entry
 	book := &database.Book{

@@ -85,6 +85,7 @@ func main() {
 		Short: "Run a single library scan",
 		RunE:  runScan,
 	}
+	scanCmd.Flags().Bool("audio-only", false, "scan/refresh only audiobooks (skip other books); re-reads existing audiobooks in place to apply corrected durations")
 
 	// Migrate command
 	migrateCmd := &cobra.Command{
@@ -355,6 +356,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 	defer svc.Close()
 
 	sc := scanner.New(cfg, svc)
+	if audioOnly, _ := cmd.Flags().GetBool("audio-only"); audioOnly {
+		sc.SetAudioOnly(true)
+		log.Println("Audio-only scan: skipping non-audio books, refreshing existing audiobooks in place")
+	}
 	ctx := context.Background()
 
 	// Set up progress callback

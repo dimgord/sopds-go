@@ -968,6 +968,19 @@ func (s *Service) UpdateBookAvailBatch(ctx context.Context, bookIDs []int64, ava
 	return s.repos.Books.UpdateAvailabilityBatch(ctx, bookIDs, book.Availability(avail))
 }
 
+// UpdateAudiobookMeta refreshes an existing audiobook's duration/track_count/chapters in place
+// (keeps book_id, tts links, authors). Used by an --audio-only re-scan to apply corrected durations
+// without deleting/re-adding the row. A map write forces zero values through (GORM skips them on structs).
+func (s *Service) UpdateAudiobookMeta(ctx context.Context, bookID int64, durationSeconds, trackCount int, chapters string) error {
+	return s.GORM().WithContext(ctx).Table("books").
+		Where("book_id = ?", bookID).
+		Updates(map[string]interface{}{
+			"duration_seconds": durationSeconds,
+			"track_count":      trackCount,
+			"chapters":         chapters,
+		}).Error
+}
+
 // AddBookAuthor links a book to an author
 func (s *Service) AddBookAuthor(ctx context.Context, bookID, authorID int64) error {
 	return s.repos.Books.AddAuthor(ctx, book.ID(bookID), authorID)

@@ -1,7 +1,36 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.11.1
+## Current Version: 1.11.2
+
+---
+
+### Revision 117 - 2026-08-02
+**`scan --audio-only`: refresh only audiobooks (apply the Rev 116 duration fix) without re-scanning the whole library (1.11.2).**
+
+Rev 116 corrected MPEG-2 durations, but existing rows only update on a re-scan — and a normal re-scan **skips**
+every already-known book (marks it verified and moves on), so it would never re-read durations, and it would
+also churn through the entire fb2/epub library. `scan --audio-only` fixes both.
+
+- **Walk filter:** non-audio standalone files (fb2/epub/…) are not queued; each `.zip`/`.7z` is still opened
+  to peek, and non-audio (book) archives are skipped right after the `isAudioZip/isAudio7z` check.
+- **Forced refresh in place:** the three audiobook paths (`processAudio7z`, `processAudioZip`,
+  `processAudioGroup`) normally early-return on an existing book. In `--audio-only` they fall through,
+  re-parse the tracks (now with the fixed MPEG-2 duration read), and call the new
+  `Service.UpdateAudiobookMeta(bookID, durationSeconds, trackCount, chapters)` to update those columns **in
+  place** — same `book_id`, so tts links / authors / catalog are preserved (no delete-re-add, no duplicates).
+  The known-zip skip-cache is bypassed so archives are actually re-opened.
+- **Non-destructive:** both cleanup steps are skipped in `--audio-only` — the missing-archive catalog purge
+  (`GetAllZipCatalogs` block) and `checkMissingRegularFiles` — so an audio-only run never deletes or prompts
+  about non-audio books. (Both are `os.Stat`-based and were already safe; skipping them keeps the mode purely
+  additive/refresh. Run a normal `scan` to clean up missing files.)
+
+Usage: `sopds scan --audio-only` — then the track-list + book totals show the corrected (Rev 116) durations.
+
+**Files modified:** `internal/scanner/scanner.go` (`audioOnly` field + `SetAudioOnly`; walk filter; zip/7z
+gates; refresh branch in the three audio paths; cleanup gating), `internal/infrastructure/persistence/
+service.go` (`UpdateAudiobookMeta`), `cmd/sopds/main.go` (`--audio-only` flag + wiring). Verified:
+`go build ./...`, `go vet`, `go test ./internal/scanner/` all clean; `scan --help` shows `--audio-only`.
 
 ---
 
