@@ -1,7 +1,59 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.10.0
+## Current Version: 1.11.0
+
+---
+
+### Revision 115 - 2026-08-02
+**Audiobook player: replay a finished track by click + global auto-next toggle; + `delete-book`/`prune` CLI to remove stale/duplicate books (1.11.0).**
+
+Two fixes prompted by a re-packed «Кобзар (Поезія)» audiobook: track 27 «Заповіт» "wouldn't play"
+(the player skipped 26→28), and the same book appeared **twice** in the catalog, one copy dead.
+
+**1. Player — replay a track that already reached its end** (`internal/server/web.go`, `AudioPlayer.playTrack`).
+Root cause (full pipeline traced, not the symptom): when a track finished, `audio.currentTime` stayed parked
+at `duration`. Clicking that same track hit the "same track ⇒ `togglePlay()`" branch, `play()` resumed *from
+the end*, so the browser instantly re-fired the `ended` event → `onEnded()` → `nextTrack()` → it "jumped" to
+the next track (28) and 27 seemed unplayable. It was **not** a corrupt file or a serve mismatch — the file is
+fine; it played correctly the *first* time, only the *replay* was broken. Fix, scoped to exactly the two
+conditions that trigger it (a **click** on the current track **and** `currentTime` at the very end): rewind
+`currentTime = 0` before `togglePlay()`. A ~0.25 s float slack absorbs the "`currentTime == duration`"
+imprecision browsers leave at natural end. Every other click path is untouched (no reset mid-track).
+
+**1b. Global "Auto-next" toggle + the two end-of-track behaviours** (same player). A checkbox in the player
+bar's extras (`#autoAdvance`, **on by default**, persisted in the `audioAutoAdvance` cookie like speed) now
+governs what happens when a track ends — the two scenarios the listener asked for:
+- **Auto-next ON (default):** `onEnded()` advances to the next track, which plays **from the start**. The
+  finished-track "parked at the end" latent case is closed in `loadTrack()`: it no longer restores a saved
+  position that sits at the very end (`pos < duration − 0.5`), so an auto-advance — or a page-resume — onto a
+  previously-finished track begins at 0 instead of instantly re-firing `ended` and skipping.
+- **Auto-next OFF:** `onEnded()` stops on the current track (no advance). It is *not* reset there — the track
+  stays parked at its end, and the reset happens **only** on the click+at-end path from (1). This is the exact
+  split requested ("auto ⇒ reset to start; no-auto ⇒ reset only by click at the end").
+Documented in the in-app **Help** page (new `help.audio` section, EN + UK; other locales fall back to EN via
+`i18n.T`). Player-control labels stay hard-coded English to match the existing bar; only Help is translated.
+
+**2. `delete-book <id>` and `prune` CLI** (`cmd/sopds/prune.go`, `Service.DeleteBook`). There was **no**
+way to remove a book without hand-writing SQL. The duplicate «Кобзар» was the **path=filename bug**: the same
+root-level archive got indexed twice — once with `path='.'` (functional: `getBookPath` ⇒ `root/x.7z`) and once
+with `path='x.7z'` (== filename ⇒ `root/x.7z/x.7z`, a path that never exists ⇒ dead row). `FindBook(filename,
+path)` treats the two `path` values as different books, so it never de-duped them.
+- `sopds delete-book <book_id>` — removes one book; `bauthors`/`bgenres`/`bseries` cascade via FK
+  `ON DELETE CASCADE`, `duplicate_of` is `SET NULL`, and audiobook tracks live in the book row itself, so a
+  single delete is complete. Prints what it removed. No undo (the id is explicit).
+- `sopds prune` — scans **all** audiobooks and resolves each one's file **exactly like the web serve does**
+  (`filepath.Join(root, path, filename)`), then `os.Stat`s it. Rows whose file is missing (the dead
+  path=filename dupes, and any other stale entry) are listed. **Dry-run by default** — it only deletes with
+  `--delete`, so a functional book (`path='.'` ⇒ file present) is never touched and a down network mount can't
+  cause data loss without an explicit flag.
+- Added `Service.DeleteBook(ctx, id)` wrapping the existing `Books.Delete` repo method; wired both cobra
+  commands in `cmd/sopds/main.go`.
+
+**Files modified:** `internal/server/web.go` (player markup + CSS + JS + Help section), `internal/i18n/locales/
+{en,uk}.yaml` (`help.audio.*`), `cmd/sopds/prune.go` (new), `cmd/sopds/main.go` (command wiring),
+`internal/infrastructure/persistence/service.go` (`DeleteBook`). Verified: `go build ./...` + `go vet` clean;
+locale YAML parses; `delete-book`/`prune` appear in `--help`, `prune --help` shows `--delete`.
 
 ---
 

@@ -102,6 +102,11 @@ func (s *Service) GetBook(ctx context.Context, id int64) (*database.Book, error)
 	return BookToLegacy(b), nil
 }
 
+// DeleteBook removes a book by id; bauthors/bgenres/bseries rows cascade via FK ON DELETE CASCADE.
+func (s *Service) DeleteBook(ctx context.Context, id int64) error {
+	return s.repos.Books.Delete(ctx, book.ID(id))
+}
+
 // GetBookAuthors returns authors for a book
 func (s *Service) GetBookAuthors(ctx context.Context, bookID int64) ([]database.Author, error) {
 	refs, err := s.repos.Books.LoadAuthors(ctx, book.ID(bookID))

@@ -194,9 +194,22 @@ func main() {
 		RunE:              runCheckYo,
 	}
 
+	deleteBookCmd := &cobra.Command{
+		Use:   "delete-book <book_id>",
+		Short: "Delete one book by id (author/genre/series links cascade via FK; e.g. a duplicate)",
+		Args:  cobra.ExactArgs(1),
+		RunE:  runDeleteBook,
+	}
+	pruneCmd := &cobra.Command{
+		Use:   "prune",
+		Short: "List audiobooks whose archive/folder is missing on disk (stale/path=filename dupes)",
+		RunE:  runPrune,
+	}
+	pruneCmd.Flags().Bool("delete", false, "actually delete the stale rows (default: dry-run, list only)")
+
 	rootCmd.AddCommand(startCmd, stopCmd, statusCmd, scanCmd, migrateCmd, initCmd, versionCmd, importCmd,
 		ttsRequestsCmd, ttsListCmd, ttsLinkCmd, ttsUnlinkCmd, audioListCmd, ttsWorkerCmd, ttsResumeCmd,
-		fb2ExtractCmd, ndjsonReqsCmd, checkYoCmd)
+		fb2ExtractCmd, ndjsonReqsCmd, checkYoCmd, deleteBookCmd, pruneCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

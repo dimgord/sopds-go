@@ -4378,6 +4378,10 @@ function goToPage(page) {
             </button>
         </div>
         <div class="player-extras">
+            <label class="autoadvance-toggle" title="Auto-play the next track when the current one ends">
+                <input type="checkbox" id="autoAdvance" checked>
+                <span>Auto-next</span>
+            </label>
             <div class="speed-control">
                 <button class="player-btn speed-btn" id="btnSpeed">1x</button>
             </div>
@@ -4430,6 +4434,7 @@ class AudioPlayer {
         this.speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
         this.speedIndex = 2; // Default 1x
         this.isSeeking = false;
+        this.autoAdvance = true; // auto-play next track when one ends (toggled by #autoAdvance)
         this.trackPositions = {}; // Per-track position storage
         this.coverImg = document.getElementById('audioCover');
         this.nowPlayingEl = document.getElementById('nowPlaying');
@@ -4496,6 +4501,19 @@ class AudioPlayer {
                 this.speedBtn.textContent = this.speeds[this.speedIndex] + 'x';
             }
         }
+
+        // Auto-advance toggle (default on; persisted like speed)
+        const autoAdvanceEl = document.getElementById('autoAdvance');
+        if (autoAdvanceEl) {
+            if (getCookie('audioAutoAdvance') === 'false') {
+                this.autoAdvance = false;
+                autoAdvanceEl.checked = false;
+            }
+            autoAdvanceEl.addEventListener('change', () => {
+                this.autoAdvance = autoAdvanceEl.checked;
+                setCookie('audioAutoAdvance', this.autoAdvance, 365);
+            });
+        }
     }
 
     formatTime(seconds) {
@@ -4515,6 +4533,11 @@ class AudioPlayer {
 
         // If same track, toggle play/pause
         if (idx === this.currentTrackIndex && this.audio.src) {
+            // Parked at the very end: play() would instantly re-fire 'ended' and skip
+            // to the next track. Rewind so the click replays it. (~0.25s float slack.)
+            if (this.audio.duration && this.audio.currentTime >= this.audio.duration - 0.25) {
+                this.audio.currentTime = 0;
+            }
             this.togglePlay();
             return;
         }
@@ -4604,13 +4627,16 @@ class AudioPlayer {
             img.src = coverUrl;
         }
 
-        // Restore saved position for this specific track
-        if (trackPath && this.trackPositions[trackPath] > 0) {
+        // Restore saved position for this track — but never a position parked at the very end
+        // (that would instantly re-fire 'ended' and skip); such a track starts fresh at 0, so an
+        // auto-advance or a resume onto a finished track plays from the beginning.
+        const notAtEnd = (pos) => !track.duration || pos < track.duration - 0.5;
+        if (trackPath && this.trackPositions[trackPath] > 0 && notAtEnd(this.trackPositions[trackPath])) {
             this.audio.currentTime = this.trackPositions[trackPath];
         } else {
             // Check saved state for backwards compatibility
             const savedState = this.getSavedState();
-            if (savedState && savedState.trackIndex === idx && savedState.position > 0) {
+            if (savedState && savedState.trackIndex === idx && savedState.position > 0 && notAtEnd(savedState.position)) {
                 this.audio.currentTime = savedState.position;
             }
         }
@@ -4711,11 +4737,12 @@ class AudioPlayer {
 
     onEnded() {
         this.saveState();
-        // Auto-play next track
-        if (this.currentTrackIndex < this.tracks.length - 1) {
+        // Auto-play next track — unless the listener turned auto-advance off (then stop here;
+        // clicking the finished track replays it from the start, see playTrack).
+        if (this.autoAdvance && this.currentTrackIndex < this.tracks.length - 1) {
             this.nextTrack();
         } else {
-            // End of playlist
+            // Auto-advance off, or end of playlist
             const icon = this.playPauseBtn.querySelector('i');
             icon.classList.remove('fa-pause');
             icon.classList.add('fa-play');
@@ -5283,6 +5310,18 @@ function downloadSelected() {
     align-items: center;
     gap: 8px;
 }
+.autoadvance-toggle {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.8rem;
+    color: var(--gray);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+.autoadvance-toggle input { cursor: pointer; margin: 0; }
+@media (max-width: 600px) { .autoadvance-toggle span { display: none; } }
 .speed-btn {
     width: auto !important;
     padding: 0 12px;
@@ -5608,6 +5647,12 @@ function downloadSelected() {
 <section>
     <h3><i class="fas fa-bookmark"></i> {{t "help.bookshelf.title"}}</h3>
     <p>{{t "help.bookshelf.p1"}}</p>
+</section>
+
+<section>
+    <h3><i class="fas fa-headphones"></i> {{t "help.audio.title"}}</h3>
+    <p>{{t "help.audio.p1"}}</p>
+    <p class="eg"><i class="fas fa-lightbulb"></i> {{t "help.audio.autonext"}}</p>
 </section>
 </div>
 

@@ -148,6 +148,10 @@ help:
   bookshelf:
     title: "Bookshelf"
     p1: "Tap “Add to shelf” on any book to keep it handy on your personal bookshelf — it works even before you sign in."
+  audio:
+    title: "Audiobook player"
+    p1: "Open an audiobook and a player bar appears at the bottom: tap any track to play, drag the progress bar to seek, and use the ±15s, speed, and previous/next controls."
+    autonext: "The “Auto-next” checkbox (on by default) plays the following track automatically when one ends. Turn it off to stop after each track — a finished track then replays from the start when you click it again."
 
 # Auth pages
 auth:
