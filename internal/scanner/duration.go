@@ -247,10 +247,22 @@ func getMP3Duration(r io.ReadSeeker, fileSize int64) (time.Duration, error) {
 		samplesPerFrame = 576
 	}
 
-	// Look for Xing header (36 bytes after frame header for stereo)
-	xingOffset := int64(36)
-	if (buf[3]>>6)&0x03 == 3 { // Mono
+	// Look for the Xing/Info header. Its offset from the frame start = 4-byte header +
+	// side-info block, whose size depends on MPEG version AND channel mode. MPEG-2/2.5 (LSF)
+	// side info is half-size, so its offsets (mono 13, stereo 21) differ from MPEG-1's
+	// (mono 21, stereo 36) — using the MPEG-1 offsets missed the header on every MPEG-2 file.
+	mono := (buf[3]>>6)&0x03 == 3
+	var xingOffset int64
+	if version == 3 { // MPEG-1
+		xingOffset = 36
+		if mono {
+			xingOffset = 21
+		}
+	} else { // MPEG-2 / 2.5
 		xingOffset = 21
+		if mono {
+			xingOffset = 13
+		}
 	}
 
 	framePos, _ := r.Seek(0, io.SeekCurrent)
@@ -273,10 +285,17 @@ func getMP3Duration(r io.ReadSeeker, fileSize int64) (time.Duration, error) {
 		}
 	}
 
-	// No Xing header - estimate from bitrate
+	// No Xing header - estimate from bitrate (Layer III tables). MPEG-2/2.5 (LSF) use a
+	// different, lower bitrate table than MPEG-1; without it every MPEG-2 file (typical for
+	// 64 kbps / 22050 Hz audiobooks) fell through to the 128 default and reported ~half its
+	// real length.
 	bitrates := map[byte]map[byte]int{
-		// MPEG1 Layer 3
+		// MPEG-1 Layer III
 		3: {1: 32, 2: 40, 3: 48, 4: 56, 5: 64, 6: 80, 7: 96, 8: 112, 9: 128, 10: 160, 11: 192, 12: 224, 13: 256, 14: 320},
+		// MPEG-2 LSF Layer III
+		2: {1: 8, 2: 16, 3: 24, 4: 32, 5: 40, 6: 48, 7: 56, 8: 64, 9: 80, 10: 96, 11: 112, 12: 128, 13: 144, 14: 160},
+		// MPEG-2.5 LSF Layer III (same as MPEG-2)
+		0: {1: 8, 2: 16, 3: 24, 4: 32, 5: 40, 6: 48, 7: 56, 8: 64, 9: 80, 10: 96, 11: 112, 12: 128, 13: 144, 14: 160},
 	}
 
 	bitrate := 128

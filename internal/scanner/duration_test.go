@@ -28,6 +28,34 @@ func TestGetAudioDurationFromReaderEmptyMP3(t *testing.T) {
 	}
 }
 
+func TestGetMP3DurationMPEG2BitrateTable(t *testing.T) {
+	// MPEG-2 (LSF) Layer III, mono, 64 kbps, 22050 Hz, no Xing (frame header FF F3 80 C0).
+	// Before the MPEG-2 bitrate table existed the lookup missed and defaulted to 128 kbps →
+	// half the real length. 16000 audio bytes at 64 kbps ⇒ 2.0s (the 128 bug gives ~1.0s).
+	buf := make([]byte, 16000)
+	buf[0], buf[1], buf[2], buf[3] = 0xFF, 0xF3, 0x80, 0xC0
+	d, err := GetAudioDurationFromReader(bytes.NewReader(buf), int64(len(buf)), "mp3")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sec := d.Seconds(); sec < 1.9 || sec > 2.1 {
+		t.Errorf("MPEG-2 64kbps: got %.2fs, want ~2.0s (128-default bug gives ~1.0s)", sec)
+	}
+}
+
+func TestGetMP3DurationMPEG1BitrateTable(t *testing.T) {
+	// MPEG-1 Layer III, mono, 128 kbps, 44100 Hz, no Xing (FF FB 90 C0). 16000 bytes ⇒ 1.0s.
+	buf := make([]byte, 16000)
+	buf[0], buf[1], buf[2], buf[3] = 0xFF, 0xFB, 0x90, 0xC0
+	d, err := GetAudioDurationFromReader(bytes.NewReader(buf), int64(len(buf)), "mp3")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sec := d.Seconds(); sec < 0.95 || sec > 1.05 {
+		t.Errorf("MPEG-1 128kbps: got %.2fs, want ~1.0s", sec)
+	}
+}
+
 func TestGetAudioDurationFromReaderEmptyFLAC(t *testing.T) {
 	// FLAC without proper magic
 	reader := bytes.NewReader([]byte("not flac data"))

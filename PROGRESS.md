@@ -1,7 +1,36 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.11.0
+## Current Version: 1.11.1
+
+---
+
+### Revision 116 - 2026-08-02
+**Fix MP3 duration read for MPEG-2/2.5 files — audiobooks no longer report ~half their real length (1.11.1).**
+
+A listener spotted the player showing `12:06 / 14:48` on a track the track-list called `7m 27s` — every
+track in the book read **~2× short**. Traced to `internal/scanner/duration.go` `getMP3Duration`: it only
+supported **MPEG-1** in two places, so every **MPEG-2/2.5** MP3 (typical for 64 kbps / 22050 Hz audiobooks)
+fell through to a wrong estimate.
+
+- **Bitrate table was MPEG-1-only** (`bitrates` had just the `version==3` map). For an MPEG-2 frame
+  (`version==2`) the lookup missed and `bitrate` kept its **128** default; a real 64 kbps file then estimated
+  `size×8/128k` = **half** the true duration (128/64 = the observed 2×). Added the MPEG-2 **and** MPEG-2.5 LSF
+  Layer III bitrate tables (both `{1:8…14:160}`).
+- **Xing/Info offset was MPEG-1-only** (mono 21 / stereo 36). MPEG-2/2.5 LSF side-info is half-size, so the
+  header sits at mono **13** / stereo **21**; using the MPEG-1 offsets meant the VBR frame-count header was
+  never found on MPEG-2 → it fell to the (then-broken) estimate. Made the offset version-aware.
+
+`samplesPerFrame` was already correct (576 for MPEG-2 Layer III). Duration is authoritative: `audioparser.
+Parse` derives the stored **bitrate** from it (`filesize*8/duration`), so this one fix corrects both the
+displayed durations and the stored bitrate. Playback was never affected (the browser decodes the real length).
+
+**Re-scan required:** the fix changes new scans only — existing rows keep their wrong durations until the
+affected audiobooks are re-scanned.
+
+**Files modified:** `internal/scanner/duration.go` (MPEG-2/2.5 bitrate tables + version-aware Xing offset),
+`internal/scanner/duration_test.go` (MPEG-2 64 kbps ⇒ ~2.0s regression + MPEG-1 128 kbps ⇒ ~1.0s control).
+Verified: `go build ./...` clean; `go test ./internal/scanner/` all pass incl. the two new cases.
 
 ---
 
