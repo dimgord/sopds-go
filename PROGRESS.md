@@ -1,7 +1,49 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.11.2
+## Current Version: 1.11.3
+
+---
+
+### Revision 120 - 2026-08-03
+**Narration chunker: hyphens typed as dashes become real em dashes; `…` is a sentence end; the `?!` break no longer shaves off stubs (1.11.3).**
+
+Three prosody defects in `internal/narrate` (the chunker behind `sopds fb2-extract`, i.e. every
+narrated book), each found by measurement on a Ukrainian chapter and fixed here.
+
+**1. A dash typed as a hyphen is not heard as a dash.** Books write `слово - слово` (the test chapter:
+23 hyphens, 0 em dashes). F5 reads `-` as an intra-word hyphen — no pause, and none of the
+speech-to-narration intonation shift a dash carries. Measured on `…!» - кажуть`: **180 ms** of pause,
+against **720 ms** with a real `—`. Worse, unfixed the pause is a *lottery*: the same line across three
+seeds gave 520 / 0 / 680 ms, and the 0 ms case fuses the words into one ("кажувгеть", "дияволамифлюди")
+— which is exactly the defect a listener reported. `normalizeDashes` now converts spaced, leading and
+post-sentence hyphens to em dashes; word-internal hyphens (`мудрагелі-схоласти`, `по-перше`) are left
+untouched, which the new test pins down.
+
+**2. A sentence-final ellipsis was not a sentence boundary.** `sentSplitRe` only knew `.!?`, so
+`…одноманітне… Люди називають…` stayed one sentence and packed on. It is now a boundary, and a sentence
+ending in `…` ends its chunk — F5 gives an ellipsis a weaker pause than a full stop (530 ms vs 720 ms),
+so the join is better off owning that pause.
+
+**3. The `?`/`!` chunk break created stubs, and stubs lose words.** The rule was unconditional; a run of
+short exclamations ("Я йду. Я шукаю тебе!..") was cut into 1–2 s chunks, and F5 drops words outright at
+that size. Measured CER by chunk length: **0.8 s → 61%**, 1.6 s → 42%, under 6 s → 2.8% average, 12 s+ →
+1.5%, 17 s → 0%. So the break is now gated on `minChunkChars` (60 ≈ 4.5 s): a flattened contour is the
+smaller loss than a swallowed word. One exception, also measured: a **complete quoted line**
+(«Геть, Сатано!») is self-contained and may end a short chunk — doing so widened its pitch range from
+8.7 to 11.2 semitones across three seeds.
+
+Method note for anyone repeating this: never judge intonation from one sample. Two variants with
+different text are different noise draws — use three or more seeds, whisper CER for words, whisper word
+timestamps for pause length, and an F0 percentile range for expressiveness.
+
+**Files modified:** `internal/narrate/extract.go` (`normalizeDashes`, ellipsis in `sentSplitRe`,
+`endsUtterance`/`isQuotedLine`, `minChunkChars` gate), `internal/narrate/extract_test.go` (4 new tests:
+dash normalisation incl. the word-internal cases, no-stub gating, quoted-line break, ellipsis boundary).
+Verified: `go build ./...` clean, `go test ./internal/narrate/` all pass.
+
+The same rules, with the full measurement write-up, live on the narration side in the `f5` repo
+(`uk-narrate/chunker.py`, `docs/uk-narration-workflow.md`).
 
 ---
 

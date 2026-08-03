@@ -404,7 +404,23 @@ func atoi(s string) int {
 	return n
 }
 
-var sentSplitRe = regexp.MustCompile(`([.!?]["»)]*)\s+`)
+var sentSplitRe = regexp.MustCompile(`([.!?…]["»)]*)\s+`)
+
+// Books type a dash as a plain hyphen ("слово - слово"), and F5 reads "-" as an intra-word hyphen:
+// no pause, no speech-to-narration intonation shift. Measured on a uk line: 180 ms of pause at
+// `…!» - кажуть` against 720 ms with a real em dash — and unfixed the pause is a lottery (520/0/680 ms
+// across seeds), the 0 ms case fusing the words into one. Word-internal hyphens are left alone; only a
+// spaced, leading or post-sentence hyphen is a dash.
+var (
+	dashSpacedRe  = regexp.MustCompile(`(\s)-+(\s)`)
+	dashLeadingRe = regexp.MustCompile(`(^|\n)\s*-+\s+`)
+)
+
+func normalizeDashes(text string) string {
+	text = dashLeadingRe.ReplaceAllString(text, "$1— ")
+	return dashSpacedRe.ReplaceAllString(text, "$1—$2")
+}
+
 var safeStripRe = regexp.MustCompile(`[^A-Za-z0-9_А-Яа-яЁёІіЇїЄєҐґ.-]`)
 
 // Chunk splits at SEP boundaries (so each inlined footnote is chunked on its own, never packed into
@@ -431,6 +447,7 @@ func ChunkMask(text string, maxchars int) (chunks []string, notes []bool) {
 }
 
 func chunkSegment(text string, maxchars int) []string {
+	text = normalizeDashes(text)
 	text = strings.ReplaceAll(text, "\n", " ")
 	text = collapse(text)
 	if text == "" {
@@ -453,10 +470,17 @@ func chunkSegment(text string, maxchars int) []string {
 			out = append(out, buf)
 			buf = s
 		}
-		// A sentence ending in ? or ! ends its chunk, so the question/exclamation lands at the end of
-		// the utterance — F5 renders its intonation there, but flattens it mid-chunk. The chunk keeps
-		// whatever narrative packed before it, so it isn't a tiny clip-prone fragment.
-		if endsQuestionOrBang(s) {
+		// A sentence ending in ? ! or … ends its chunk, so the mark lands at the end of the utterance —
+		// F5 renders its intonation there but flattens it mid-chunk, and a sentence-final ellipsis gets
+		// a weaker pause from the model than a full stop (530 ms vs 720 ms), so the join is better off
+		// owning that pause.
+		//
+		// Gated on minChunkChars: ungated, a run of short exclamations ("Я йду. Я шукаю тебе!..") is cut
+		// into 1-2 s stubs, and F5 drops words outright on those — measured 61% CER at 0.8 s and 42% at
+		// 1.6 s, against 2.8% under 6 s and 1.5% at 12 s and over. A flattened contour is the smaller
+		// loss. A complete quoted line is the exception: it is self-contained, and letting it end the
+		// chunk widened its pitch range from 8.7 to 11.2 semitones.
+		if endsUtterance(s) && (utf8.RuneCountInString(buf) >= minChunkChars || isQuotedLine(s)) {
 			out = append(out, buf)
 			buf = ""
 		}
@@ -467,10 +491,27 @@ func chunkSegment(text string, maxchars int) []string {
 	return out
 }
 
-// endsQuestionOrBang reports whether s ends with ? or ! (ignoring trailing quotes/brackets).
-func endsQuestionOrBang(s string) bool {
-	s = strings.TrimRight(s, `"»)'’” `)
-	return strings.HasSuffix(s, "?") || strings.HasSuffix(s, "!")
+// minChunkChars is the floor a chunk must reach before a ?/!/… is allowed to end it. ~13 chars per
+// second of speech, so this is roughly 4.5 s — below that F5 starts dropping words.
+const minChunkChars = 60
+
+// endsUtterance reports whether s ends on a mark whose contour belongs at a chunk end: ? ! or …
+// (ignoring trailing quotes, brackets and the dots of "!..").
+func endsUtterance(s string) bool {
+	s = strings.TrimRight(s, `"»)'’” .`)
+	return strings.HasSuffix(s, "?") || strings.HasSuffix(s, "!") || strings.HasSuffix(s, "…")
+}
+
+// isQuotedLine reports whether s is a complete quoted utterance («Геть, Сатано!») — self-contained
+// enough to end a chunk on its own even when the chunk stays short.
+func isQuotedLine(s string) bool {
+	s = strings.TrimSpace(s)
+	for _, open := range []string{"«", `"`, "“", "„"} {
+		if strings.HasPrefix(s, open) {
+			return endsUtterance(s)
+		}
+	}
+	return false
 }
 
 // maskBits renders a note-mask as a '0'/'1' byte string, or nil if no chunk is a note (so the sidecar

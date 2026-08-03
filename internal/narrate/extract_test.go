@@ -179,3 +179,54 @@ func TestSpokenHeadings(t *testing.T) {
 		t.Errorf("named chapter heading = %q", got)
 	}
 }
+
+// A dash typed as a hyphen must become a real em dash: F5 gives "-" no pause at all (measured 180 ms
+// vs 720 ms, and 0 ms on some seeds), while word-internal hyphens must survive untouched.
+func TestNormalizeDashes(t *testing.T) {
+	cases := map[string]string{
+		"«Геть, Сатано!» - кажуть мені": "«Геть, Сатано!» — кажуть мені",
+		"Я - закріпачений Тьмою":        "Я — закріпачений Тьмою",
+		"мудрагелі-схоласти лишаються":  "мудрагелі-схоласти лишаються",
+		"по-перше, я не Сатана":         "по-перше, я не Сатана",
+		"- Пряма річ, - сказав він":     "— Пряма річ, — сказав він",
+		"тире -- подвійне":              "тире — подвійне",
+	}
+	for in, want := range cases {
+		if got := normalizeDashes(in); got != want {
+			t.Errorf("normalizeDashes(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The ?/!/… break must not shave off stubs: F5 drops words on 1-2 s chunks (61% CER at 0.8 s), so a
+// short exclamation keeps packing instead of ending its chunk.
+func TestChunkNoStubsFromMarks(t *testing.T) {
+	got := Chunk("Я йду. Я шукаю тебе!.. І далі йду.", 200)
+	if len(got) != 1 {
+		t.Errorf("short exclamations should stay together, got %d chunks: %v", len(got), got)
+	}
+	// A long enough chunk still ends on its mark.
+	long := strings.Repeat("Довге речення тут. ", 5) + "Невже це так?" + " А потім далі."
+	got = Chunk(long, 240)
+	if len(got) < 2 || !strings.HasSuffix(strings.TrimSpace(got[0]), "так?") {
+		t.Errorf("a long chunk should end on its question mark, got %v", got)
+	}
+}
+
+// A complete quoted line is self-contained: it may end a chunk even when short, which measurably
+// widened its pitch range (8.7 -> 11.2 semitones).
+func TestChunkQuotedLineEndsChunk(t *testing.T) {
+	got := Chunk("Люди звуть мене так. «Геть, Сатано!» — кажуть мені люди, і я регочу.", 240)
+	if len(got) < 2 || !strings.HasSuffix(strings.TrimSpace(got[0]), "«Геть, Сатано!»") {
+		t.Errorf("quoted line should end its chunk, got %v", got)
+	}
+}
+
+// A sentence-final ellipsis is a sentence boundary (it was not, so it packed on and the pause was lost).
+func TestChunkEllipsisIsBoundary(t *testing.T) {
+	got := Chunk(strings.Repeat("Наповнювач тут. ", 5)+"І все це таке одноманітне… Люди називають мене Нечистим.", 240)
+	last := strings.TrimSpace(got[len(got)-1])
+	if !strings.HasPrefix(last, "Люди називають") {
+		t.Errorf("ellipsis should end its chunk, got tail %q (all: %v)", last, got)
+	}
+}
