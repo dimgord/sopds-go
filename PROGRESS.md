@@ -5,6 +5,30 @@
 
 ---
 
+### Revision 119 - 2026-08-02
+**Track `f5-bridge/f5-swift-bridge.sh` and raise its default rk4 steps 6 → 32 (no app version change).**
+
+The native Swift/MLX drop-in for `$F5BIN` (Mac-only, zero-Python synth on the Apple GPU) was never
+committed — it existed only in the working tree. Added it, with one real fix: the default
+**`F5SWIFT_STEPS` goes 6 → 32**.
+
+Six steps leaves the flow-matching ODE far from converged — for one seed the 6-step and 32-step outputs
+correlate only **0.08**, and Whisper transcribes mangled words at 6 steps that come out correct at 32.
+The cost is ~5× the wall-clock (~50 s vs ~9 s for a 17 s line), so the env var is still there to lower it
+for quick drafts.
+
+Context: this came out of a full numeric diff of the Swift port against `f5_tts_mlx` (Python). Objectively
+the Python path is still better and stays the production narration engine — CER 1.7% (σ 0.2) vs the Swift
+port's 3.6–4.7% (σ 1.4–2.7). That investigation also found and fixed a genuine rope bug in the Swift port
+(`MLX.matmul` quantises the position index above 2048, so rope phase drifts by up to 1 rad past ~21.8 s of
+audio) and disproved the previous duration-overshoot theory. Full write-up, patches and the measurement
+method live in the `f5` repo (`docs/f5-swift-vs-mlx.md`, `patches/f5-tts-swift-*.patch`), not here.
+
+**Files modified:** `f5-bridge/f5-swift-bridge.sh` (newly tracked; steps default + rationale comment).
+Verified: `bash -n` clean. No Go code touched — version stays 1.11.2.
+
+---
+
 ### Revision 118 - 2026-08-02
 **Tooling: `task service-deploy` + `task deploy-config` (no app version change — stays 1.11.2).**
 
