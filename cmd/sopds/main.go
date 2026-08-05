@@ -34,7 +34,7 @@ var (
 
 	// revision is the PROGRESS.md Rev number, bumped by hand each docompush
 	// (git tags carry the semver; this carries the Rev). Shown on /web/about.
-	revision = "114"
+	revision = "122"
 )
 
 func main() {

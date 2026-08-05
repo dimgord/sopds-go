@@ -1,7 +1,34 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.12.0
+## Current Version: 1.12.1
+
+---
+
+### Revision 122 - 2026-08-05
+**/web/about told the truth about a build it was not: the revision constant had been stale for seven revisions (1.12.1).**
+
+Deploying Rev 121 to the server and then verifying it through `/web/about` produced `Version dev`,
+`Revision Rev 114`. Neither number was wrong by accident.
+
+`version` is "dev" by design — GoReleaser injects the tag, a source build has none — so on a
+host that builds from a git checkout the **revision constant is the only thing that identifies the
+running binary**. It is bumped by hand, and it had been missed at Rev 115, 116, 117, 118, 119, 120
+and 121. The page was not merely unhelpful; it stated a specific, confident, wrong answer, which is
+the failure mode that makes someone trust a stale deploy. `TestRevisionMatchesProgress` now parses
+the newest `### Revision N` heading out of PROGRESS.md and fails if the constant disagrees, so the
+next omission is a red test rather than a lie in production.
+
+**`task build` could not build on any deploy host.** Its own description says "pure Go — no
+piper/cgo, needs no C compiler; the default everywhere", but it did not set `CGO_ENABLED=0`, so with
+cgo on (the Go default) the build pulls in `runtime/cgo` and dies with `C compiler "gcc" not found`
+on a machine without a toolchain — which is every machine we deploy to. Same shape as Rev 20 in
+f5-spike: the description was right about the intent and the code did not enforce it.
+
+Verification that does not depend on the binary being honest, for the record: build from a freshly
+cloned checkout **on the target host**, then compare `sha256sum` of the build output against the
+installed file. That chain — commit hash → clone → build → checksum — holds regardless of what any
+page reports.
 
 ---
 

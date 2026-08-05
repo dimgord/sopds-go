@@ -19,7 +19,10 @@ tasks:
   build:
     desc: Build sopds (pure Go — no piper/cgo, needs no C compiler; the default everywhere)
     cmds:
-      - go build -o {{.BINARY}} ./cmd/sopds
+      # CGO_ENABLED=0 is what makes the description true: with cgo on (the Go default) the build
+      # pulls in runtime/cgo and dies with `C compiler "gcc" not found` on any host without a
+      # toolchain — which is every deploy target we have.
+      - CGO_ENABLED=0 go build -o {{.BINARY}} ./cmd/sopds
     sources:
       - "**/*.go"
     generates:
