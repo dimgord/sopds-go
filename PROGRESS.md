@@ -1,7 +1,41 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.11.3
+## Current Version: 1.12.0
+
+---
+
+### Revision 121 - 2026-08-05
+**f5-bridge: pauses the model cannot place — around a heading, and at a sentence seam (1.12.0).**
+
+Two joins, one problem: the chunker decides where a pause belongs, but only the joiner can put one
+there, and neither script did it in the same place.
+
+**`fb2-to-f5.sh` had no pause at all.** Rev 120 ported the cut rules into `internal/narrate` — a
+chunk now ends on its `?`/`!`/`…` for the contour — but ending a chunk there is exactly what takes
+the pause out of F5's hands: a sentence-final ellipsis gets ~530 ms against 720 for a full stop, a
+chunk boundary gets nothing, and `REMOVE_SILENCE` trims the tails as well. So the rules were paying
+their cost and delivering none of their benefit. `SENT_PAUSE` (0.30 s) and `TITLE_PAUSE` (1.5 s,
+bracketing a heading on both sides) are now inserted at join time, from a plan derived from
+`reqs.ndjson` itself — the request stream is the only thing that knows which wav a chunk became, so
+nothing has to re-guess the numbering. Two adjacent headings share the pause between them instead of
+stacking it, and no pause is left dangling at a part's end. Verified arithmetically: six 0.4 s chunks
+with three headings and three sentence seams join to exactly 7.800 s.
+
+**`fb2-to-f5.legacy-pod.sh` is vendored** — the variant that actually narrated the Russian book, kept
+so that run is reproducible from git rather than from one pod's disk. It is ahead of the maintained
+script in three ways that are all audible (a per-punctuation pause map, edge trimming, and footnote
+cast voices found by text prefix rather than by a `.notes` sidecar); merging them back is written up
+in `f5-bridge/FUTURE.md`. It gained `PAUSE_TITLE`, `WORK_DIR`/`JOIN_ONLY`, and a guard.
+
+**The guard is the lesson.** On a Blackwell pod the engine died at startup on a missing
+`libonnxruntime.so.1`, and the script printed `0/26 done in 0m03s` followed by `✓ done` — no error,
+no mp3, exit 0. A synth that produced fewer wavs than it was asked for now prints the daemon log and
+fails. Any pipeline that counts its own output should compare that count to what it requested.
+
+**`WORK_DIR` is cheap insurance.** Pause lengths are a join-time parameter, so keeping the per-chunk
+wavs turns "1.5 s was too long" from a three-hour re-synthesis into a two-minute `JOIN_ONLY=1`
+re-join. Worth doing on any run long enough to hurt.
 
 ---
 

@@ -35,6 +35,12 @@ CKPT=${CKPT:-$F5_HOME/ru-model/model_v2.safetensors}
 VOCAB=${VOCAB:-$F5_HOME/ru-model/vocab.txt}
 NFE=${NFE:-32}; WORKERS=${WORKERS:-1}; MAXCHARS=${MAXCHARS:-250}; DEVICE=${DEVICE:-cpu}
 MODE=${MODE:-all}; PARTS=${PARTS:-}; FIX=${FIX:-}
+# Pauses the joiner inserts, because the model cannot. Ending a chunk on its ?/!/… is what buys the
+# phrase contour, but it also takes the pause away from F5: a sentence-final ellipsis gets ~530 ms
+# against 720 for a full stop, and a chunk boundary gets nothing at all — with REMOVE_SILENCE the
+# tails are trimmed too. So the seam pause is placed here. TITLE_PAUSE brackets each heading chunk
+# (see <id>_<safe> counts in review/_titlecount.tsv). Set either to 0 to butt-join as before.
+SENT_PAUSE=${SENT_PAUSE:-0.30}; TITLE_PAUSE=${TITLE_PAUSE:-1.5}
 # Accent mode per language (STRESS_MODE, from the worker's lc.stress):
 #   ruaccent (ru, default) — native Rust `sopds-tts-rs stress` (needs RUACCENT_HOME + STRESSBIN/F5BIN);
 #   none     (en)          — F5 English reads plain text, so the extracted text is used as-is;
@@ -109,6 +115,24 @@ NMAIN=$(wc -l < "$WORK/reqs.ndjson" | tr -d ' ')
 NNOTES=$(wc -l < "$NOTES_REQS" | tr -d ' ')
 N=$((NMAIN + NNOTES))
 [ "$N" -gt 0 ] || { echo "no stressed text — run MODE=stress first"; exit 1; }
+
+# Pause plan, derived from the request stream itself — it is the only thing that knows which wav a
+# chunk became, so nothing here has to re-guess the numbering. "T" = heading (the first K chunks of
+# a part, K from review/_titlecount.tsv), "S" = the chunk ends a sentence, "-" = mid-sentence split.
+# ndjson-reqs encodes a Go map, so the keys come out alphabetically: {"output":…,"text":…}.
+cat "$WORK/reqs.ndjson" "$NOTES_REQS" | gawk '
+  match($0, /"output":"[^"]*"/) {
+    out = substr($0, RSTART + 10, RLENGTH - 11)
+    t = $0; sub(/^.*,"text":"/, "", t); sub(/"}[ \t]*$/, "", t)
+    gsub(/[»"'"'"')\]]+$/, "", t)          # strip closing quotes/brackets, then look at the mark
+    print out "\t" (t ~ /[.!?…]$/ ? 1 : 0)
+  }' | sort > "$WORK/_ends.tsv"
+gawk -F'\t' -v OFS='\t' '
+  NR == FNR { K[$1] = $2; next }
+  { p = gensub(/.*\/p([0-9]+)_c.*/, "\\1", "g", $1); n[p]++
+    print $1, (n[p] <= K[p] ? "T" : ($2 == 1 ? "S" : "-")) }
+' "$REVIEW/_titlecount.tsv" "$WORK/_ends.tsv" > "$WORK/pauses.tsv" 2>/dev/null \
+  || gawk -F'\t' -v OFS='\t' '{ print $1, ($2 == 1 ? "S" : "-") }' "$WORK/_ends.tsv" > "$WORK/pauses.tsv"
 # Engine: native Rust (ort) F5. The model DIR carries ckpt/vocab/ref; the daemon speaks the NDJSON
 # {"text","output"} protocol and reads NFE from SOPDS_TTS_NFE ($NFE, default 32 — 16 sounds muffled).
 [ -n "${F5BIN:-}" ] || { echo "fb2-to-f5.sh: set F5BIN to the sopds-tts-rs binary (native F5 synth)" >&2; exit 1; }
@@ -157,6 +181,17 @@ wait "${pids[@]}" 2>/dev/null || true
 printf '\r\033[K  %d/%d done in %dm%02ds\n' "$(find "$WORK" -maxdepth 1 -name 'p*_c*.wav'|wc -l|tr -d ' ')" "$N" $((SECONDS/60)) $((SECONDS%60))
 
 echo "→ joining parts…"
+# Silence files at the synthesized rate — the concat demuxer wants matching streams, so they are cut
+# from the first produced wav's sample rate rather than assumed.
+PAUSE_S=""; PAUSE_T=""
+_firstwav=$(find "$WORK" -maxdepth 1 -name 'p*_c*.wav' | sort | head -1)
+if [ -n "$_firstwav" ]; then
+  _sr=$(ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate -of csv=p=0 "$_firstwav" 2>/dev/null || true)
+  _mksil() { ffmpeg -y -hide_banner -loglevel error -f lavfi -i "anullsrc=r=${_sr:-24000}:cl=mono" -t "$1" -c:a pcm_s16le "$2"; }
+  awk "BEGIN{exit !($SENT_PAUSE  > 0)}" && { PAUSE_S="$WORK/_pause_s.wav"; _mksil "$SENT_PAUSE"  "$PAUSE_S"; }
+  awk "BEGIN{exit !($TITLE_PAUSE > 0)}" && { PAUSE_T="$WORK/_pause_t.wav"; _mksil "$TITLE_PAUSE" "$PAUSE_T"; }
+fi
+
 while IFS=$'\t' read -r pp safe title; do
   files=$(find "$WORK" -maxdepth 1 -name "p${pp}_c*.wav" | sort); [ -n "$files" ] || continue
   list="$WORK/list_$pp.txt"; : > "$list"
@@ -171,6 +206,32 @@ while IFS=$'\t' read -r pp safe title; do
     prev_note=$is_note
   done <<< "$files"
   if [ -n "$CHIME_IN" ] && [ "$prev_note" = 1 ]; then printf "file '%s'\n" "$CHIME_OUT" >> "$list"; fi  # part ends inside a note
+  # Splice the pauses into the finished list, so the chime logic above stays untouched. A heading is
+  # bracketed on both sides; two adjacent headings ("Книга первая…" then "Глава первая.") share the
+  # one pause between them rather than stacking, and a pause is never left dangling at the part's end.
+  if [ -n "$PAUSE_S" ] || [ -n "$PAUSE_T" ]; then
+    gawk -F'\t' -v Q="'" -v PS="$PAUSE_S" -v PT="$PAUSE_T" '
+      function push(x, p) { out[++k] = x; sil[k] = p }
+      NR == FNR { fl[$1] = $2; next }
+      /^file / {
+        path = substr($0, 7, length($0) - 7); f = (path in fl) ? fl[path] : "-"
+        if (f == "T" && PT != "") push("file " Q PT Q, 1)
+        push($0, 0)
+        if (f == "T" && PT != "")      push("file " Q PT Q, 1)
+        else if (f == "S" && PS != "") push("file " Q PS Q, 1)
+        next
+      }
+      { push($0, 0) }
+      END {
+        n = 0
+        for (i = 1; i <= k; i++) {
+          if (sil[i] && n > 0 && keepsil[n]) continue
+          keep[++n] = out[i]; keepsil[n] = sil[i]
+        }
+        if (n > 0 && keepsil[n]) n--
+        for (i = 1; i <= n; i++) print keep[i]
+      }' "$WORK/pauses.tsv" "$list" > "$list.p" && mv "$list.p" "$list"
+  fi
   o="$OUT/${pp}_${safe}.mp3"
   ffmpeg -y -hide_banner -loglevel error -f concat -safe 0 -i "$list" -c:a libmp3lame -b:a 64k -ac 1 "$o"
   echo "  ✓ $o ($(du -h "$o"|cut -f1))"
