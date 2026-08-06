@@ -23,7 +23,7 @@
 #
 # Merging these back into fb2-to-f5.sh is the open follow-up; see FUTURE.md.
 #
-# ---- original header ----------------------------------------------------------------------------
+# ---- original header -----------------------------------------------------------------------------
 # fb2-to-f5.sh — narrate an FB2 book with F5-TTS in a cloned voice, one MP3 per part.
 #
 #   fb2-to-f5.sh <book.fb2> [out_dir]
@@ -205,6 +205,19 @@ else
 fi
 
 SECONDS=0; pids=()
+# GPUS: how many cards to spread the daemons over. sopds-tts-rs builds CUDAExecutionProvider::default()
+# and reads no device variable, so every process would land on device 0 and the other cards would idle
+# while three daemons fight over the first. CUDA_VISIBLE_DEVICES remaps per process, so worker i simply
+# gets card i % GPUS. Unset or 1 ⇒ the variable is not set at all and nothing changes.
+#
+# What this buys and what it does not: RunPod bills per GPU-second, so three cards for a third of the
+# time cost the SAME money — only wall-clock shrinks. Worth it when someone is waiting.
+# Autodetect rather than assume: a wrong GPUS silently oversubscribes one card and looks like slowness.
+GPUS=${GPUS:-$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')}
+[ "${GPUS:-0}" -ge 1 ] 2>/dev/null || GPUS=1
+gpu_for() { [ "$GPUS" -le 1 ] && { echo "${CUDA_VISIBLE_DEVICES:-0}"; return; }; echo $(( $1 % GPUS )); }
+[ "$GPUS" -gt 1 ] && echo "→ $GPUS GPUs: workers pinned round-robin (worker i → card i % $GPUS)"
+
 if [ "$JOIN_ONLY" = 1 ]; then
   echo "→ JOIN_ONLY: reusing $(find "$WORK" -maxdepth 1 -name 'p*_c*.wav' | wc -l | tr -d ' ') wavs in $WORK"
 elif [ "$ENGINE" = native ]; then
@@ -215,7 +228,7 @@ elif [ "$ENGINE" = native ]; then
   for ((i=0;i<WORKERS;i++)); do
     awk -v W="$WORKERS" -v id="$i" 'NR%W==id' "$WORK/narr.ndjson" > "$WORK/shard_$i"
     # Rust/ort daemon: same NDJSON {text,output}. THREADS caps ORT intra-op so WORKERS>1 don't oversubscribe.
-    SOPDS_TTS_THREADS="${THREADS:-0}" "$F5BIN" "$F5MODEL" \
+    SOPDS_TTS_THREADS="${THREADS:-0}" CUDA_VISIBLE_DEVICES="$(gpu_for "$i")" "$F5BIN" "$F5MODEL" \
        < "$WORK/shard_$i" > "$WORK/resp_$i" 2>"$WORK/dlog_$i" &
     pids+=($!)
   done
@@ -233,7 +246,9 @@ elif [ "$ENGINE" = native ]; then
       (
         for v in "${VOICES[@]}"; do
           [ -s "$WORK/notes_$v.ndjson" ] || continue
-          SOPDS_TTS_THREADS="${THREADS:-0}" "$F5BIN" "$NOTES_VOICES/$v" \
+          # last card: the notes daemon runs alongside the narration workers, and worker 0 is on card 0
+          SOPDS_TTS_THREADS="${THREADS:-0}" CUDA_VISIBLE_DEVICES="$(gpu_for $((GPUS - 1)))" \
+            "$F5BIN" "$NOTES_VOICES/$v" \
             < "$WORK/notes_$v.ndjson" >> "$WORK/resp_notes" 2>>"$WORK/dlog_notes"
         done
       ) &
@@ -241,7 +256,8 @@ elif [ "$ENGINE" = native ]; then
     else
       [ -f "$F5MODEL_NOTES/F5_Transformer.onnx" ] || { echo "footnote voice: F5MODEL_NOTES not a model dir ($F5MODEL_NOTES)"; exit 1; }
       echo "  ($(wc -l < "$WORK/notes.ndjson"|tr -d ' ') footnote chunks → $F5MODEL_NOTES)"
-      SOPDS_TTS_THREADS="${THREADS:-0}" "$F5BIN" "$F5MODEL_NOTES" \
+      SOPDS_TTS_THREADS="${THREADS:-0}" CUDA_VISIBLE_DEVICES="$(gpu_for $((GPUS - 1)))" \
+         "$F5BIN" "$F5MODEL_NOTES" \
          < "$WORK/notes.ndjson" > "$WORK/resp_notes" 2>>"$WORK/dlog_notes" &
       pids+=($!)
     fi

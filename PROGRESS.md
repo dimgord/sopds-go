@@ -1,7 +1,32 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.12.1
+## Current Version: 1.12.2
+
+---
+
+### Revision 123 - 2026-08-05
+**f5-bridge: spread synth daemons across the cards on a multi-GPU pod (1.12.2).**
+
+`sopds-tts-rs` builds `CUDAExecutionProvider::default()` and reads no device variable, so every
+daemon lands on **device 0**: on a three-card pod two cards idle while three processes contend for
+the first, and the symptom is simply "it is slow" — nothing errors. `CUDA_VISIBLE_DEVICES` remaps per
+process, so worker *i* now gets card *i % GPUS*, and the footnote daemon takes the last card because
+worker 0 already has the first.
+
+`GPUS` **autodetects** from `nvidia-smi` rather than defaulting to 1, because the failure mode of a
+wrong value is invisible: too low and the extra cards stay idle, too high and one card is
+oversubscribed, and both look like ordinary slowness. Unset or 1 leaves `CUDA_VISIBLE_DEVICES`
+untouched — including a value the caller set deliberately, which the unit check covers.
+
+What it buys, stated honestly because it is easy to misread: RunPod bills **per GPU-second**, so
+three cards for a third of the time cost the *same money*. The only thing purchased is wall-clock —
+the 2807-chunk floor-60 re-cut of the Russian book is ~4 h on one card and ~1.3 h on three. Worth it
+when someone is waiting for the file, pointless for an overnight run.
+
+Deferred on the 2026-08-05 first run on purpose: that run already changed the cut, the stresses and
+the joiner's pauses, and an untested device-pinning path would have made a bad result unattributable.
+This is the run where nothing else is new.
 
 ---
 

@@ -63,24 +63,4 @@ The merge wants the prefix detection as a **fallback** when no sidecar exists, a
 map in place of the single `SENT_PAUSE`. Until then, a book with an older review dir must run the
 legacy script.
 
-## TODO: pin synth workers to GPUs (multi-card pods buy wall-clock, not money)
-
-`sopds-tts-rs` builds `CUDAExecutionProvider::default()` and reads no device variable, so every
-worker lands on **device 0** — on a 3-card pod the other two idle while three daemons fight over the
-first. The fix is one line in `fb2-to-f5.sh`'s worker loop, since `CUDA_VISIBLE_DEVICES` remaps
-device 0 per process:
-
-```bash
-CUDA_VISIBLE_DEVICES=$((i % ${GPUS:-1})) "$F5BIN" "$F5MODEL" < "$WORK/shard_$i" &
-```
-
-Worth knowing what it does and does not buy. RunPod bills per GPU-second, so three cards for a third
-of the time cost the **same money** — the only thing bought is wall-clock, which matters when someone
-is waiting, or when a pod has an hourly minimum. Reference figure: 715 chunks in 31 min on one card
-with `WORKERS=3`, i.e. ~2.6 s per chunk.
-
-Deferred deliberately on the 2026-08-05 run: that run already changed the cut, the stresses and the
-joiner's pauses, and adding an untested device-pinning path would have made a bad result
-unattributable. Do it on a run where nothing else is new.
-
 ## (more ideas go here)
