@@ -1,7 +1,43 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.12.2
+## Current Version: 1.12.3
+
+---
+
+### Revision 124 - 2026-08-05
+**Blackwell works after all: ORT 1.22 has no sm_120 kernels and says nothing about it (1.12.3).**
+
+A pod with an RTX PRO 6000 Blackwell ran a chunk in **34 s**; an A100 ran the same chunk on the same
+model in **2.56 s**. Nothing errored — ORT's CUDA provider simply does not register on `sm_120` and
+falls back to CPU in silence, so the only evidence is a stopwatch. That is the whole finding worth
+carrying: **an engine that reports success can still be running on the wrong device**, and the check
+that catches it is timing one chunk before committing to a run.
+
+The fix is a newer ONNX Runtime, and the shape of it was not what it looked like. Because the crate
+links `ort` rather than vendoring it (`ORT_LIB_LOCATION` on Linux), the CUDA kernels live in
+`libonnxruntime.so` and not in our binary — so the first attempt was to drop 1.28's `.so` in place and
+run. That fails: ORT **versions its symbols**, and a binary built against 1.22 demands `VERS_1.22.0`.
+Rebuilding against the new library is the answer, and it costs **~4 s of compile** for the same reason
+the swap looked plausible — nothing of ORT is compiled, only linked. Measured after the rebuild:
+**2.60 s**, a 13× improvement, and the output verified at 1.02% CER against whisper rather than
+assumed correct from the speedup alone.
+
+Recipe and the card list are in `f5-bridge/README.md`. Blackwell is ~12% faster per card than a 4090
+and ~3× the price, so this buys availability, not economy: Ada remains the default and this is the
+route when it is out of stock.
+
+**Two operational lessons from the same session, both cheap to repeat and expensive to miss.**
+
+*The script on the network volume was a day older than git.* The GPU-pinning of Rev 123 was committed
+but never re-uploaded, so a three-card run put all four daemons on card 0 — precisely the failure the
+commit had removed. `nvidia-smi` showed it in one line; the progress counter did not. Check the
+device spread, not the throughput, when a run starts.
+
+*`pkill -f <pattern>` kills its own shell*, because the pattern is in the killer's own command line.
+It happened twice in ten minutes here: the surviving daemons from the aborted run held 23.8 GB on
+card 0, the new worker 0 could not allocate and died quietly, and the run would have finished short.
+Use the bracket trick — `pkill -9 -f "[s]opds-tts-rs"`.
 
 ---
 

@@ -114,6 +114,31 @@ MODE=synth ENGINE=native F5MODEL=/path/to/f5model WORKERS=1 ./fb2-to-f5.sh book.
 ORT intra-op threads when `WORKERS>1`. CUDA vs CPU is a compile-time choice (CUDA on Linux, CPU on
 macOS), so build the binary on the machine you'll synth on.
 
+**Which GPU — and what to do about Blackwell.** The CUDA kernels live in `libonnxruntime.so`, not in
+our binary, so the card you may rent is decided by the ONNX Runtime you link against. ORT **1.22 has
+no kernels for `sm_120`**: on a Blackwell card (RTX PRO 6000, RTX 5090, B200) the CUDA provider fails
+to register, ORT falls back to CPU **without printing anything**, and the only symptom is that a chunk
+takes 34 s instead of 2.6. Anything up to Hopper (`sm_70`…`sm_90` — V100, A100, RTX 3090/A6000, 4090,
+L4/L40/L40S, RTX 6000 Ada, H100/H200) just works.
+
+Blackwell needs a newer ORT, and — because ORT versions its symbols (`VERS_1.22.0`) — swapping the
+`.so` under an existing binary is **not** enough; it must be rebuilt against the new library. That
+part is cheap:
+
+```bash
+curl -sSLO https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-linux-x64-gpu_cuda12-1.28.0.tgz
+tar --no-same-owner -xzf onnxruntime-linux-x64-gpu_cuda12-1.28.0.tgz     # network volumes reject chown
+export ORT_LIB_LOCATION=$PWD/onnxruntime-linux-x64-gpu_cuda12-1.28.0/lib
+( cd sopds-tts-rs && cargo build --release )      # ~4 s: ort is linked, not compiled
+export LD_LIBRARY_PATH=$ORT_LIB_LOCATION          # also needed at RUN time
+```
+
+Measured on one identical 12.5 s chunk: Blackwell + ORT 1.28 **3.83 s**, RTX 4090 + ORT 1.22 **4.31 s**,
+A100 **6.00 s**. Blackwell is only ~12% faster per card and costs ~3× more, so it is the fallback for
+when Ada cards are out of stock, not the default. Whichever card you rent, **time one chunk before
+launching a run** — 34 s versus 2.6 s is the difference between a silent CPU fallback and a working
+GPU, and nothing else reports it.
+
 **Stress reviewer (GUI for step 1).** Editing the `.txt` by hand works; the reviewer makes it
 pleasant. Two-pane, line-aligned: raw reference on the left, editable stressed text on the right,
 with `+` rendered as real acute accents. Rare, genuinely-ambiguous **ё-homographs** (`берёте`,
