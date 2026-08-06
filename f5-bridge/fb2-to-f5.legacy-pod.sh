@@ -21,7 +21,10 @@
 # change is a re-join, not a re-synth), and a guard that stops the run when the daemon produced fewer
 # wavs than requested — without it a missing libonnxruntime.so.1 printed "0/N done" and then "✓ done".
 #
-# Merging these back into fb2-to-f5.sh is the open follow-up; see FUTURE.md.
+# SUPERSEDED on 2026-08-06: fb2-to-f5.sh now carries all of the above (punctuation pause map,
+# PUNCT_CLEAN, TRIM_SILENCE, footnote cast voices with a text-prefix fallback, PAUSE_TITLE,
+# WORK_DIR/JOIN_ONLY, GPU pinning, the shortfall guard). Use the maintained script for new runs.
+# This file is kept only so the 2026-08-05 Russian book can be reproduced exactly as it was made.
 #
 # ---- original header -----------------------------------------------------------------------------
 # fb2-to-f5.sh — narrate an FB2 book with F5-TTS in a cloned voice, one MP3 per part.

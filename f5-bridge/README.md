@@ -114,6 +114,34 @@ MODE=synth ENGINE=native F5MODEL=/path/to/f5model WORKERS=1 ./fb2-to-f5.sh book.
 ORT intra-op threads when `WORKERS>1`. CUDA vs CPU is a compile-time choice (CUDA on Linux, CPU on
 macOS), so build the binary on the machine you'll synth on.
 
+**Pauses, footnotes and the join.** The chunker decides *where* a pause belongs; the joiner decides
+*how long* it is. Every chunk therefore gets a deterministic silence after it, sized by its own
+trailing mark — and because the pause carries the prosody, the chunker is free to split on a comma
+without the split being heard as a stumble.
+
+```bash
+PAUSE_DOT=0.5 PAUSE_COMMA=0.25 PAUSE_DASH=0.7 PAUSE_ELLIPSIS=0.8   # per trailing mark
+PAUSE_SEMI=0.4 PAUSE_COLON=0.3 PAUSE_DEFAULT=0.15
+PUNCT_PAUSE=0            # off ⇒ one flat SENT_PAUSE (0.30) at sentence ends only
+PUNCT_CLEAN=0            # off ⇒ keep a trailing '…' / spaced em dash in the synthesized text
+TITLE_PAUSE=1.5          # brackets a heading on BOTH sides (K per part from _titlecount.tsv)
+NOTE_PAUSE=0.3           # after a footnote's closing chime
+TRIM_SILENCE=0           # off ⇒ keep each chunk's own leading/trailing silence
+WORK_DIR=/path JOIN_ONLY=1   # re-join kept wavs with different pauses — no re-synthesis
+```
+
+`PUNCT_CLEAN` rewrites a trailing `…` to `.` and drops a trailing spaced em dash **before** synthesis,
+because F5 renders both poorly — while the pause is still sized from the *original* mark, so an
+ellipsis keeps its longer silence. Footnotes are found from the `<id>_<safe>.notes` mask written by
+`sopds fb2-extract`; a review dir proofread before that mask existed falls back to the text prefix
+(`NOTE_PREFIX`, defaulting to `Примечание.` in `ruaccent` mode) and says so, rather than silently
+letting the narrator read "Примечание" mid-sentence. With `NOTES_VOICES=<dir>` holding one model dir
+per voice plus `manifest.txt`, each footnote gets a different voice in rotation; `F5MODEL_NOTES` is
+the single-voice form. Either way the note is bracketed by the two-tone chime.
+
+`WORK_DIR` is worth setting on any long run: pause lengths are a join-time parameter, so "1.5 s turned
+out too long" becomes a two-minute `JOIN_ONLY=1` instead of a four-hour re-synthesis.
+
 **Which GPU — and what to do about Blackwell.** The CUDA kernels live in `libonnxruntime.so`, not in
 our binary, so the card you may rent is decided by the ONNX Runtime you link against. ORT **1.22 has
 no kernels for `sm_120`**: on a Blackwell card (RTX PRO 6000, RTX 5090, B200) the CUDA provider fails

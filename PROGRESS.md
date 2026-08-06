@@ -1,7 +1,59 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.12.3
+## Current Version: 1.13.0
+
+---
+
+### Revision 125 - 2026-08-06
+**f5-bridge: the maintained script gets everything the legacy pod script had, and one plan drives the whole join (1.13.0).**
+
+Going native (Go `fb2-extract` + `ndjson-reqs`) modernised the front of the pipeline and quietly
+dropped three things from the back of it, all audible: the punctuation pause map, edge trimming, and
+footnote cast voices. Rev 121 put back a single flat `SENT_PAUSE`; this puts back the rest and unifies
+how the join is built.
+
+**One plan instead of three mechanisms.** The join used to decide pauses from a flags file, chimes
+from a filename convention (`*.note.wav`), and nothing else. Now a single `plan.tsv` — basename,
+pause seconds, kind (`T`itle / `N`ote / ordinary) — is derived once from the request stream, and one
+gawk pass turns it into the concat list: chimes bracket each run of footnotes, a heading is bracketed
+by `TITLE_PAUSE`, everything else is followed by the silence its own final mark earned, adjacent
+silences collapse, and none is left dangling at a part's end. The request stream is the right source
+because it is the only thing that knows which wav a chunk became — nothing re-guesses the numbering.
+
+**The pause is sized from the mark the text *had*.** `PUNCT_CLEAN` rewrites a trailing `…` to `.` and
+drops a trailing spaced em dash before synthesis (F5 renders both poorly), but the classification runs
+first, so an ellipsis still earns its 0.8 s. That ordering is the whole trick, and it is what lets the
+chunker split on commas freely: the pause length, not the split point, carries the prosody.
+
+**Footnotes without a sidecar.** `ndjson-reqs` finds notes from the `.notes` mask that only
+`fb2-extract` writes, so any review dir proofread before that change lost both the cast voice and the
+chimes — silently, with the narrator reading the word "Примечание" mid-sentence. The fallback matches
+the text prefix (`NOTE_PREFIX`, defaulting to `Примечание.` in ruaccent mode) and **prints that it did
+so**: if the prefix is wrong for a given book, nothing else would say.
+
+Also ported from the legacy script: `TRIM_SILENCE`, cast voices via `NOTES_VOICES/manifest.txt`,
+`WORK_DIR`/`JOIN_ONLY`, GPU pinning, and the shortfall guard.
+
+**Five `set -e` landmines, found by testing rather than reading.** The port carried over
+`[ test ] && action` at top level, which aborts the script the moment the test is false — and
+`GPUS=${GPUS:-$(nvidia-smi …)}` exits **127** on a machine without nvidia-smi, which is exactly the
+CPU-only host one would run `JOIN_ONLY` on. The first join test died silently at that line. All five
+are now `if`/`|| true`. The lesson is narrow and worth keeping: **in a `set -e` script, `&&` without
+an `||` is a conditional exit, not a conditional action.**
+
+**Verified without a GPU**, by arithmetic on synthetic wavs — the same technique as Rev 121, extended:
+
+| case | expected | actual |
+| ----------------------------------------- | -------- | -------- |
+| heading + dot + comma + ellipsis, trailing dropped | 6.550 s | 6.550000 |
+| with a footnote: chimes + `NOTE_PAUSE` | 8.920 s | 8.920000 |
+| `TRIM_SILENCE` on 0.8 s wavs (0.2 s pad each end) | ~1.300 s | 1.299417 |
+| `PUNCT_PAUSE=0` flat-pause fallback | 5.600 s | 5.600000 |
+
+plus both footnote routes exercised: the `.notes` mask, and the prefix fallback on a review dir
+without one. `fb2-to-f5.legacy-pod.sh` is kept but marked superseded — only so the 2026-08-05 Russian
+book can be reproduced exactly as it was made.
 
 ---
 
