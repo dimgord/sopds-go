@@ -234,13 +234,35 @@ gpu_for() { if [ "$GPUS" -le 1 ]; then echo "${CUDA_VISIBLE_DEVICES:-0}"; else e
 if [ "$GPUS" -gt 1 ]; then echo "→ $GPUS GPUs: workers pinned round-robin (worker i → card i % $GPUS)"; fi
 
 SECONDS=0; pids=()
+# RESUME synthesizes only the chunks whose wav is missing from WORK_DIR. That is what makes a small
+# correction cheap: fix a stress in the review text, delete the few wavs it affects, re-run, re-join —
+# minutes instead of hours. The PLAN still covers every chunk, so the join is unaffected.
+#
+# It is only safe while the chunk BOUNDARIES hold. The chunker packs by length, so an edit that adds
+# or removes characters can re-cut everything after it, and then chunk N is different text than the
+# wav named for it — the re-synthesis would silently overwrite the wrong one. Moving a stress mark
+# inside a word keeps the length identical and is always safe; anything else must be checked first
+# (f5-spike/stale_chunks.py does exactly that).
+RESUME=${RESUME:-0}
+SYNTH_MAIN="$WORK/reqs.ndjson"; SYNTH_NOTES="$NOTES_REQS"
+if [ "$RESUME" = 1 ] && [ "$JOIN_ONLY" != 1 ]; then
+  # "wav is missing" is tested by trying to read it: getline < file returns -1 when it cannot be
+  # opened, and close() releases the handle so a 2807-chunk run does not exhaust the descriptor table.
+  _missing() { gawk 'match($0, /"output":"[^"]*"/) {
+                 f = substr($0, RSTART + 10, RLENGTH - 11)
+                 if ((getline _ < f) < 0) print; else close(f) }' "$1"; }
+  _missing "$WORK/reqs.ndjson" > "$WORK/todo_main.ndjson"
+  _missing "$NOTES_REQS"       > "$WORK/todo_notes.ndjson"
+  SYNTH_MAIN="$WORK/todo_main.ndjson"; SYNTH_NOTES="$WORK/todo_notes.ndjson"
+  echo "→ RESUME: $(wc -l < "$SYNTH_MAIN" | tr -d ' ') of $NMAIN narration and $(wc -l < "$SYNTH_NOTES" | tr -d ' ') of $NNOTES footnote chunks are missing"
+fi
 if [ "$JOIN_ONLY" = 1 ]; then
   echo "→ JOIN_ONLY: reusing $(find "$WORK" -maxdepth 1 -name 'p*_c*.wav' | wc -l | tr -d ' ') wavs in $WORK"
 else
   [ "$NNOTES" -gt 0 ] && echo "→ synthesizing $NMAIN narration + $NNOTES footnote chunks (native rust nfe=$NFE)" \
                       || echo "→ synthesizing $N chunks on $WORKERS daemon(s) (native rust nfe=$NFE)"
   for ((i=0;i<WORKERS;i++)); do
-    gawk -v W="$WORKERS" -v id="$i" 'NR%W==id' "$WORK/reqs.ndjson" > "$WORK/shard_$i"
+    gawk -v W="$WORKERS" -v id="$i" 'NR%W==id' "$SYNTH_MAIN" > "$WORK/shard_$i"
     SOPDS_TTS_THREADS="${THREADS:-0}" CUDA_VISIBLE_DEVICES="$(gpu_for "$i")" \
       "$F5BIN" "$F5MODEL" < "$WORK/shard_$i" > "$WORK/resp_$i" 2>"$WORK/dlog_$i" &
     pids+=($!)
@@ -248,13 +270,13 @@ else
   # Footnotes → their own voice. With NOTES_VOICES/manifest.txt each footnote gets a different voice,
   # rotated in book order; the voices run one at a time inside a subshell so memory stays bounded at
   # one note daemon plus WORKERS narration daemons. Pinned to the last card, since worker 0 has the first.
-  if [ "$NNOTES" -gt 0 ]; then
+  if [ -s "$SYNTH_NOTES" ]; then
     if [ -n "${NOTES_VOICES:-}" ] && [ -f "$NOTES_VOICES/manifest.txt" ]; then
       VOICES=(); while IFS= read -r v; do [ -n "$v" ] && VOICES+=("$v"); done < "$NOTES_VOICES/manifest.txt"
       K=${#VOICES[@]}; vi=0
       while IFS= read -r line; do
         printf '%s\n' "$line" >> "$WORK/notes_${VOICES[$((vi % K))]}.ndjson"; vi=$((vi+1))
-      done < "$NOTES_REQS"
+      done < "$SYNTH_NOTES"
       echo "  ($vi footnote chunks → $K voices: ${VOICES[*]})"
       (
         for v in "${VOICES[@]}"; do
@@ -267,7 +289,7 @@ else
     else
       echo "  ($NNOTES footnote chunks → $F5MODEL_NOTES)"
       SOPDS_TTS_THREADS="${THREADS:-0}" CUDA_VISIBLE_DEVICES="$(gpu_for $((GPUS - 1)))" \
-        "$F5BIN" "$F5MODEL_NOTES" < "$NOTES_REQS" > "$WORK/resp_notes" 2>>"$WORK/dlog_notes" &
+        "$F5BIN" "$F5MODEL_NOTES" < "$SYNTH_NOTES" > "$WORK/resp_notes" 2>>"$WORK/dlog_notes" &
       pids+=($!)
     fi
   fi

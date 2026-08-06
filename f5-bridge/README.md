@@ -128,6 +128,7 @@ TITLE_PAUSE=1.5          # brackets a heading on BOTH sides (K per part from _ti
 NOTE_PAUSE=0.3           # after a footnote's closing chime
 TRIM_SILENCE=0           # off ⇒ keep each chunk's own leading/trailing silence
 WORK_DIR=/path JOIN_ONLY=1   # re-join kept wavs with different pauses — no re-synthesis
+WORK_DIR=/path RESUME=1      # synthesize only the chunks whose wav is missing
 ```
 
 `PUNCT_CLEAN` rewrites a trailing `…` to `.` and drops a trailing spaced em dash **before** synthesis,
@@ -141,6 +142,22 @@ the single-voice form. Either way the note is bracketed by the two-tone chime.
 
 `WORK_DIR` is worth setting on any long run: pause lengths are a join-time parameter, so "1.5 s turned
 out too long" becomes a two-minute `JOIN_ONLY=1` instead of a four-hour re-synthesis.
+
+**Fixing a few chunks after the fact.** `RESUME=1` synthesizes only what is missing from `WORK_DIR`,
+so correcting a stress in a rendered book costs minutes:
+
+```bash
+python3 ~/src/f5-spike/rechunk_review.py ~/f5-review /tmp/new-cut headings.tsv 250 60
+python3 ~/src/f5-spike/stale_chunks.py  /old/cut /tmp/new-cut --delete "$WORK_DIR"   # exits 2 if unsafe
+MODE=synth RESUME=1 WORK_DIR=… ./fb2-to-f5.sh /dev/null ./out                        # re-synth + re-join
+```
+
+`stale_chunks.py` is the safety interlock, not a convenience. The chunker packs to a character budget,
+so an edit that changes the character count can re-cut everything after it — and then the wav named
+for chunk 42 holds what is now chunk 41's text, so deleting "chunk 42" deletes the wrong audio with
+every file still present and every duration still plausible. Moving a stress mark inside a word keeps
+the length identical and is always safe; the script verifies that and exits non-zero otherwise. It
+also removes the `t_` trimmed copy, which the join would otherwise splice back in.
 
 **Which GPU — and what to do about Blackwell.** The CUDA kernels live in `libonnxruntime.so`, not in
 our binary, so the card you may rent is decided by the ONNX Runtime you link against. ORT **1.22 has

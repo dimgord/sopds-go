@@ -1,7 +1,40 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.13.0
+## Current Version: 1.14.0
+
+---
+
+### Revision 126 - 2026-08-06
+**RESUME: re-render the three chunks you corrected, not the other 2804 (1.14.0).**
+
+A stress correction found after an 8-hour book is rendered used to cost the whole book again. With
+`WORK_DIR` already keeping the per-chunk wavs, the missing half was trivial: `RESUME=1` filters the
+request stream to the chunks whose wav is **absent** and synthesizes only those, then joins from the
+full plan as usual. Delete three wavs, re-run, done in minutes.
+
+Missing-ness is tested by trying to read the file (`getline < f` returning −1), with `close()` after
+each success — without the close a 2807-chunk run would exhaust the descriptor table, which is the
+kind of thing that only shows up at the size where it hurts.
+
+**The interlock matters more than the feature.** Partial re-rendering is safe only while chunk
+BOUNDARIES hold, and the chunker packs to a character budget: an edit that changes the character count
+can re-cut everything after it, so the wav named for chunk 42 now holds what became chunk 41's text.
+Deleting "chunk 42" then destroys the wrong audio — with every file still present, every duration
+still plausible, and nothing to notice. `f5-spike/stale_chunks.py` verifies the cut (same parts, same
+per-part chunk counts, and it flags any changed chunk whose *length* changed) and exits non-zero when
+it cannot vouch for it, so the delete step cannot run blind from a script.
+
+It also deletes the `t_` trimmed copy of each stale chunk. `TRIM_SILENCE` caches trimmed wavs, and the
+join prefers the cache — so removing only the source wav would re-synthesize the chunk and then splice
+the OLD trimmed audio into the mp3. Same silent failure, one layer down.
+
+Verified with a stand-in engine that honours the NDJSON contract and writes a fixed tone: a full run
+of 5 chunks joins to 6.500000 s; deleting two and re-running with `RESUME=1` reports "2 of 5 missing",
+resumes the progress counter at 3/5, and produces a byte-identical 6.500000 s. The interlock was
+tested on all three cases — identical cuts, a length-preserving stress edit (reports the one chunk,
+`--delete` removes both it and its `t_` copy), and a length-changing edit (refuses, exit 2, `--force`
+overrides).
 
 ---
 
