@@ -18,7 +18,7 @@ tags
 *.swp
 fetch/
 test_baseline.txt
-
+.env
 # python bytecode
 __pycache__/
 *.pyc
