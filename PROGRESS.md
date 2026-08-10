@@ -1,7 +1,30 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.15.0
+## Current Version: 1.16.0
+
+---
+
+### Revision 130 - 2026-08-10
+**`scan --epub-only`: refresh epub metadata in place, touching only epub-containing zips (1.16.0).**
+
+Rev 129 parses epub OPF metadata going forward, but the 511 epubs already in the catalog still show
+their filename titles — and a normal/`rescan_zip` scan wouldn't fix them: it marks an existing book
+*verified*, it never re-reads it. `--epub-only` is the targeted refresh:
+
+- **Finds the work from the DB, not by opening everything.** `GetEpubZipCatalogPaths` returns the
+  distinct zip catalog paths that contain an epub (currently **28** of 2447 zips; 0 loose epubs). The
+  walk visits only those archives + loose `.epub` files, skipping fb2 books, other zips, audio, the
+  missing-file sweep, and dedup.
+- **Updates existing rows in place.** For each epub it re-parses the OPF and calls
+  `RefreshBookMetadata`, which in one transaction updates title/lang/annotation/docdate and REPLACES
+  the author + series links — keeping `book_id` (so bookshelf/favorite/TTS references survive). New
+  epubs found in those zips still insert normally; fb2 entries in the same zip are left untouched.
+- Bypasses the known-zip skip-cache for its target archives (they're already scanned), like
+  `--audio-only`. Non-destructive: no book is deleted or marked missing.
+
+Run: `sopds scan --epub-only`. With 28 zips it finishes in seconds instead of a multi-hour full
+`rescan_zip`. `revision` (shown on /web/about) bumped 126 → 130 to catch up.
 
 ---
 

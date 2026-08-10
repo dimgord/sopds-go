@@ -84,6 +84,8 @@ type Scanner struct {
 	newBookIDs       []int64          // IDs of books added in current scan (for incremental duplicate detection)
 	newBookIDsMu     sync.Mutex       // Protects newBookIDs
 	audioOnly        bool             // --audio-only: process only audiobooks (skip other books) AND refresh existing ones in place
+	epubOnly         bool             // --epub-only: visit only epub-containing zips + loose epubs, re-parsing epub metadata in place
+	epubZips         map[string]bool  // --epub-only: relative paths of zips that contain epubs (from the DB)
 }
 
 // ConfirmCallback is called to confirm destructive operations.
@@ -96,6 +98,7 @@ type ScanStats struct {
 	StartTime       time.Time
 	EndTime         time.Time
 	BooksAdded      int64
+	BooksUpdated    int64
 	BooksSkipped    int64
 	BooksDeleted    int64
 	ArchivesScanned int64
@@ -266,6 +269,45 @@ func (s *Scanner) SetAudioOnly(v bool) {
 	s.audioOnly = v
 }
 
+// SetEpubOnly restricts a scan to epub metadata refresh: only zips that contain
+// epubs (and loose .epub files) are visited, and each epub's OPF metadata is
+// re-parsed and applied to the existing book in place. Everything else — fb2
+// books, other archives, audio, the missing-file sweep, dedup — is skipped.
+func (s *Scanner) SetEpubOnly(v bool) {
+	s.epubOnly = v
+}
+
+// refreshEpubBook resolves an epub's parsed authors/series to ids and applies the
+// metadata to an already-catalogued book in place (keeps book_id). title should
+// already have a filename fallback applied by the caller.
+func (s *Scanner) refreshEpubBook(ctx context.Context, meta *FB2Metadata, title string, bookID int64) {
+	var authorIDs []int64
+	for _, a := range meta.Authors {
+		if a.FirstName == "" && a.LastName == "" {
+			continue
+		}
+		au, err := s.svc.GetOrCreateAuthor(ctx, a.FirstName, a.LastName)
+		if err == nil && au != nil {
+			authorIDs = append(authorIDs, au.ID)
+		}
+	}
+	if len(authorIDs) == 0 {
+		authorIDs = []int64{1} // Unknown author
+	}
+	var links []persistence.SeriesLink
+	for _, ser := range meta.Series {
+		se, err := s.svc.GetOrCreateSeries(ctx, ser.Name)
+		if err == nil && se != nil {
+			links = append(links, persistence.SeriesLink{SeriesID: se.ID, SerNo: ser.Number})
+		}
+	}
+	if err := s.svc.RefreshBookMetadata(ctx, bookID, title, meta.Lang, meta.Annotation, meta.DocDate, authorIDs, links); err != nil {
+		log.Printf("epub-only: failed to refresh book %d: %v", bookID, err)
+		return
+	}
+	atomic.AddInt64(&s.stats.BooksUpdated, 1)
+}
+
 func (s *Scanner) ScanAll(ctx context.Context) error {
 	if !s.isRunning.CompareAndSwap(false, true) {
 		log.Println("Scan already in progress, skipping")
@@ -299,7 +341,7 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 	s.knownZips = make(map[string]int64)
 	// --audio-only skips this block: it neither uses the known-zip skip-cache nor removes books
 	// for missing archives — audio-only is a non-destructive refresh (run a normal scan to clean up).
-	if !s.config.Library.RescanZip && !s.audioOnly {
+	if !s.config.Library.RescanZip && !s.audioOnly && !s.epubOnly {
 		var err error
 		s.knownZips, err = s.svc.GetAllZipCatalogs(ctx)
 		if err != nil {
@@ -410,6 +452,19 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 		}()
 	}
 
+	// --epub-only: find which zips contain epubs so the walk can skip the rest.
+	if s.epubOnly {
+		s.epubZips = make(map[string]bool)
+		paths, err := s.svc.GetEpubZipCatalogPaths(ctx)
+		if err != nil {
+			return fmt.Errorf("epub-only: list epub zips: %w", err)
+		}
+		for _, p := range paths {
+			s.epubZips[p] = true
+		}
+		log.Printf("Epub-only scan: %d zip(s) contain epubs; loose .epub files also refreshed", len(s.epubZips))
+	}
+
 	// Collect audio files for grouping, send others to workers
 	var audioFiles []string
 	var audioFilesMu sync.Mutex
@@ -439,21 +494,35 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 
 		// Archives go directly to workers
 		if (ext == ".zip" || ext == ".7z") && s.config.Library.ScanZip {
+			// --epub-only: only visit archives known to contain epubs.
+			if s.epubOnly {
+				if rel, rerr := filepath.Rel(s.config.Library.Root, path); rerr != nil || !s.epubZips[rel] {
+					return nil
+				}
+			}
 			fileChan <- path
 			return nil
 		}
 
-		// Audio files are collected for grouping
-		// GroupByFolder will handle: single file = individual, multiple files = grouped
+		// --epub-only skips audio entirely.
 		if s.audioExtSet[ext] {
+			if s.epubOnly {
+				return nil
+			}
+			// Audio files are collected for grouping
+			// GroupByFolder will handle: single file = individual, multiple files = grouped
 			audioFilesMu.Lock()
 			audioFiles = append(audioFiles, path)
 			audioFilesMu.Unlock()
 			return nil
 		}
 
-		// Other files (fb2, epub, etc.) go to workers — skipped entirely in --audio-only mode
+		// Other files (fb2, epub, etc.) go to workers — skipped entirely in --audio-only mode.
+		// In --epub-only mode only loose .epub files are processed.
 		if s.extSet[ext] && !s.audioOnly {
+			if s.epubOnly && ext != ".epub" {
+				return nil
+			}
 			fileChan <- path
 		}
 		return nil
@@ -471,8 +540,9 @@ func (s *Scanner) ScanAll(ctx context.Context) error {
 		log.Printf("Scan walk error: %v", err)
 	}
 
-	// Check for missing regular files (cat_type=0) — skipped in --audio-only (non-destructive refresh)
-	if !s.audioOnly {
+	// Check for missing regular files (cat_type=0) — skipped in --audio-only and
+	// --epub-only (both are non-destructive in-place refreshes, not full sweeps)
+	if !s.audioOnly && !s.epubOnly {
 		s.checkMissingRegularFiles(ctx)
 	}
 
@@ -903,6 +973,19 @@ func (s *Scanner) processFile(ctx context.Context, path string, size int64, catT
 	// Check if book already exists
 	book, err := s.svc.FindBook(ctx, filename, relPath)
 	if err == nil && book != nil {
+		// --epub-only: re-parse the loose epub and update the existing row in place.
+		if s.epubOnly {
+			if data, rerr := os.ReadFile(path); rerr == nil {
+				if meta, perr := parseEPUB(data); perr == nil && meta != nil {
+					title := strings.TrimSuffix(filename, filepath.Ext(filename))
+					if meta.Title != "" {
+						title = meta.Title
+					}
+					s.refreshEpubBook(ctx, meta, title, book.ID)
+				}
+			}
+			return
+		}
 		// Book exists, mark as verified
 		s.svc.UpdateBookAvail(ctx, book.ID, database.AvailVerified)
 		atomic.AddInt64(&s.stats.BooksSkipped, 1)
@@ -1207,7 +1290,7 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 
 	// Check if already scanned (using in-memory cache). --audio-only bypasses the cache so
 	// existing audiobooks are re-opened and their durations refreshed.
-	if !s.config.Library.RescanZip && !s.audioOnly {
+	if !s.config.Library.RescanZip && !s.audioOnly && !s.epubOnly {
 		if _, ok := s.knownZips[relPath]; ok {
 			atomic.AddInt64(&s.stats.ArchivesSkipped, 1)
 			return
@@ -1266,11 +1349,30 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 		if !s.extSet[ext] {
 			continue
 		}
+		// --epub-only: ignore non-epub entries (leave fb2 etc. untouched).
+		if s.epubOnly && ext != ".epub" {
+			continue
+		}
 
 		// Check if file already exists (in-memory lookup). Key on the clamped path —
 		// the exact value stored in books.path — so the lookup still matches on rescan.
 		zipPath := clampRunes(relPath+"/"+name, 1024)
 		if bookID, exists := existingBooks[zipPath]; exists {
+			// --epub-only: re-parse this epub and update the existing row in place.
+			if s.epubOnly {
+				if rc, err := f.Open(); err == nil {
+					meta, perr := parseEPUBReader(rc)
+					rc.Close()
+					if perr == nil && meta != nil {
+						title := strings.TrimSuffix(name, ext)
+						if meta.Title != "" {
+							title = meta.Title
+						}
+						s.refreshEpubBook(ctx, meta, title, bookID)
+					}
+				}
+				continue
+			}
 			booksToVerify = append(booksToVerify, bookID)
 			skippedCount++
 			continue
@@ -1480,7 +1582,7 @@ func (s *Scanner) process7z(ctx context.Context, path string) {
 
 	// Check if already scanned (using in-memory cache). --audio-only bypasses the cache so
 	// existing audiobooks are re-opened and their durations refreshed.
-	if !s.config.Library.RescanZip && !s.audioOnly {
+	if !s.config.Library.RescanZip && !s.audioOnly && !s.epubOnly {
 		if _, ok := s.knownZips[relPath]; ok {
 			atomic.AddInt64(&s.stats.ArchivesSkipped, 1)
 			return
@@ -1537,11 +1639,30 @@ func (s *Scanner) process7z(ctx context.Context, path string) {
 		if !s.extSet[ext] {
 			continue
 		}
+		// --epub-only: ignore non-epub entries (leave fb2 etc. untouched).
+		if s.epubOnly && ext != ".epub" {
+			continue
+		}
 
 		// Check if file already exists. Key on the clamped path — the exact value
 		// stored in books.path — so the lookup still matches on rescan.
 		szPath := clampRunes(relPath+"/"+name, 1024)
 		if bookID, exists := existingBooks[szPath]; exists {
+			// --epub-only: re-parse this epub and update the existing row in place.
+			if s.epubOnly {
+				if rc, err := f.Open(); err == nil {
+					meta, perr := parseEPUBReader(rc)
+					rc.Close()
+					if perr == nil && meta != nil {
+						title := strings.TrimSuffix(name, ext)
+						if meta.Title != "" {
+							title = meta.Title
+						}
+						s.refreshEpubBook(ctx, meta, title, bookID)
+					}
+				}
+				continue
+			}
 			booksToVerify = append(booksToVerify, bookID)
 			skippedCount++
 			continue

@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/dimgord/sopds-go/internal/config"
 	"github.com/dimgord/sopds-go/internal/infrastructure/persistence"
 	"github.com/dimgord/sopds-go/internal/scanner"
 	"github.com/dimgord/sopds-go/internal/server"
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/spf13/cobra"
 )
 
@@ -34,7 +34,7 @@ var (
 
 	// revision is the PROGRESS.md Rev number, bumped by hand each docompush
 	// (git tags carry the semver; this carries the Rev). Shown on /web/about.
-	revision = "126"
+	revision = "130"
 )
 
 func main() {
@@ -86,6 +86,7 @@ func main() {
 		RunE:  runScan,
 	}
 	scanCmd.Flags().Bool("audio-only", false, "scan/refresh only audiobooks (skip other books); re-reads existing audiobooks in place to apply corrected durations")
+	scanCmd.Flags().Bool("epub-only", false, "refresh only epub metadata: visit just the zips (and loose files) containing epubs and re-apply their OPF metadata to existing books in place")
 
 	// Migrate command
 	migrateCmd := &cobra.Command{
@@ -359,6 +360,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if audioOnly, _ := cmd.Flags().GetBool("audio-only"); audioOnly {
 		sc.SetAudioOnly(true)
 		log.Println("Audio-only scan: skipping non-audio books, refreshing existing audiobooks in place")
+	}
+	if epubOnly, _ := cmd.Flags().GetBool("epub-only"); epubOnly {
+		sc.SetEpubOnly(true)
+		log.Println("Epub-only scan: refreshing epub metadata in place from OPF (skipping everything else)")
 	}
 	ctx := context.Background()
 
