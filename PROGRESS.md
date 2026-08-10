@@ -5,6 +5,29 @@
 
 ---
 
+### Revision 128 - 2026-08-10
+**Taskfile: fix three deploy/db tasks that couldn't supply their own credentials (no version change).**
+
+Surfaced during the Rev 127 rescan deploy — three tasks failed because they ran without the
+privilege/credential they need:
+
+- **`deploy-config`** used `sudo -u sopds cp {{.CONFIG}} …`. `config.yaml` is `0600` (it carries the
+  SMTP secret) and lives under a `0700` home, so the `sopds` user cannot read the source — the copy
+  died with `Permission denied` after `service-stop` had already taken the service down. Now
+  `sudo install -o sopds -g sopds -m 640 {{.CONFIG}} /opt/sopds/config.yaml`: root reads the secret,
+  and it lands `0640 sopds:sopds` atomically.
+- **`db-backup`** / **`db-restore`** ran `pg_dump`/`pg_restore` with no `PGPASSWORD`, so they dropped to
+  an interactive `Password:` prompt (PG is scram-sha-256 on localhost). Prefixed `PGPASSWORD=sopds`, the
+  same form `db-vacuum` and the dup-management tasks already use.
+
+`service-deploy`'s `sudo -u sopds cp {{.BINARY}}` still works only because the built binary is `0755`
+(other-readable); left as-is but noted as fragile — harden with `install` if home perms ever tighten.
+
+Also: `.gitignore` ignored only `sopds_backup.dump*`, but `db-backup` writes `sopds_<timestamp>.dump`,
+so a fresh 283 MB dump sat untracked-but-unignored in a **public** repo. Broadened to `sopds*.dump`.
+
+---
+
 ### Revision 127 - 2026-08-09
 **Scanner: CP866 archive filenames no longer drop whole zips from the catalog (1.14.1).**
 

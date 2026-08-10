@@ -116,7 +116,9 @@ tasks:
     desc: Install config.yaml to /opt/sopds and restart the service (run only when the config changed)
     cmds:
       - task: service-stop
-      - sudo -u sopds cp {{.CONFIG}} /opt/sopds/
+      # install as root: it can read a 0600 secret config out of a private home,
+      # and lands it 0640 sopds:sopds. `sudo -u sopds cp` cannot read the source.
+      - sudo install -o sopds -g sopds -m 640 {{.CONFIG}} /opt/sopds/config.yaml
       - task: service-start
 
   # Database operations
@@ -126,13 +128,13 @@ tasks:
       TIMESTAMP:
         sh: date +%Y%m%d_%H%M%S
     cmds:
-      - pg_dump -U sopds -h localhost -Fc sopds > sopds_{{.TIMESTAMP}}.dump
+      - PGPASSWORD=sopds pg_dump -U sopds -h localhost -Fc sopds > sopds_{{.TIMESTAMP}}.dump
       - echo "Backup saved to sopds_{{.TIMESTAMP}}.dump"
 
   db-restore:
     desc: Restore PostgreSQL database from backup (usage - task db-restore FILE=backup.dump)
     cmds:
-      - pg_restore -U sopds -h localhost -d sopds -c {{.FILE}}
+      - PGPASSWORD=sopds pg_restore -U sopds -h localhost -d sopds -c {{.FILE}}
 
   db-vacuum:
     desc: Run VACUUM ANALYZE on database
