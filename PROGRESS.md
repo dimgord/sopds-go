@@ -1,7 +1,37 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.14.1
+## Current Version: 1.15.0
+
+---
+
+### Revision 129 - 2026-08-10
+**Scanner: real metadata for EPUB books, not just the filename (1.15.0).**
+
+Only fb2 was parsed for metadata; epub/mobi/pdf/djvu fell back to `Title = filename`, `Unknown
+author`. For the 511 epubs that means titles like `223434` or `Meri_Meyps_Dodzh_…` and no author,
+even though every one carries clean OPF/Dublin Core metadata inside (an epub is a zip →
+`META-INF/container.xml` → OPF with `dc:title`/`dc:creator`/`dc:language` + Calibre/epub3 series).
+
+New `internal/scanner/epubparser.go` reads that and returns an `*FB2Metadata`, so it rides the exact
+FB2 code path. Wired into all three scan sites (zip loop, 7z loop, loose files). Author split prefers
+the `opf:file-as` "Last, First" sort form, else last-word-as-surname (`parseAuthorFullName`); series
+from Calibre `calibre:series[_index]` first, then epub3 `belongs-to-collection`/`group-position`.
+XML tags are namespace-agnostic (match by local name) so `dc:`-prefixed and default-namespaced OPFs
+both parse. Cover and genres are intentionally left empty (covers need manifest+route work; epub
+`dc:subject` is freeform and doesn't map to FB2 genre codes).
+
+Verified on 10 random library epubs: 9 parsed correctly (Dahl/*La girafe…* fr, George/*Wo kein
+Zeuge ist*/Inspector Lynley de, Pratchett/*Folklore of Discworld*/Discworld, …); the 10th is a
+truncated 128 KB corrupt download — Go's `archive/zip` rejects it and the scanner falls back to the
+filename, exactly as intended. Unit tests cover file-as split, Calibre + epub3 series, and the
+error/empty-title fallbacks.
+
+**PDF/DJVU deliberately not done.** A 300-PDF survey found ~51% empty titles, ~22% junk
+(`Документ1`, `Layout 1`, embedded file paths, mojibake), ~25% usable — and the ~2k usable ones would
+cost a PDF dependency plus decompressing ~71 GB of PDFs on every scan (they must be fully
+decompressed to reach the trailer), for mixed-language titles and unreliable authors. DjVu scans
+carry no embedded metadata at all. Both stay filename-titled; not worth it.
 
 ---
 

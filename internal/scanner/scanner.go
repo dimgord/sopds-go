@@ -935,6 +935,8 @@ func (s *Scanner) processFile(ctx context.Context, path string, size int64, catT
 	var audioMeta *AudioMeta
 	if ext == "fb2" {
 		fb2Meta = s.parseFB2MetadataFull(ctx, path, newBook, catType)
+	} else if ext == "epub" {
+		fb2Meta = s.parseEPUBFile(path, newBook)
 	} else if s.audioExtSet["."+ext] {
 		audioMeta = s.parseAudioMetadata(ctx, path, newBook)
 	} else {
@@ -949,8 +951,8 @@ func (s *Scanner) processFile(ctx context.Context, path string, size int64, catT
 		return
 	}
 
-	// Link authors, genres, series
-	if ext == "fb2" && fb2Meta != nil {
+	// Link authors, genres, series (fb2Meta is also populated for epub)
+	if fb2Meta != nil {
 		// Link authors from FB2 metadata
 		if len(fb2Meta.Authors) > 0 {
 			for _, author := range fb2Meta.Authors {
@@ -1305,6 +1307,20 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 					// Store authors/genres/series for linking after insert
 					bwm.Authors = meta.Authors
 					bwm.Genres = meta.Genres
+					bwm.Series = meta.Series
+				}
+			}
+		} else if ext == ".epub" {
+			rc, err := f.Open()
+			if err == nil {
+				meta, err := parseEPUBReader(rc)
+				rc.Close()
+				if err == nil && meta != nil {
+					bwm.Book.Title = meta.Title
+					bwm.Book.Annotation = meta.Annotation
+					bwm.Book.Lang = meta.Lang
+					bwm.Book.DocDate = meta.DocDate
+					bwm.Authors = meta.Authors
 					bwm.Series = meta.Series
 				}
 			}
