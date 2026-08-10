@@ -16,13 +16,45 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bodgit/sevenzip"
 	"github.com/robfig/cron/v3"
+	"golang.org/x/text/encoding/charmap"
+
 	"github.com/dimgord/sopds-go/internal/config"
 	"github.com/dimgord/sopds-go/internal/database"
 	"github.com/dimgord/sopds-go/internal/infrastructure/persistence"
 )
+
+// decodeArchiveName converts a ZIP/7z entry name to valid UTF-8. Legacy lib.rus.ec
+// archives store filenames in CP866 (DOS Cyrillic) without the UTF-8 flag, so
+// archive/zip hands them back as raw bytes; inserting those raw into a UTF-8
+// Postgres column fails the whole batch with "invalid byte sequence for encoding
+// UTF8" and silently drops every book in the archive.
+func decodeArchiveName(name string) string {
+	if utf8.ValidString(name) {
+		return name
+	}
+	if dec, err := charmap.CodePage866.NewDecoder().String(name); err == nil && utf8.ValidString(dec) {
+		return dec
+	}
+	return strings.ToValidUTF8(name, "�")
+}
+
+// clampRunes trims s to at most n runes. Postgres varchar(N) counts characters, so
+// an over-long field (a giant FB2 title, a pathological name) would otherwise fail
+// the INSERT and drop the record; truncating keeps the book instead.
+func clampRunes(s string, n int) string {
+	if n <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
 
 // bookWithMeta holds a book and its parsed FB2 metadata for batch processing
 type bookWithMeta struct {
@@ -1227,13 +1259,15 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 			continue
 		}
 
-		ext := strings.ToLower(filepath.Ext(f.Name))
+		name := decodeArchiveName(f.Name)
+		ext := strings.ToLower(filepath.Ext(name))
 		if !s.extSet[ext] {
 			continue
 		}
 
-		// Check if file already exists (in-memory lookup)
-		zipPath := relPath + "/" + f.Name
+		// Check if file already exists (in-memory lookup). Key on the clamped path —
+		// the exact value stored in books.path — so the lookup still matches on rescan.
+		zipPath := clampRunes(relPath+"/"+name, 1024)
 		if bookID, exists := existingBooks[zipPath]; exists {
 			booksToVerify = append(booksToVerify, bookID)
 			skippedCount++
@@ -1243,7 +1277,7 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 		// Create book record with metadata
 		bwm := bookWithMeta{
 			Book: &database.Book{
-				Filename: f.Name,
+				Filename: clampRunes(name, 256),
 				Path:     zipPath,
 				Format:   strings.TrimPrefix(ext, "."),
 				Filesize: int64(f.UncompressedSize64),
@@ -1277,8 +1311,11 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 		}
 
 		if bwm.Book.Title == "" {
-			bwm.Book.Title = strings.TrimSuffix(f.Name, ext)
+			bwm.Book.Title = strings.TrimSuffix(name, ext)
 		}
+		bwm.Book.Title = clampRunes(bwm.Book.Title, 256)
+		bwm.Book.Lang = clampRunes(bwm.Book.Lang, 16)
+		bwm.Book.DocDate = clampRunes(bwm.Book.DocDate, 32)
 
 		booksToAdd = append(booksToAdd, bwm)
 	}
@@ -1479,13 +1516,15 @@ func (s *Scanner) process7z(ctx context.Context, path string) {
 			continue
 		}
 
-		ext := strings.ToLower(filepath.Ext(f.Name))
+		name := decodeArchiveName(f.Name)
+		ext := strings.ToLower(filepath.Ext(name))
 		if !s.extSet[ext] {
 			continue
 		}
 
-		// Check if file already exists
-		szPath := relPath + "/" + f.Name
+		// Check if file already exists. Key on the clamped path — the exact value
+		// stored in books.path — so the lookup still matches on rescan.
+		szPath := clampRunes(relPath+"/"+name, 1024)
 		if bookID, exists := existingBooks[szPath]; exists {
 			booksToVerify = append(booksToVerify, bookID)
 			skippedCount++
@@ -1495,7 +1534,7 @@ func (s *Scanner) process7z(ctx context.Context, path string) {
 		// Create book record
 		bwm := bookWithMeta{
 			Book: &database.Book{
-				Filename: f.Name,
+				Filename: clampRunes(name, 256),
 				Path:     szPath,
 				Format:   strings.TrimPrefix(ext, "."),
 				Filesize: int64(f.UncompressedSize),
@@ -1528,8 +1567,11 @@ func (s *Scanner) process7z(ctx context.Context, path string) {
 		}
 
 		if bwm.Book.Title == "" {
-			bwm.Book.Title = strings.TrimSuffix(f.Name, ext)
+			bwm.Book.Title = strings.TrimSuffix(name, ext)
 		}
+		bwm.Book.Title = clampRunes(bwm.Book.Title, 256)
+		bwm.Book.Lang = clampRunes(bwm.Book.Lang, 16)
+		bwm.Book.DocDate = clampRunes(bwm.Book.DocDate, 32)
 
 		booksToAdd = append(booksToAdd, bwm)
 	}
@@ -1874,8 +1916,8 @@ func (s *Scanner) processAudio7z(ctx context.Context, path, relPath string, szr 
 
 // AudiobookStructure represents the structure of an audiobook ZIP
 type AudiobookStructure struct {
-	Type  string           `json:"type"` // "book" or "collection"
-	Parts []AudiobookPart  `json:"parts,omitempty"`
+	Type   string           `json:"type"` // "book" or "collection"
+	Parts  []AudiobookPart  `json:"parts,omitempty"`
 	Tracks []AudiobookTrack `json:"tracks,omitempty"`
 }
 

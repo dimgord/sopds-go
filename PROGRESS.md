@@ -1,7 +1,40 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.14.0
+## Current Version: 1.14.1
+
+---
+
+### Revision 127 - 2026-08-09
+**Scanner: CP866 archive filenames no longer drop whole zips from the catalog (1.14.1).**
+
+Downloaded lib.rus.ec `.zip`/`.7z` archives store their entry filenames in CP866 (DOS Cyrillic)
+without the UTF-8 flag, so `archive/zip` returns those names as raw bytes. The scanner wrote them
+straight into `books.filename`/`books.path`, and PostgreSQL rejected them with `invalid byte
+sequence for encoding "UTF8"`. Because a zip's books are inserted in one transaction, a single bad
+name rolled back the **entire** archive — and the per-book fallback re-inserted the same raw bytes,
+so it failed too. Every book in the archive vanished, leaving only a `Failed to process ZIP` line
+in the scan log. In the archive that surfaced this, 87 of 88 names were CP866: the whole file
+disappeared silently.
+
+`decodeArchiveName` now converts non-UTF-8 entry names via CP866 (falling back to `ToValidUTF8`)
+before they ever reach the DB, in both the `.zip` and `.7z` paths. It's the same treatment the audio
+path already gives CP1251 tags — the book path just never had it.
+
+Length was a second, quieter way to lose a record: `varchar(N)` counts characters, so a pathological
+title or name over the column width would fail its own INSERT. `clampRunes` trims
+`filename`/`path`/`title`/`lang`/`docdate` to their column widths **by rune, not byte**, so an
+over-long field truncates instead of dropping the book.
+
+**The dedup interlock.** The scan-time "already catalogued" check keys on `books.path`. The decoded,
+clamped path is now used **identically** for both the in-memory lookup key and the stored value — so
+a rescan still recognizes a file whose path was truncated, instead of inserting it again every pass.
+Content-level duplicate detection is unaffected: it matches on title+authors (or title+format+filesize),
+never on filename.
+
+This is **not** the filesystem's 255-byte `NAME_MAX` — that only bites when extracting to disk. This is
+purely the DB insert. Archives built by our own `libruseczip` (Info-ZIP over a UTF-8 filesystem) carry
+valid-UTF-8 names and were never affected. Covered by `name_decode_test.go`.
 
 ---
 
