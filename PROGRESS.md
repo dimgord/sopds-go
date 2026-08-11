@@ -1,7 +1,28 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.16.0
+## Current Version: 1.16.1
+
+---
+
+### Revision 131 - 2026-08-10
+**Fix `--epub-only` docdate overflow: epub timestamps don't fit `varchar(20)` (1.16.1).**
+
+First live `--epub-only` run scanned all 28 epub zips in 11.9s but every refresh failed with
+`value too long for type character varying(20)`: epub `dc:date` is a full ISO timestamp
+(`1996-04-20T04:00:00+00:00`, 25 chars) and `books.docdate` is `varchar(20)`. Because
+`RefreshBookMetadata` sets docdate in the same UPDATE as title/lang, the whole transaction rolled
+back — so title/authors/series weren't applied either.
+
+- `epubDateOnly` trims the epub date to its calendar part (`1996-04-20`) — all the catalog shows
+  anyway — so it fits comfortably.
+- Defensive clamps to the *actual* column widths: `refreshEpubBook` now clamps title(256)/lang(16)/
+  docdate(20); the insert path's docdate clamp was 32 but the column is 20 — corrected (the GORM
+  model's `size:32` never matched the live schema).
+- End-of-scan summary now prints "Books updated: N" (the counter existed but wasn't logged).
+
+Re-run `scan --epub-only` after deploying — it's idempotent (RefreshBookMetadata replaces), so it
+fixes the rows the first pass rolled back.
 
 ---
 

@@ -104,7 +104,7 @@ func parseEPUB(data []byte) (*FB2Metadata, error) {
 		meta.Annotation = strings.TrimSpace(pkg.Metadata.Description[0])
 	}
 	if len(pkg.Metadata.Date) > 0 {
-		meta.DocDate = strings.TrimSpace(pkg.Metadata.Date[0])
+		meta.DocDate = epubDateOnly(pkg.Metadata.Date[0])
 	}
 	for _, c := range pkg.Metadata.Creator {
 		role := strings.TrimSpace(c.Role)
@@ -162,6 +162,17 @@ func epubSeries(metas []opfMeta) (string, int) {
 		}
 	}
 	return name, idx
+}
+
+// epubDateOnly reduces an epub dc:date to its date part. Epub dates are often
+// full ISO timestamps ("1996-04-20T04:00:00+00:00", 25 chars) that overflow the
+// docdate column; the calendar date is all the catalog shows anyway.
+func epubDateOnly(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "T "); i >= 0 {
+		s = s[:i]
+	}
+	return s
 }
 
 // parseSeriesIndex turns "3" or "3.0" into 3 (0 if unparseable).

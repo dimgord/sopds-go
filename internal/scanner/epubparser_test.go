@@ -43,6 +43,7 @@ func TestParseEPUB_Calibre(t *testing.T) {
     <dc:creator opf:role="aut" opf:file-as="Cesare, Rossetti">Rossetti Cesare</dc:creator>
     <dc:language>eo</dc:language>
     <dc:description>Priskribo.</dc:description>
+    <dc:date>1996-04-20T04:00:00+00:00</dc:date>
     <meta name="calibre:series" content="Testa Serio"/>
     <meta name="calibre:series_index" content="3.0"/>
   </metadata>
@@ -60,6 +61,9 @@ func TestParseEPUB_Calibre(t *testing.T) {
 	}
 	if meta.Annotation != "Priskribo." {
 		t.Errorf("Annotation = %q", meta.Annotation)
+	}
+	if meta.DocDate != "1996-04-20" {
+		t.Errorf("DocDate = %q, want date-only 1996-04-20 (timestamp must be trimmed to fit varchar(20))", meta.DocDate)
 	}
 	if len(meta.Authors) != 1 || meta.Authors[0].LastName != "Cesare" || meta.Authors[0].FirstName != "Rossetti" {
 		t.Errorf("Authors = %+v (want file-as split Last=Cesare First=Rossetti)", meta.Authors)

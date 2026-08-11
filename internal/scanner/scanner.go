@@ -301,7 +301,10 @@ func (s *Scanner) refreshEpubBook(ctx context.Context, meta *FB2Metadata, title 
 			links = append(links, persistence.SeriesLink{SeriesID: se.ID, SerNo: ser.Number})
 		}
 	}
-	if err := s.svc.RefreshBookMetadata(ctx, bookID, title, meta.Lang, meta.Annotation, meta.DocDate, authorIDs, links); err != nil {
+	// Clamp to the actual column widths (title 256, lang 16, docdate 20; annotation is text).
+	if err := s.svc.RefreshBookMetadata(ctx, bookID,
+		clampRunes(title, 256), clampRunes(meta.Lang, 16), meta.Annotation, clampRunes(meta.DocDate, 20),
+		authorIDs, links); err != nil {
 		log.Printf("epub-only: failed to refresh book %d: %v", bookID, err)
 		return
 	}
@@ -686,6 +689,9 @@ func (s *Scanner) logStats() {
 	duration := s.stats.EndTime.Sub(s.stats.StartTime)
 	log.Printf("Scan completed in %v", duration)
 	log.Printf("Books added: %d", s.stats.BooksAdded)
+	if s.stats.BooksUpdated > 0 {
+		log.Printf("Books updated: %d", s.stats.BooksUpdated)
+	}
 	log.Printf("Books skipped: %d", s.stats.BooksSkipped)
 	log.Printf("Books deleted: %d", s.stats.BooksDeleted)
 	log.Printf("Archives scanned: %d", s.stats.ArchivesScanned)
@@ -1433,7 +1439,7 @@ func (s *Scanner) processZip(ctx context.Context, path string) {
 		}
 		bwm.Book.Title = clampRunes(bwm.Book.Title, 256)
 		bwm.Book.Lang = clampRunes(bwm.Book.Lang, 16)
-		bwm.Book.DocDate = clampRunes(bwm.Book.DocDate, 32)
+		bwm.Book.DocDate = clampRunes(bwm.Book.DocDate, 20) // docdate column is varchar(20)
 
 		booksToAdd = append(booksToAdd, bwm)
 	}
@@ -1708,7 +1714,7 @@ func (s *Scanner) process7z(ctx context.Context, path string) {
 		}
 		bwm.Book.Title = clampRunes(bwm.Book.Title, 256)
 		bwm.Book.Lang = clampRunes(bwm.Book.Lang, 16)
-		bwm.Book.DocDate = clampRunes(bwm.Book.DocDate, 32)
+		bwm.Book.DocDate = clampRunes(bwm.Book.DocDate, 20) // docdate column is varchar(20)
 
 		booksToAdd = append(booksToAdd, bwm)
 	}
