@@ -1,7 +1,37 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.17.0
+## Current Version: 1.17.1
+
+---
+
+### Revision 134 - 2026-08-13
+**`version` and `help` no longer need a readable config (1.17.1).**
+
+Found while verifying the Rev 133 deploy: `sudo -u sopds /opt/sopds/sopds version` dies with
+`failed to load config: open config.yaml: permission denied` before printing anything. The root
+command's `PersistentPreRunE` loads the config for **every** subcommand, and the two commands you
+reach for when the config is the problem were not exempt. On the server this bites for real — the
+service account's cwd is not `/opt/sopds`, and `config.yaml` is `0600 sopds:sopds` under a `0700`
+home, so version-checking a deploy required knowing to pass `-c /opt/sopds/config.yaml`.
+
+- `versionCmd` now overrides the hook with `noConfig`, the same idiom `fb2-extract`/`ndjson-reqs`/
+  `check-yo` already use. `noConfig` moved up to just after the root command so every command can
+  use it, and `fb2-extract`'s duplicated inline literal now refers to it.
+- The root hook returns early for `cmd.Name() == "help"`, which covers both `help` and
+  `help <command>`. The `-h`/`--help` *flags* were always fine: cobra short-circuits them before
+  the hooks run — worth knowing, because it makes the bug look inconsistent from the outside.
+
+Commands that genuinely need the config (`status`, `start`, `scan`, …) are unchanged and still fail
+loudly when it is missing — `noconfig_test.go` asserts that too, so the exemption can't spread by
+accident. The test builds the binary and runs it in an empty dir with a redirected `$HOME`, because
+the defect lived in cobra's hook wiring and is invisible to a unit test of the functions themselves.
+
+**Files Modified:**
+- `cmd/sopds/main.go` — root `PersistentPreRunE` help guard; `noConfig` hoisted; `versionCmd` uses it;
+  `fb2ExtractCmd` de-duplicated; `revision` 133 → 134.
+- `cmd/sopds/noconfig_test.go` (new) — `TestCommandsThatNeedNoConfig` (skipped under `-short`).
+- `PROGRESS.md` — this entry; `## Current Version` 1.17.0 → 1.17.1.
 
 ---
 

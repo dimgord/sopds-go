@@ -34,7 +34,7 @@ var (
 
 	// revision is the PROGRESS.md Rev number, bumped by hand each docompush
 	// (git tags carry the semver; this carries the Rev). Shown on /web/about.
-	revision = "133"
+	revision = "134"
 )
 
 func main() {
@@ -43,6 +43,12 @@ func main() {
 		Short: "Simple OPDS Catalog Server",
 		Long:  `SOPDS is an OPDS catalog server for managing and serving e-book collections.`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// `help`/`help <cmd>` must work without a config — it's what you reach
+			// for when the config is the problem. (The -h/--help *flags* never get
+			// here: cobra short-circuits them before the hooks run.)
+			if cmd.Name() == "help" {
+				return nil
+			}
 			var err error
 			cfg, err = config.Load(cfgFile)
 			if err != nil {
@@ -57,6 +63,9 @@ func main() {
 	}
 
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file path")
+
+	// Commands that need neither DB nor config override the root's hook with this.
+	noConfig := func(cmd *cobra.Command, args []string) error { return nil }
 
 	// Start command
 	startCmd := &cobra.Command{
@@ -106,6 +115,10 @@ func main() {
 	versionCmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print version information",
+		// Reporting the version must not depend on a readable config: on the
+		// server it runs as the `sopds` user from a foreign cwd, where loading
+		// one fails outright.
+		PersistentPreRunE: noConfig,
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("SOPDS %s (Rev %s, Go rewrite)\n", version, revision)
 		},
@@ -173,13 +186,12 @@ func main() {
 		Short: "Extract an FB2 book into per-unit narration text for the F5 pipeline (native)",
 		Args:  cobra.RangeArgs(3, 4),
 		// No DB/config needed — override the root's config-loading PersistentPreRunE.
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error { return nil },
+		PersistentPreRunE: noConfig,
 		RunE:              runFB2Extract,
 	}
 	fb2ExtractCmd.Flags().Int("combine", 0, "MP3 granularity: 1=one per part (default), 2=one per chapter")
 	fb2ExtractCmd.Flags().String("note-prefix", "Примечание.", "spoken lead-in for inlined footnotes (e.g. \"Note.\" for English)")
 
-	noConfig := func(cmd *cobra.Command, args []string) error { return nil } // pipeline glue: no DB/config
 	ndjsonReqsCmd := &cobra.Command{
 		Use:               "ndjson-reqs <review_dir> <work_dir>",
 		Short:             "Build the F5 daemon's NDJSON request stream from stressed review text (native)",
