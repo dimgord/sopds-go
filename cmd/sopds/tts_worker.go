@@ -380,7 +380,9 @@ func packageAudiobook(outDir, title, destDir string) (string, error) {
 	archive := filepath.Join(destDir, folder+".7z")
 	_ = os.Remove(archive)
 	// -mx=1: audio is already compressed, so store fast; archive contains the single top folder.
-	c := exec.Command("7zz", "a", "-mx=1", archive, stage)
+	// -ms=off: solid is 7-Zip's default and puts every track in one block, so serving a single
+	// track has to decompress every track before it — seconds of delay per click.
+	c := exec.Command("7zz", "a", "-mx=1", "-ms=off", archive, stage)
 	if out, err := c.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("7zz: %v: %s", err, out)
 	}

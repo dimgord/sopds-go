@@ -1,7 +1,48 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.16.1
+## Current Version: 1.16.2
+
+---
+
+### Revision 132 - 2026-08-13
+**Generated audiobooks stop shipping as solid 7z; three stale claims in CLAUDE.md corrected (1.16.2).**
+
+**1. `-ms=off` when the TTS worker packs an audiobook.** `packArchive` (`cmd/sopds/tts_worker.go`)
+called `7zz a -mx=1 …`, and solid is 7-Zip's default — so every track landed in the same LZMA2 block
+(`7zz l -slt` shows `Block = 0` for all entries). Serving one track goes through
+`sevenzip.OpenReader` + read-one-entry (`internal/server/web.go`, `/web/audio/{id}/track`), which in a
+solid archive has to decompress every entry ahead of the requested one. The user-visible symptom is
+seconds of delay before a track starts, worst on books with many short tracks — poetry, short
+chapters. It was diagnosed and fixed by hand on the library's own archives in August (repack with
+`7zz a -mx=0 -ms=off`); the worker kept producing new ones with the same defect because the existing
+comment reasoned only about `-mx`, never about solidity. The archive gets marginally larger; audio is
+already compressed, so the difference is noise. **Archives written before this Rev are still solid** —
+repack an old one only if its playback is actually slow; nothing re-packs them automatically.
+
+**2. CLAUDE.md drift**, three places, all of them things that would send the next reader down a wrong
+path:
+- `task build` was documented as building both binaries. It has built only `sopds` since Rev 92/93
+  (`CGO_ENABLED=0`, pure Go); `sopds-tts` moved to `task build-tts` (`CGO_ENABLED=1`) because no
+  deploy host has gcc. Both the Build section and the TTS section repeated the old claim.
+- The release workflow was described as publishing a Homebrew *formula*. It publishes a **cask**
+  (`homebrew_casks:` in `.goreleaser.yaml`); the old `Formula/sopds-go.rb` was removed from
+  `dimgord/homebrew-tap` at v1.7.5 so `brew install sopds-go` isn't formula/cask-ambiguous.
+
+Written against a stale checkout (the tree was at Rev 127 while `main` had moved to Rev 131) and
+rebased onto current `main` before pushing. One point of the original entry died in that rebase: the
+`revision` constant had been left at 126, failing `TestRevisionMatchesProgress`; Rev 128–131 had
+already bumped it, so all that remains here is the routine 131 → 132.
+
+**Files Modified:**
+- `cmd/sopds/tts_worker.go` — `packArchive`: added `-ms=off` to the `7zz a` invocation + a comment
+  explaining what solidity costs at serve time.
+- `cmd/sopds/main.go` — `revision` 131 → 132.
+- `CLAUDE.md` — Build & Run block (`task build` / `task build-tts`, explicit `CGO_ENABLED`), the
+  `sopds-tts` paragraph in the TTS section, and the tagging paragraph (cask, not formula).
+- `PROGRESS.md` — this entry; `## Current Version` 1.16.1 → 1.16.2.
+
+Verified after the rebase: `go build ./...` clean, `go test ./...` all green.
 
 ---
 
