@@ -151,6 +151,23 @@ zipdupes -d <dir>                # Show only ZIPs fully covered by others (safe 
 
 Duplicates are matched by `(filename, size)` tuples across all ZIPs in the scanned directories. Not built by default — build manually when needed. Does not touch the database.
 
+## Utility: audiorepack
+
+`cmd/audiorepack/` finds **solid** `.7z` audiobooks and repacks them non-solid. A solid archive puts
+every track in one compression block, so serving one track has to decompress every track ahead of it —
+seconds of delay before playback starts, worst on books with many short tracks. Reports only unless
+`-repack` is given; the swap is atomic and the original survives any failure.
+
+```bash
+task audio-solid                 # report, library root read from config.yaml
+task audio-solid  DIR=/path      # report on any directory tree
+task audio-repack DIR=/path      # fix them in place (needs room for one extracted book)
+```
+
+Shells out to `7zz` (also how `sopds tts-worker` packs). Does not touch the database. Books packed by
+the worker have been non-solid since Rev 132; this exists for archives written before that, and for
+ones added by hand. Does not need Postgres, so it runs anywhere the library is mounted.
+
 ## Taskfile (Recommended)
 
 Install [Task](https://taskfile.dev) and use `Taskfile.yml` for common operations:

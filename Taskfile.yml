@@ -163,6 +163,31 @@ tasks:
       - PGPASSWORD=sopds psql -U sopds -h localhost -d sopds -c "UPDATE books SET duplicate_of = NULL;"
       - echo "Cleared all duplicate marks"
 
+  # Audiobook archives — a solid .7z makes a track take seconds to start (Rev 133)
+  audio-solid:
+    desc: 'Report solid .7z audiobooks, read-only. DIR=<path> (default: library.root from config.yaml)'
+    cmds:
+      - task: _audiorepack
+        vars: {DIR: '{{.DIR}}', FLAGS: ''}
+
+  audio-repack:
+    desc: 'Repack the solid ones non-solid, in place. DIR=<path>. Needs room for one extracted book'
+    cmds:
+      - task: _audiorepack
+        vars: {DIR: '{{.DIR}}', FLAGS: '-repack'}
+
+  _audiorepack:
+    internal: true
+    cmds:
+      - |
+        DIR='{{.DIR}}'
+        if [ -z "$DIR" ]; then
+          DIR=$(awk '/^library:/{f=1} f && /^[[:space:]]*root:/{print $2; exit}' {{.CONFIG}} 2>/dev/null)
+          [ -n "$DIR" ] || { echo "no DIR given and no library.root in {{.CONFIG}}" >&2; exit 1; }
+          echo "using library root $DIR"
+        fi
+        go run ./cmd/audiorepack {{.FLAGS}} "$DIR"
+
   # Development
   dev:
     desc: Build and start in development mode

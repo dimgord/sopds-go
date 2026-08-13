@@ -1,7 +1,51 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.16.2
+## Current Version: 1.17.0
+
+---
+
+### Revision 133 - 2026-08-13
+**`audiorepack`: find solid .7z audiobooks and repack them non-solid (1.17.0).**
+
+Rev 132 stopped the TTS worker from *writing* solid archives; this is the other half — finding and
+fixing the ones already on disk. Until now the procedure was a hand-written bash loop, which is both
+easy to get wrong (one version of it wrote the repacked archive to `/tmp` instead of the library,
+because `../$f` from inside a `mktemp -d` resolves under `/tmp`) and impossible to run as a check.
+
+**`cmd/audiorepack/`** — standalone CLI in the shape of `cmd/zipdupes/`: no DB, no config, walks
+directories. For each `.7z` it parses `7zz l -slt` and compares distinct compression blocks against
+file count; fewer blocks than files means solid. Read-only by default, `-repack` acts. Listing runs
+`-j` archives in parallel (default `min(4, NumCPU)`); **repacking is deliberately serial** — it
+extracts a whole audiobook to disk, and several at once would thrash the disk and the free space.
+
+The repack is defensive, because it rewrites files in the library:
+- extracts to a temp dir **inside the archive's own directory**, so the final `os.Rename` is atomic
+  and can't cross a filesystem
+- packs to `.<name>.7z.new`, then compares the new file list against the old (count + sorted names)
+  and re-checks that the result is actually non-solid, before swapping
+- the original is untouched on every error path; a partial run leaves no half-written archive
+
+**Taskfile:** `task audio-solid` / `task audio-repack`, both taking `DIR=<path>` and otherwise
+falling back to `library.root` from `config.yaml` (shared internal task `_audiorepack`).
+
+Verified end-to-end on a synthetic solid archive (detect → repack → re-check → `diff -r` of the
+extracted contents) and, read-only, against the live library on the server: **54 archives, 0 solid** —
+the manual repack done earlier in August was complete, and nothing was left behind in `/tmp` or as
+`.solid.bak`. `parseSLT`/`countBlocks`/`sameFiles` are unit-tested against recorded `7zz` output,
+including the stored-entries-without-`Block`-lines case.
+
+**Files Modified:**
+- `cmd/audiorepack/main.go` (new) — `findArchives`, `parseSLT`, `countBlocks`, `repackArchive`,
+  `singleChild`, `sameFiles`.
+- `cmd/audiorepack/main_test.go` (new) — parser and solidity-detection tests.
+- `Taskfile.yml` — `audio-solid`, `audio-repack`, internal `_audiorepack`.
+- `CLAUDE.md` — "Utility: audiorepack" section next to zipdupes.
+- `cmd/sopds/main.go` — `revision` 132 → 133.
+- `PROGRESS.md` — this entry; `## Current Version` 1.16.2 → 1.17.0.
+
+Not added to GoReleaser, the Nix flake or the Docker image (unlike `zipdupes`) — it is a maintenance
+tool for the machine that holds the library, not something a user of the release artifacts needs.
 
 ---
 
