@@ -19,6 +19,7 @@ const HOP: i64 = 256;
 // NFE_STEP-1 times per chunk — the dominant synth cost). Env `SOPDS_TTS_NFE` overrides; the auto-F5
 // pipeline sets 16 (the F5 default, ~2x faster than 32) via fb2-to-f5.sh.
 const NFE_STEP: i32 = 32;
+// Speaking rate: >1 asks for fewer frames per character (faster speech, cheaper synth). Env `SOPDS_TTS_SPEED`.
 const SPEED: f64 = 1.0;
 
 pub struct F5 {
@@ -29,6 +30,7 @@ pub struct F5 {
     ref_audio: Vec<i16>,
     ref_text: String,
     nfe_step: i32,
+    speed: f64,
 }
 
 fn load_session(path: &str) -> Result<Session, String> {
@@ -82,6 +84,12 @@ impl F5 {
             .and_then(|v| v.parse::<i32>().ok())
             .filter(|&n| n >= 1)
             .unwrap_or(NFE_STEP);
+        // Speed from env (SOPDS_TTS_SPEED), clamped to 0.5..2; default SPEED.
+        let speed = std::env::var("SOPDS_TTS_SPEED")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|s| (0.5..=2.0).contains(s))
+            .unwrap_or(SPEED);
         Ok(Self {
             pre: load_session(&format!("{dir}/F5_Preprocess.onnx"))?,
             transformer: load_session(&format!("{dir}/F5_Transformer.onnx"))?,
@@ -90,6 +98,7 @@ impl F5 {
             ref_audio,
             ref_text,
             nfe_step,
+            speed,
         })
     }
 
@@ -124,7 +133,7 @@ impl F5 {
             return Ok(vec![0i16; (SAMPLE_RATE / 4) as usize]); // empty chunk -> short silence
         }
         let max_duration = ref_audio_len
-            + (ref_audio_len as f64 / ref_text_len as f64 * gen_text_len as f64 / SPEED) as i64;
+            + (ref_audio_len as f64 / ref_text_len as f64 * gen_text_len as f64 / self.speed) as i64;
 
         // Graph A: preprocess
         let audio_t =

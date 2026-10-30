@@ -11,6 +11,8 @@
 #   MODE=all     (default) stress then synth in one pass, no review stop.
 #
 # env: NFE=32 WORKERS=1 MAXCHARS=250 DEVICE=cpu REMOVE_SILENCE=1  FIX=corrections.json  (NFE 16 = muffled)
+#      SPEED=1.0 — F5 speaking rate (SOPDS_TTS_SPEED); 1.1 ≈ 10% faster speech
+#      INNER_PAUSE=1 — cap silences inside each chunk at ~0.2 s at join time (see TRIMAF)
 #      REF/REF_TEXT/CKPT/VOCAB/F5_HOME
 #      PARTS — which sections to narrate (empty ⇒ all top-level sections). Two levels of hierarchy:
 #         "P"        whole top-level section P            (e.g. PARTS="3")
@@ -33,7 +35,7 @@ REF=${REF:-$F5_HOME/ab/ref_clean.wav}
 REF_TEXT=${REF_TEXT:-$F5_HOME/ab/ref_fixed.txt}
 CKPT=${CKPT:-$F5_HOME/ru-model/model_v2.safetensors}
 VOCAB=${VOCAB:-$F5_HOME/ru-model/vocab.txt}
-NFE=${NFE:-32}; WORKERS=${WORKERS:-1}; MAXCHARS=${MAXCHARS:-250}; DEVICE=${DEVICE:-cpu}
+SPEED=${SPEED:-1.0}; NFE=${NFE:-32}; WORKERS=${WORKERS:-1}; MAXCHARS=${MAXCHARS:-250}; DEVICE=${DEVICE:-cpu}
 MODE=${MODE:-all}; PARTS=${PARTS:-}; FIX=${FIX:-}
 # Pauses the joiner inserts, because the model cannot. Ending a chunk on its ?/!/… is what buys the
 # phrase contour, but it also takes the pause away from F5: a sentence-final ellipsis gets ~530 ms
@@ -166,7 +168,7 @@ gawk -v CLEAN="$PUNCT_CLEAN" -v USEMAP="$PUNCT_PAUSE" -v NOTES="$NOTES_REQS" \
      -v PD="$PAUSE_DOT" -v PC="$PAUSE_COMMA" -v PDASH="$PAUSE_DASH" -v PE="$PAUSE_ELLIPSIS" \
      -v PSEMI="$PAUSE_SEMI" -v PCOLON="$PAUSE_COLON" -v PDEF="$PAUSE_DEFAULT" -v PS="$SENT_PAUSE" \
      -v PN="$NOTE_PAUSE" -v PLAN="$WORK/plan.raw" '
-  function bare(t,   s) { s = t; gsub(/("|»|\x27|\)|\]|[ \t])+$/, "", s); return s }
+  function bare(t,   s) { s = t; gsub(/("|»|”|’|\x27|\)|\]|[ \t])+$/, "", s); return s }
   function dur(t,   s) {
     s = bare(t)
     if (!USEMAP) return (s ~ /(\.|!|\?|…|\.\.\.)$/) ? PS : 0
@@ -215,7 +217,7 @@ sort "$WORK/plan.raw" | gawk -F'\t' -v OFS='\t' -v PT="$TITLE_PAUSE" '
 # Engine: native Rust (ort) F5. The model DIR carries ckpt/vocab/ref; the daemon speaks the NDJSON
 # {"text","output"} protocol and reads NFE from SOPDS_TTS_NFE ($NFE, default 32 — 16 sounds muffled).
 [ -n "${F5BIN:-}" ] || { echo "fb2-to-f5.sh: set F5BIN to the sopds-tts-rs binary (native F5 synth)" >&2; exit 1; }
-export SOPDS_TTS_NFE="$NFE"
+export SOPDS_TTS_NFE="$NFE" SOPDS_TTS_SPEED="$SPEED"
 
 # GPUS: how many cards to spread the daemons over. sopds-tts-rs builds CUDAExecutionProvider::default()
 # and reads no device variable, so every process would land on device 0 and the other cards would idle
@@ -315,7 +317,8 @@ fi
 echo "→ joining parts…"
 # Silence files at the synthesized rate — the concat demuxer wants matching streams, so the rate is
 # read off a produced wav rather than assumed. One file per distinct pause length in the plan.
-_firstwav=$(find "$WORK" -maxdepth 1 -name 'p*_c*.wav' | sort | head -1)
+# -print -quit, not `| head -1`: head closing the pipe early is SIGPIPE (141) under pipefail with many wavs.
+_firstwav=$(find "$WORK" -maxdepth 1 -name 'p*_c*.wav' -print -quit)
 [ -n "$_firstwav" ] || { echo "no wavs in $WORK — nothing to join" >&2; exit 1; }
 _sr=$(ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate -of csv=p=0 "$_firstwav" 2>/dev/null || true)
 for d in $(cut -f2 "$WORK/plan.tsv" | sort -u) "$TITLE_PAUSE"; do
@@ -342,6 +345,9 @@ fi
 # F5 pads each chunk with silence and a phrase-final cadence; trimming both ends is what makes the
 # deterministic pause the ONLY gap at a seam. Costs one ffmpeg per chunk. TRIM_SILENCE=0 disables.
 TRIMAF="silenceremove=start_periods=1:start_threshold=-50dB,areverse,silenceremove=start_periods=1:start_threshold=-50dB,areverse"
+# INNER_PAUSE=1 also caps pauses INSIDE a chunk at ~0.2 s: F5 holds a comma nearly as long as a full stop,
+# and only the join-time PAUSE_DOT can then tell them apart. Off by default.
+[ "${INNER_PAUSE:-0}" = 1 ] && TRIMAF="silenceremove=stop_periods=-1:stop_duration=0.1:stop_threshold=-40dB:stop_silence=0.15,$TRIMAF"
 trimw() {
   [ "$TRIM_SILENCE" = 1 ] || { echo "$1"; return; }
   local t="$WORK/t_$(basename "$1")"

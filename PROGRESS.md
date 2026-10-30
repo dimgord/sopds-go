@@ -1,7 +1,49 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.17.1
+## Current Version: 1.17.2
+
+---
+
+### Revision 135 - 2026-10-29
+**F5 narration: speaking rate, in-chunk pause cap, curly-quote pauses, SIGPIPE at join (1.17.2).**
+
+Found while narrating the first English book through `f5-bridge/fb2-to-f5.sh` (a PDF turned into
+FB2 by hand, `STRESS_MODE=none`). Pilots of chapter 1 were checked by ear and with Whisper (word
+diff against the text, gap lengths from word timestamps).
+
+1. **Speaking rate (`SPEED` / `SOPDS_TTS_SPEED`).** `f5.rs` had `SPEED` hard-wired to 1.0. F5 is
+   non-autoregressive: the output length is fixed up front from the reference's chars/s, and when
+   that budget is generous the model spends the slack on slow words and long pauses. The daemon now
+   reads `SOPDS_TTS_SPEED` (clamped 0.5–2, default 1.0), dividing the generated frame count; the
+   bridge passes `SPEED`. At 1.2 the pilot went from 95 to 137 words/min with an unchanged Whisper
+   score, and synthesis gets cheaper in step. Post-hoc `atempo` on the MP3 was tried first and
+   rejected — it left audible gaps between words. Trimming the silences out of the reference clip
+   itself (a separate voice dir, not in this repo) cut long pauses by about 40% on its own.
+2. **`INNER_PAUSE=1`.** F5 holds a comma inside a chunk for ~0.5 s, almost as long as the joiner's
+   full-stop pause, so commas and full stops sounded alike. With the option on, the per-chunk trim
+   filter also caps every inner silence (`silenceremove stop_periods=-1`, ~0.2 s kept); the joiner's
+   deterministic `PAUSE_DOT` then stands out. Median gap after a comma 0.52 → 0.38 s, after a full
+   stop 0.64 s. Off by default, so existing Russian/Ukrainian runs are unchanged. Note the trimmed
+   `t_*.wav` are cached: delete them before a `JOIN_ONLY` re-join with a different setting.
+3. **Curly closing quotes lost the sentence pause.** `bare()` stripped `"`, `»`, `'`, `)` and `]`
+   before reading a chunk's final mark, but not `”`/`’`. A chunk ending `.”` fell through to
+   `PAUSE_DEFAULT` — 210 dialogue paragraphs in the English book. Both are now stripped.
+4. **Join died with SIGPIPE on a full book.** `_firstwav=$(find … | sort | head -1)` under
+   `set -o pipefail`: `head` exits after one line, `sort` takes SIGPIPE, the pipeline returns 141 and
+   `set -e` ends the script before any MP3 is written. Invisible with a 39-chunk pilot, certain with
+   3000+ wavs. Any wav will do (it is only probed for the sample rate), so it is now
+   `find … -print -quit`. That was the only `head` in a pipeline in the script. The bug also means
+   `MODE=synth` on a big book could exit non-zero after a complete synthesis — rerun with
+   `JOIN_ONLY=1` or `RESUME=1` to get the MP3s.
+
+**Files Modified:**
+- `sopds-tts-rs/src/f5.rs` — `F5.speed` field, read from `SOPDS_TTS_SPEED` in `F5::new`, used in
+  `synth`'s `max_duration`.
+- `f5-bridge/fb2-to-f5.sh` — `SPEED` → `SOPDS_TTS_SPEED`; `INNER_PAUSE` prepends an inner-silence cap
+  to `TRIMAF`; `bare()` strips `”` `’`; `_firstwav` via `-print -quit`; env header documents both.
+- `cmd/sopds/main.go` — `revision` 134 → 135.
+- `PROGRESS.md` — this entry; `## Current Version` 1.17.1 → 1.17.2.
 
 ---
 
