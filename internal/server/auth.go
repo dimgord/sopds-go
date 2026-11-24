@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -470,12 +471,29 @@ func (h *AuthHandlers) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// Migrate anonymous bookshelf
 	h.migrateAnonBookshelf(r.Context(), r, u.ID)
 
-	// Redirect to home or return URL
-	returnURL := r.URL.Query().Get("return")
-	if returnURL == "" {
-		returnURL = h.server.config.Server.WebPrefix + "/"
+	// Redirect to home or a local return path
+	http.Redirect(w, r, localPath(r.URL.Query().Get("return"), h.server.config.Server.WebPrefix+"/"), http.StatusSeeOther)
+}
+
+// localPath returns raw if it is a path on this site, else fallback ("//host", "/\host" and schemes are not).
+func localPath(raw, fallback string) string {
+	if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.ContainsAny(raw, "\\\t\r\n") {
+		return fallback
 	}
-	http.Redirect(w, r, returnURL, http.StatusSeeOther)
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "" || u.Host != "" {
+		return fallback
+	}
+	return raw
+}
+
+// sameSiteReferer returns the Referer as a local path if it points at this host, else "".
+func sameSiteReferer(r *http.Request) string {
+	u, err := url.Parse(r.Header.Get("Referer"))
+	if err != nil || u.Host == "" || u.Host != r.Host {
+		return ""
+	}
+	return localPath(u.RequestURI(), "")
 }
 
 // HandleLogout handles user logout

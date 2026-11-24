@@ -593,6 +593,8 @@ The full route table lives in `internal/server/server.go` — grep `r.Get(`, `r.
 - `POST /web/forgot-password` — 5/hour per IP
 - `POST /web/guest` — 10 per 10 min per IP (only checked when `auth.enabled`)
 
+**Redirect targets from the client** (query values, `Referer`) go through `localPath` / `sameSiteReferer` in `auth.go` (Rev 138); never pass them to `http.Redirect` raw.
+
 **Web UI:**
 - `GET /web/` - Home page
 - `GET /web/search` - Search with parameters:

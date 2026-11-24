@@ -1,7 +1,40 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.18.0
+## Current Version: 1.18.1
+
+---
+
+### Revision 138 - 2026-11-24
+**Client-supplied redirect targets stay on this site (1.18.1).**
+
+Rev 136 noted that `HandleLogin` redirected to the `return` query value unchecked. A sweep of every
+`http.Redirect` found two more redirects to a client value: `handleBookshelfAdd` and
+`handleBookshelfRemove` went back to whatever the `Referer` header said.
+
+Practical risk was low. The login form posts to `<web_prefix>/login` without a query string, so
+`return` reached the handler only from a hand-made POST, and nothing in the UI sets it. The
+`Referer` redirect only sent a visitor back to the page the request came from. Both are still
+open-redirect shapes and would become real the day a `return` link is added, so they are closed now.
+
+- `localPath(raw, fallback)` accepts only a path on this site: it must start with `/`, must not
+  start with `//`, must not contain `\`, tab, CR or LF (browsers read `/\host` and `/<tab>/host` as
+  `//host`), and must parse with no scheme and no host. Anything else gives the fallback.
+- `sameSiteReferer(r)` returns the Referer's path + query only when its host equals `r.Host`
+  (Caddy passes the original Host through), else "" and the handler answers with its plain text.
+- `HandleLogin` uses `localPath(return, <web_prefix>/)`; both bookshelf handlers use
+  `sameSiteReferer`.
+
+Remaining `http.Redirect` calls (12 in all) use fixed `WebPrefix` paths and need no check.
+
+**Files Modified:**
+- `internal/server/auth.go` — `localPath`, `sameSiteReferer`; `HandleLogin` redirect.
+- `internal/server/handlers.go` — `handleBookshelfAdd`, `handleBookshelfRemove`.
+- `internal/server/redirect_target_test.go` (new) — `TestLocalPath` (schemes, `//`, `/\`, tab,
+  CRLF, relative), `TestSameSiteReferer` (same host, other host, look-alike host, relative, junk).
+- `cmd/sopds/main.go` — `revision` 137 → 138.
+- `CLAUDE.md` — redirect rule.
+- `PROGRESS.md` — this entry; `## Current Version` 1.18.0 → 1.18.1.
 
 ---
 

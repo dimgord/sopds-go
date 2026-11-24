@@ -1321,9 +1321,8 @@ func (s *Server) handleBookshelfAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Redirect back or return success
-	referer := r.Header.Get("Referer")
-	if referer != "" {
+	// Redirect back (same site only) or return success
+	if referer := sameSiteReferer(r); referer != "" {
 		http.Redirect(w, r, referer, http.StatusSeeOther)
 		return
 	}
@@ -1352,9 +1351,8 @@ func (s *Server) handleBookshelfRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Redirect back or return success
-	referer := r.Header.Get("Referer")
-	if referer != "" {
+	// Redirect back (same site only) or return success
+	if referer := sameSiteReferer(r); referer != "" {
 		http.Redirect(w, r, referer, http.StatusSeeOther)
 		return
 	}
