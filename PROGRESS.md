@@ -1,7 +1,50 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.17.2
+## Current Version: 1.17.3
+
+---
+
+### Revision 136 - 2026-11-23
+**Browsers without credentials go to `/web/landing` instead of a bare 401 (1.17.3).**
+
+A reader could not get into the library from a link sent in Facebook Messenger on Android. The Caddy
+log showed eleven tries over two hours, on Wi-Fi and on mobile data, all the same:
+`/` → 302 → `/web/` → **401** `WWW-Authenticate: Basic realm="SOPDS Library"`, and not one request
+carried an `Authorization` header. The link opens in Messenger's in-app browser (an Android WebView,
+`X-Requested-With: com.facebook.orca`). A WebView shows the Basic auth dialog only if the host app
+implements it, and Messenger does not, so the page is just the word "Unauthorized". A desktop
+browser shows the dialog, which is why the problem went unnoticed.
+
+Root cause: with `server.auth.enabled: true`, `authMiddleware` answered **every** request without a
+JWT cookie, an anon cookie or Basic credentials with the 401 challenge. Nothing sent a browser to
+the landing page (sign-in, registration, "Continue as guest"), although those routes sit outside the
+middleware and work without credentials.
+
+Fix: in the no-credentials branch, a browser page load under the web prefix gets a 302 to
+`<web_prefix>/landing`. `isWebPageRequest` decides: method GET (HEAD is already GET via `headToGet`),
+`Accept` contains `text/html`, path is the web prefix or below it, and not under the OPDS prefix.
+Everything else keeps the 401 + challenge: OPDS clients (they send `application/atom+xml`), POSTs,
+requests without `Accept`, and wrong credentials (a sent-but-wrong password still means "ask
+again"). With auth off nothing changes.
+
+Not done on purpose: no `return=` parameter on the redirect, so a deep link lands on `/web/` after
+"Continue as guest". `HandleLogin` redirects to `return` without checking it is local, and passing a
+user-supplied URL through the landing would widen that; it needs its own fix first.
+
+`gofmt -l internal/server/` lists `auth.go`, `handlers.go`, `server.go`, `web.go` — they were
+unformatted at HEAD already (import order, the indentation inside `r.Group`). Left alone to keep
+this diff readable; a format-only commit can follow.
+
+**Files Modified:**
+- `internal/server/server.go` — `authMiddleware` no-credentials branch redirects page loads; new
+  `isWebPageRequest`.
+- `internal/server/auth_redirect_test.go` (new) — `TestAuthMiddlewareRedirectsBrowserToLanding`:
+  browser root/no-slash/deep link → 302 landing; browser on OPDS, OPDS client on web, no `Accept`,
+  POST, wrong password → 401 with challenge; right password → 200; auth off → 200.
+- `cmd/sopds/main.go` — `revision` 135 → 136.
+- `CLAUDE.md`, `README.md` — `auth.enabled` comment says what browsers and OPDS clients get.
+- `PROGRESS.md` — this entry; `## Current Version` 1.17.2 → 1.17.3.
 
 ---
 

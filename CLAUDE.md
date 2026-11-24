@@ -316,7 +316,7 @@ server:
   opds_prefix: /opds          # OPDS API endpoint
   web_prefix: /web            # Web UI endpoint
   auth:
-    enabled: false            # Basic auth for anonymous/OPDS users
+    enabled: false            # Basic auth for anonymous/OPDS users; browsers without credentials get a 302 to <web_prefix>/landing (Rev 136)
     users:
       - username: admin
         password: admin
@@ -575,7 +575,7 @@ The full route table lives in `internal/server/server.go` — grep `r.Get(`, `r.
 - `author_id=…`, `genre_id=…`, `series_id=…`, `catalog_id=…` — hidden fields injected when searching from a scoped page (e.g. an author's detail page); restrict results to that entity
 
 **Auth Pages:**
-- `GET /web/landing` - Landing page (unauthenticated)
+- `GET /web/landing` - Landing page (unauthenticated); with `auth.enabled`, `authMiddleware` sends credential-less browser page loads here instead of the 401 — in-app browsers (Messenger WebView) never show the Basic auth dialog (`isWebPageRequest`, Rev 136)
 - `GET|POST /web/login` - Login page
 - `GET|POST /web/register` - Registration page
 - `GET /web/logout` - Logout (clears JWT cookie)

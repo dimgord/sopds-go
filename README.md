@@ -211,7 +211,7 @@ server:
   opds_prefix: /opds
   web_prefix: /web
   auth:
-    enabled: false
+    enabled: false   # on: OPDS clients get Basic auth, browsers go to /web/landing
     users:
       - username: guest
         password: guest

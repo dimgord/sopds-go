@@ -276,6 +276,20 @@ func (s *Server) basicAuth(next http.Handler) http.Handler {
 	})
 }
 
+// isWebPageRequest reports a browser page load under the web prefix (OPDS clients keep the 401).
+func (s *Server) isWebPageRequest(r *http.Request) bool {
+	if r.Method != http.MethodGet || !strings.Contains(r.Header.Get("Accept"), "text/html") {
+		return false
+	}
+	p := r.URL.Path
+	opds := s.config.Server.OPDSPrefix
+	if opds != "" && (p == opds || strings.HasPrefix(p, opds+"/")) {
+		return false
+	}
+	web := s.config.Server.WebPrefix
+	return p == web || strings.HasPrefix(p, web+"/")
+}
+
 func (s *Server) unauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", `Basic realm="SOPDS Library"`)
 	http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -355,6 +369,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			var ok bool
 			username, password, ok = r.BasicAuth()
 			if !ok {
+				if s.isWebPageRequest(r) {
+					// In-app browsers (Messenger etc.) show no Basic auth dialog, only "Unauthorized".
+					http.Redirect(w, r, s.config.Server.WebPrefix+"/landing", http.StatusFound)
+					return
+				}
 				s.unauthorized(w)
 				return
 			}
