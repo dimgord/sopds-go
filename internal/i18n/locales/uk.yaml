@@ -169,6 +169,7 @@ auth:
   send_reset_link: "Надіслати посилання"
   login_or_username: "Email або ім'я користувача"
   continue_as_guest: "Продовжити як гість"
+  guest_password: "Пароль гостя"
   already_have_account: "Вже є акаунт?"
   no_account: "Немає акаунту?"
   register_success: "Реєстрація успішна! Перевірте пошту для підтвердження."

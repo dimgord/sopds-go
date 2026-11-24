@@ -2,8 +2,11 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -321,6 +324,11 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
+	checkTopLevel(data, cfg)
+	if placeholderSecrets[cfg.Server.JWTSecret] {
+		log.Printf("WARNING: config: server.jwt_secret is the example value, ignored; set your own (openssl rand -hex 32)")
+		cfg.Server.JWTSecret = ""
+	}
 
 	// Validate required fields
 	if cfg.Library.Root == "" {
@@ -328,6 +336,37 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// placeholderSecrets are shipped example values: as public as no secret at all.
+var placeholderSecrets = map[string]bool{
+	"change-me-to-a-long-random-string": true,
+	"change-this-secret-in-production":  true,
+}
+
+// checkTopLevel warns about unknown top-level keys; the old example's top-level jwt_secret is read as server.jwt_secret.
+func checkTopLevel(data []byte, cfg *Config) {
+	var top map[string]any
+	if yaml.Unmarshal(data, &top) != nil {
+		return
+	}
+	known := map[string]bool{}
+	t := reflect.TypeOf(Config{})
+	for i := 0; i < t.NumField(); i++ {
+		known[strings.Split(t.Field(i).Tag.Get("yaml"), ",")[0]] = true
+	}
+	for k, v := range top {
+		switch {
+		case known[k]:
+		case k == "jwt_secret":
+			if s, ok := v.(string); ok && s != "" && cfg.Server.JWTSecret == "" {
+				cfg.Server.JWTSecret = s
+				log.Printf("WARNING: config: top-level jwt_secret is read as server.jwt_secret; move it under server:")
+			}
+		default:
+			log.Printf("WARNING: config: unknown top-level key %q is ignored", k)
+		}
+	}
 }
 
 // Save writes configuration to a YAML file

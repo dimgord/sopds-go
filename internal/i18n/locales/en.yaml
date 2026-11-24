@@ -169,6 +169,7 @@ auth:
   send_reset_link: "Send Reset Link"
   login_or_username: "Email or Username"
   continue_as_guest: "Continue as Guest"
+  guest_password: "Guest password"
   already_have_account: "Already have an account?"
   no_account: "Don't have an account?"
   register_success: "Registration successful! Please check your email to verify your account."

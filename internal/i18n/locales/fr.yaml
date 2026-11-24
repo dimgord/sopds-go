@@ -143,6 +143,7 @@ auth:
   send_reset_link: "Envoyer le lien"
   login_or_username: "Email ou nom d'utilisateur"
   continue_as_guest: "Continuer en tant qu'invité"
+  guest_password: "Mot de passe invité"
   already_have_account: "Vous avez déjà un compte ?"
   no_account: "Pas de compte ?"
   register_success: "Inscription réussie ! Vérifiez votre email pour confirmer votre compte."

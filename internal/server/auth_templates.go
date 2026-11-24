@@ -309,6 +309,11 @@ var authPageTemplates = map[string]string{
         <h1>{{.T.welcome}} {{.SiteTitle}}</h1>
         <p>{{.T.library_description}}</p>
     </div>
+    {{if .Error}}
+    <div class="alert alert-error">
+        <i class="fas fa-exclamation-circle"></i> {{.Error}}
+    </div>
+    {{end}}
     <div class="landing-actions">
         <a href="{{.WebPrefix}}/login" class="btn btn-primary">
             <i class="fas fa-sign-in-alt"></i> {{.T.login}}
@@ -318,6 +323,12 @@ var authPageTemplates = map[string]string{
         </a>
         <div class="divider"><span>{{.T.or}}</span></div>
         <form action="{{.WebPrefix}}/guest" method="POST">
+            {{if .GuestPass}}
+            <div class="form-group">
+                <label for="guest_password">{{.T.guest_password}}</label>
+                <input type="password" id="guest_password" name="password" required autocomplete="current-password">
+            </div>
+            {{end}}
             <button type="submit" class="btn btn-secondary">
                 <i class="fas fa-user-secret"></i> {{.T.continue_as_guest}}
             </button>

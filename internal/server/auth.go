@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -49,8 +52,16 @@ type AuthInfo struct {
 	AnonID          string // Cookie-based anonymous ID
 }
 
-// jwtSecret should be set from config or environment
-var jwtSecret = []byte("change-this-secret-in-production")
+// jwtSecret signs JWTs and anon cookies; random until SetJWTSecret (a fixed default was forgeable, Rev 137).
+var jwtSecret = newRandomSecret()
+
+func newRandomSecret() []byte {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand: " + err.Error())
+	}
+	return b
+}
 
 // SetJWTSecret sets the JWT signing secret
 func SetJWTSecret(secret string) {
@@ -114,11 +125,18 @@ func ClearJWTCookie(w http.ResponseWriter) {
 	})
 }
 
-// SetAnonCookie sets an anonymous session cookie
+// anonSig is the HMAC that makes an anon cookie unforgeable ("<id>.<sig>").
+func anonSig(anonID string) string {
+	mac := hmac.New(sha256.New, jwtSecret)
+	mac.Write([]byte("sopds-anon:" + anonID))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// SetAnonCookie sets a signed anonymous session cookie
 func SetAnonCookie(w http.ResponseWriter, anonID string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     AnonCookieName,
-		Value:    anonID,
+		Value:    anonID + "." + anonSig(anonID),
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   false,
@@ -127,10 +145,30 @@ func SetAnonCookie(w http.ResponseWriter, anonID string) {
 	})
 }
 
-// GetAnonCookie gets the anonymous session ID from cookie
+// GetAnonCookie returns the anonymous session ID, or "" if the cookie is missing or its signature is wrong
 func GetAnonCookie(r *http.Request) string {
 	cookie, err := r.Cookie(AnonCookieName)
 	if err != nil {
+		return ""
+	}
+	i := strings.LastIndexByte(cookie.Value, '.')
+	if i <= 0 {
+		return ""
+	}
+	id, sig := cookie.Value[:i], cookie.Value[i+1:]
+	if !hmac.Equal([]byte(sig), []byte(anonSig(id))) {
+		return ""
+	}
+	return id
+}
+
+// legacyAnonCookie returns a pre-Rev-137 unsigned anon ID (32 hex chars); only for auth-off servers.
+func legacyAnonCookie(r *http.Request) string {
+	cookie, err := r.Cookie(AnonCookieName)
+	if err != nil || len(cookie.Value) != 32 {
+		return ""
+	}
+	if _, err := hex.DecodeString(cookie.Value); err != nil {
 		return ""
 	}
 	return cookie.Value
@@ -230,6 +268,7 @@ func (rl *RateLimiter) cleanup() {
 var (
 	checkRateLimiter  = NewRateLimiter(150, 1*time.Minute)  // 150 per minute for username/email check
 	forgotRateLimiter = NewRateLimiter(5, 1*time.Hour)     // 5 per hour for forgot password
+	guestRateLimiter  = NewRateLimiter(10, 10*time.Minute) // guest password tries per IP
 )
 
 // RateLimitMiddleware creates middleware for rate limiting
@@ -643,22 +682,23 @@ func (h *AuthHandlers) HandleResendVerification(w http.ResponseWriter, r *http.R
 
 // HandleLanding handles the landing page for unauthenticated users
 func (h *AuthHandlers) HandleLanding(w http.ResponseWriter, r *http.Request) {
-	h.renderLandingPage(w, r)
+	h.renderLandingPage(w, r, nil)
 }
 
-// HandleGuestLogin handles "continue as guest" action
+// HandleGuestLogin handles "continue as guest"; with auth on it needs a configured user's password
 func (h *AuthHandlers) HandleGuestLogin(w http.ResponseWriter, r *http.Request) {
-	// Check if basic auth is required
 	if h.server.config.Server.Auth.Enabled {
-		// Basic auth is enabled - let the existing middleware handle it
-		// Set a flag cookie to indicate guest mode was chosen
-		http.SetCookie(w, &http.Cookie{
-			Name:     "sopds_guest_mode",
-			Value:    "1",
-			Path:     "/",
-			MaxAge:   int(AnonCookieExpiry.Seconds()),
-			HttpOnly: true,
-		})
+		w.Header().Set("Content-Type", "text/html; charset=utf-8") // set before WriteHeader below
+		if !guestRateLimiter.Allow(getClientIP(r)) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			h.renderLandingPage(w, r, map[string]string{"error": "Too many attempts. Try again in a few minutes."})
+			return
+		}
+		if !h.server.checkGuestPassword(r.FormValue("password")) {
+			w.WriteHeader(http.StatusUnauthorized)
+			h.renderLandingPage(w, r, map[string]string{"error": "Wrong password"})
+			return
+		}
 	}
 
 	// Generate anonymous session ID if not exists
@@ -684,8 +724,8 @@ func (h *AuthHandlers) migrateAnonBookshelf(ctx context.Context, r *http.Request
 }
 
 // Helper functions for rendering pages
-func (h *AuthHandlers) renderLandingPage(w http.ResponseWriter, r *http.Request) {
-	h.server.renderAuthTemplate(w, r, "landing", nil)
+func (h *AuthHandlers) renderLandingPage(w http.ResponseWriter, r *http.Request, data map[string]string) {
+	h.server.renderAuthTemplate(w, r, "landing", data)
 }
 
 func (h *AuthHandlers) renderLoginPage(w http.ResponseWriter, r *http.Request, data map[string]string) {

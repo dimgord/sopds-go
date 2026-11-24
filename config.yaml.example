@@ -38,6 +38,9 @@ server:
     #     password: "change-me"     # (bare `*****` is parsed as YAML alias and fails)
     #   - username: "bob"
     #     password: "also-change-me"
+  # Signs login sessions and guest cookies. Generate your own: `openssl rand -hex 32`.
+  # Unset (or left as an example value) = a random secret per start: everyone is logged out on restart.
+  jwt_secret: ""
 
 scanner:
   # Number of parallel workers for scanning
@@ -106,8 +109,3 @@ smtp:
   use_tls: false                           # set true for port 465 (implicit TLS)
   use_starttls: true                       # set true for port 587 (STARTTLS upgrade)
 
-# JWT secret for signing email-verification and password-reset tokens.
-# REQUIRED for the email flows to work. Generate any random string;
-# rotate it to invalidate all outstanding verification/reset tokens.
-# Example: `openssl rand -hex 32`.
-jwt_secret: "change-me-to-a-long-random-string"

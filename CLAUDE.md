@@ -320,7 +320,7 @@ server:
     users:
       - username: admin
         password: admin
-  jwt_secret: ""              # Secret for JWT tokens (auto-generated if empty)
+  jwt_secret: ""              # Signs JWTs + anon cookies; empty or an example value = random per start (Rev 137)
 
 scanner:
   workers: 4                  # Parallel scan workers
@@ -582,13 +582,16 @@ The full route table lives in `internal/server/server.go` — grep `r.Get(`, `r.
 - `GET|POST /web/forgot-password` - Forgot password (5/hour limit)
 - `GET|POST /web/reset-password?token=x` - Reset password with token
 - `GET /web/verify-email?token=x` - Verify email
-- `POST /web/guest` - Continue as guest
+- `POST /web/guest` - Continue as guest; with `auth.enabled` it needs the password of any `server.auth` user (form field `password`, constant-time compare, 10 tries / 10 min per IP), else 401 + landing with the error (Rev 137)
+
+**Anon cookie `sopds_anon` is signed** (Rev 137): value `<id>.<HMAC-SHA256(jwt_secret, "sopds-anon:"+id)>`. `GetAnonCookie` returns "" for a missing, unsigned or forged value, so with auth on a self-made cookie no longer skips the password. With auth off, `authMiddleware` adopts a pre-137 unsigned 32-hex ID (`legacyAnonCookie`, keeps its bookshelf) and re-issues it signed. Before Rev 137 any `sopds_anon` value passed, and the secret fell back to a constant in the source while the example config put `jwt_secret` at the top level, where nothing read it: JWTs were forgeable. `config.Load` now reads a top-level `jwt_secret` as `server.jwt_secret` (warning), ignores the two known example values, and warns on unknown top-level keys.
 
 **Auth API rate limits** (defined in `server.go`, may surprise you):
 - `GET /api/auth/check-username` — 150/min
 - `GET /api/auth/check-email` — 150/min
 - `GET /api/auth/check-password` — no limit (no DB lookup)
 - `POST /web/forgot-password` — 5/hour per IP
+- `POST /web/guest` — 10 per 10 min per IP (only checked when `auth.enabled`)
 
 **Web UI:**
 - `GET /web/` - Home page

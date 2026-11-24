@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log"
 	"net/http"
@@ -46,6 +47,8 @@ func New(cfg *config.Config, svc *persistence.Service, version, revision string)
 	// Set JWT secret from config
 	if cfg.Server.JWTSecret != "" {
 		SetJWTSecret(cfg.Server.JWTSecret)
+	} else {
+		log.Printf("WARNING: server.jwt_secret is not set: using a random secret, logins and guest sessions end at every restart")
 	}
 
 	// Determine base URL for email links
@@ -290,6 +293,17 @@ func (s *Server) isWebPageRequest(r *http.Request) bool {
 	return p == web || strings.HasPrefix(p, web+"/")
 }
 
+// checkGuestPassword reports whether pw is the password of any server.auth user (constant time).
+func (s *Server) checkGuestPassword(pw string) bool {
+	ok := false
+	for _, u := range s.config.Server.Auth.Users {
+		if u.Password != "" && subtle.ConstantTimeCompare([]byte(u.Password), []byte(pw)) == 1 {
+			ok = true
+		}
+	}
+	return ok
+}
+
 func (s *Server) unauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", `Basic realm="SOPDS Library"`)
 	http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -400,8 +414,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// No auth required - generate anonymous session
-		anonID := generateAnonID()
+		// No auth required - keep a pre-Rev-137 unsigned ID (its bookshelf) or generate one; sign it
+		anonID := legacyAnonCookie(r)
+		if anonID == "" {
+			anonID = generateAnonID()
+		}
 		SetAnonCookie(w, anonID)
 		ctx := context.WithValue(r.Context(), ctxAnonKey, anonID)
 		ctx = context.WithValue(ctx, "username", anonID)
@@ -435,11 +452,13 @@ func (s *Server) renderAuthTemplate(w http.ResponseWriter, r *http.Request, temp
 		Registered bool
 		Verified   bool
 		Reset      bool
+		GuestPass  bool // landing asks for the guest password (server.auth on)
 		T          map[string]string
 	}{
 		Lang:      lang,
 		WebPrefix: s.config.Server.WebPrefix,
 		SiteTitle: s.config.Site.Title,
+		GuestPass: s.config.Server.Auth.Enabled,
 		T:         getAuthTranslations(lang),
 	}
 
@@ -506,7 +525,7 @@ func getAuthTranslations(lang string) map[string]string {
 		"login", "logout", "register", "guest", "guest_warning",
 		"email", "username", "password", "confirm_password",
 		"forgot_password", "reset_password", "send_reset_link",
-		"login_or_username", "continue_as_guest",
+		"login_or_username", "continue_as_guest", "guest_password",
 		"already_have_account", "no_account",
 		"register_success", "verify_success", "reset_success",
 		"password_requirements", "username_requirements",

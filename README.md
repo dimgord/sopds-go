@@ -211,10 +211,11 @@ server:
   opds_prefix: /opds
   web_prefix: /web
   auth:
-    enabled: false   # on: OPDS clients get Basic auth, browsers go to /web/landing
+    enabled: false   # on: OPDS clients get Basic auth, browsers go to /web/landing (guest password there)
     users:
       - username: guest
         password: guest
+  jwt_secret: ""     # signs sessions + guest cookies; set your own: openssl rand -hex 32
 
 scanner:
   workers: 4

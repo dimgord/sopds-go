@@ -1,7 +1,59 @@
 # PROGRESS.md
 
 ## Project: Simple OPDS Catalog (SOPDS) - Go Version
-## Current Version: 1.17.3
+## Current Version: 1.18.0
+
+---
+
+### Revision 137 - 2026-11-24
+**Guest password in a form, signed anon cookie, no forgeable JWT secret (1.18.0).**
+
+Rev 136 sent browsers to `/web/landing`, and "Continue as guest" there let them in. That showed the
+real gap: with `server.auth.enabled`, the Basic auth password protected nothing on `/web`.
+
+1. **Any `sopds_anon` cookie skipped the password.** `authMiddleware` accepted an anon cookie with
+   any value before the Basic auth check, and `POST /web/guest` handed one out to everyone. The
+   comment in `HandleGuestLogin` ("let the existing middleware handle it") shows that was not the
+   intent. Now the cookie is `<id>.<sig>`, `sig` = base64url HMAC-SHA256 over `"sopds-anon:"+id`
+   with the JWT secret, and `GetAnonCookie` returns "" for a missing, unsigned or wrong value. With
+   auth on, `POST /web/guest` needs the password of any `server.auth` user, typed into a password
+   field on the landing page (constant-time compare, `guestRateLimiter` 10 tries / 10 min per IP).
+   A wrong password re-renders the landing with "Wrong password" (401), too many tries give 429.
+   This works in in-app browsers, which show no Basic auth dialog. The unused `sopds_guest_mode`
+   cookie is gone. With auth off nothing is asked; an old unsigned 32-hex anon ID is adopted
+   (`legacyAnonCookie`, so its bookshelf stays) and re-issued signed.
+2. **JWTs were forgeable.** `jwtSecret` fell back to a constant written in the source when
+   `server.jwt_secret` was empty, and `config.yaml.example` put `jwt_secret` at the **top level**,
+   where no struct field reads it. Every install that followed the example ran on the constant, so
+   anyone could sign a session cookie for any user ID; a test token for a test account was accepted
+   on a live server. Fixes: the fallback is now 32 random bytes per process (logins end at restart,
+   with a warning at start); `config.Load` reads a top-level `jwt_secret` as `server.jwt_secret`
+   with a warning, so existing configs are safe on upgrade without an edit; the two known example
+   values are ignored with a warning; any other unknown top-level key is reported. The example now
+   has `jwt_secret` under `server:`.
+
+Upgrading with auth on logs every guest out once: their unsigned cookies no longer verify, they
+land on the landing page and type the guest password. Registered users with a JWT log in again
+only if the secret changed (an install that ran on the constant).
+
+**Files Modified:**
+- `internal/server/auth.go` — `newRandomSecret`, `anonSig`, signed `SetAnonCookie`, verifying
+  `GetAnonCookie`, `legacyAnonCookie`, `guestRateLimiter`; `HandleGuestLogin` checks the password;
+  `renderLandingPage` takes data.
+- `internal/server/server.go` — `checkGuestPassword`; legacy adoption in the auth-off branch of
+  `authMiddleware`; warning when `jwt_secret` is unset; `GuestPass` template field; `guest_password`
+  auth key.
+- `internal/server/auth_templates.go` — landing: error alert, password field when auth is on.
+- `internal/i18n/locales/{en,uk,de,fr,es}.yaml` — `auth.guest_password`.
+- `internal/config/config.go` — `checkTopLevel`, `placeholderSecrets`.
+- `internal/config/jwt_secret_test.go` (new) — placement, precedence, placeholders.
+- `internal/server/guest_login_test.go` (new) — cookie signature and forgeries, forged cookie →
+  302/401, legacy adoption with auth off, guest password wrong / missing / right / rate limit,
+  auth-off landing has no password field.
+- `config.yaml.example` — `jwt_secret` moved under `server:`.
+- `cmd/sopds/main.go` — `revision` 136 → 137.
+- `CLAUDE.md`, `README.md` — guest password, signed cookie, `jwt_secret` placement.
+- `PROGRESS.md` — this entry; `## Current Version` 1.17.3 → 1.18.0.
 
 ---
 
